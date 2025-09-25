@@ -1,0 +1,647 @@
+import React, { useState, useEffect } from 'react'
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+  RefreshControl,
+  Image,
+  Modal,
+  ScrollView,
+  Dimensions,
+} from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
+import { Ionicons } from '@expo/vector-icons'
+import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { supabase } from '../services/supabase'
+import { EventWithAttendees } from '../types'
+
+type FilterType = 'going' | 'today' | 'week' | 'month' | 'all'
+type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
+
+interface AdvancedFilters {
+  friendsOnly: boolean
+  peopleGoing: boolean
+  hasCapacity: boolean
+  last24Hours: boolean
+}
+
+const { height: screenHeight } = Dimensions.get('window')
+
+export default function EventsListScreen() {
+  const navigation = useNavigation()
+  const [events, setEvents] = useState<EventWithAttendees[]>([])
+  const [filteredEvents, setFilteredEvents] = useState<EventWithAttendees[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
+  const [hostProfiles, setHostProfiles] = useState<Record<string, any>>({})
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [userAttendances, setUserAttendances] = useState<Record<string, string>>({})
+  const [userInvitations, setUserInvitations] = useState<Set<string>>(new Set())
+  const [friends, setFriends] = useState<Set<string>>(new Set())
+  const [showFilterModal, setShowFilterModal] = useState(false)
+  const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
+    friendsOnly: false,
+    peopleGoing: false,
+    hasCapacity: false,
+    last24Hours: false,
+  })
+  const [sortBy, setSortBy] = useState<SortType>('date_asc')
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  );
+
+  const fetchEvents = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      setCurrentUserId(user.id)
+
+      // First, get the user's friends
+      await fetchFriends(user.id)
+
+      // Fetch public events
+      const { data: publicEvents, error: publicError } = await supabase
+        .from('events')
+        .select(`
+          *,
+          attendees:event_attendees(
+            id,
+            user_id,
+            status
+          )
+        `)
+        .eq('privacy', 'public')
+        .order('event_date', { ascending: true })
+
+      if (publicError) throw publicError
+
+      // Fetch events where user is the host (regardless of privacy)
+      const { data: hostedEvents, error: hostedError } = await supabase
+        .from('events')
+        .select(`
+          *,
+          attendees:event_attendees(
+            id,
+            user_id,
+            status
+          )
+        `)
+        .eq('host_id', user.id)
+        .order('event_date', { ascending: true })
+
+      if (hostedError) throw hostedError
+
+      // Fetch friends-only events where user is invited
+      const { data: invitedEvents, error: invitedError } = await supabase
+        .from('events')
+        .select(`
+          *,
+          attendees:event_attendees(
+            id,
+            user_id,
+            status
+          )
+        `)
+        .eq('privacy', 'friends_only')
+        .in('id', await getInvitedEventIds(user.id))
+        .order('event_date', { ascending: true })
+
+      if (invitedError) throw invitedError
+
+      // Fetch friends-only events where user is friends with host
+      const { data: friendsEvents, error: friendsError } = await supabase
+        .from('events')
+        .select(`
+          *,
+          attendees:event_attendees(
+            id,
+            user_id,
+            status
+          )
+        `)
+        .eq('privacy', 'friends_only')
+        .in('host_id', Array.from(friends))
+        .order('event_date', { ascending: true })
+
+      if (friendsError) throw friendsError
+
+      // Combine all events and remove duplicates
+      const allEvents = [
+        ...(publicEvents || []), 
+        ...(hostedEvents || []), 
+        ...(invitedEvents || []), 
+        ...(friendsEvents || [])
+      ]
+      const uniqueEvents = allEvents.filter((event, index, self) => 
+        index === self.findIndex(e => e.id === event.id)
+      )
+
+      const eventsWithCounts = uniqueEvents.map(event => {
+        // Safely handle attendees array
+        const attendees = event.attendees || []
+        const goingCount = attendees.filter((a: any) => a.status === 'going').length || 0
+        const maybeCount = attendees.filter((a: any) => a.status === 'maybe').length || 0
+        return {
+          ...event,
+          attendees: attendees, // Ensure attendees is always an array
+          going_count: goingCount,
+          maybe_count: maybeCount
+  const [sortBy, setSortBy] = useState<SortType>('date_asc')
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+      setEvents(eventsWithCounts)
+      filterEvents(eventsWithCounts, activeFilter)
+      
+      // Fetch host profiles
+      const hostIds = [...new Set(eventsWithCounts.map(event => event.host_id))]
+      if (hostIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', hostIds)
+        
+        const profilesMap: Record<string, any> = {}
+        profiles?.forEach(profile => {
+          profilesMap[profile.id] = profile
+      // Fetch current user's attendances
+      await fetchUserAttendances(eventsWithCounts)
+
+      // Fetch user's invitations
+      await fetchUserInvitations(eventsWithCounts)
+    } catch (error) {
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )      console.error('Error fetching events:', error)
+    } finally {
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )      setLoading(false)
+      setRefreshing(false)
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const getInvitedEventIds = async (userId: string): Promise<string[]> => {
+    try {
+      const { data: invitations } = await supabase
+        .from('event_invitations')
+        .select('event_id')
+        .eq('user_id', userId)
+      
+      return invitations?.map(inv => inv.event_id) || []
+    } catch (error) {
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )      console.error('Error fetching invited events:', error)
+      return []
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const fetchFriends = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('friendships')
+        .select('*')
+        .or(`user_id.eq.${userId},friend_id.eq.${userId}`)
+
+      if (error) throw error
+
+      const acceptedFriendships = (data || []).filter(f => f.status === 'accepted')
+      const friendIds = new Set(acceptedFriendships.map(f => 
+        f.user_id === userId ? f.friend_id : f.user_id
+      ))
+      
+      setFriends(friendIds)
+    } catch (error) {
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )      console.error('Error fetching friends:', error)
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const fetchUserAttendances = async (eventsList: EventWithAttendees[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const eventIds = eventsList.map(event => event.id)
+      if (eventIds.length === 0) return
+
+      const { data: attendances } = await supabase
+        .from('event_attendees')
+        .select('event_id, status')
+        .eq('user_id', user.id)
+        .in('event_id', eventIds)
+
+      const attendancesMap: Record<string, string> = {}
+      attendances?.forEach(attendance => {
+        attendancesMap[attendance.event_id] = attendance.status
+    } catch (error) {
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )      console.error('Error fetching user attendances:', error)
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const fetchUserInvitations = async (eventsList: EventWithAttendees[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const eventIds = eventsList.map(event => event.id)
+      if (eventIds.length === 0) return
+
+      const { data: invitations } = await supabase
+        .from('event_invitations')
+        .select('event_id')
+        .eq('user_id', user.id)
+        .in('event_id', eventIds)
+
+      const invitationSet = new Set(invitations?.map(inv => inv.event_id) || [])
+      setUserInvitations(invitationSet)
+    } catch (error) {
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )      console.error('Error fetching user invitations:', error)
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const filterEvents = (eventsList: EventWithAttendees[], filter: FilterType) => {
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const weekFromNow = new Date(today)
+    weekFromNow.setDate(weekFromNow.getDate() + 7)
+    const monthFromNow = new Date(today)
+    monthFromNow.setMonth(monthFromNow.getMonth() + 1)
+
+    let filtered = eventsList
+
+    switch (filter) {
+      case 'today':
+        filtered = eventsList.filter(event => {
+          const eventDate = new Date(event.event_date)
+          return eventDate >= today && eventDate < tomorrow
+      case 'week':
+        filtered = eventsList.filter(event => {
+          const eventDate = new Date(event.event_date)
+          return eventDate >= today && eventDate < weekFromNow
+      case 'month':
+        filtered = eventsList.filter(event => {
+          const eventDate = new Date(event.event_date)
+          return eventDate >= today && eventDate < monthFromNow
+      case 'going':
+        filtered = eventsList.filter(event => {
+          return userAttendances[event.id] === 'going'
+      case 'all':
+      default:
+        filtered = eventsList
+        break
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+    // Apply advanced filters
+    filtered = applyAdvancedFilters(filtered)
+    
+    // Apply sorting
+    filtered = applySorting(filtered)
+    
+    setFilteredEvents(filtered)
+  }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const applyAdvancedFilters = (eventsList: EventWithAttendees[]) => {
+    let filtered = eventsList
+
+    if (advancedFilters.friendsOnly) {
+      filtered = filtered.filter(event => {
+        // Check if host is a friend or if any attendees are friends
+        const isHostFriend = friends.has(event.host_id)
+        const attendees = event.attendees || []
+        const hasFriendAttendees = attendees.some((attendee: any) => 
+          friends.has(attendee.user_id)
+        )
+        return isHostFriend || hasFriendAttendees
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+    if (advancedFilters.peopleGoing) {
+      filtered = filtered.filter(event => {
+        const goingCount = (event as any).going_count || 0
+        return goingCount > 0
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+    if (advancedFilters.hasCapacity) {
+      filtered = filtered.filter(event => {
+        return event.max_attendees && event.max_attendees > 0
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+    if (advancedFilters.last24Hours) {
+      const yesterday = new Date()
+      yesterday.setDate(yesterday.getDate() - 1)
+      filtered = filtered.filter(event => {
+        const eventDate = new Date(event.created_at)
+        return eventDate >= yesterday
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+    return filtered
+  }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+  const applySorting = (eventsList: EventWithAttendees[]) => {
+    const sorted = [...eventsList]
+
+    switch (sortBy) {
+      case 'date_asc':
+        return sorted.sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime())
+      case 'date_desc':
+        return sorted.sort((a, b) => new Date(b.event_date).getTime() - new Date(a.event_date).getTime())
+      case 'people_going':
+        return sorted.sort((a, b) => {
+          const aGoing = (a as any).going_count || 0
+          const bGoing = (b as any).going_count || 0
+          return bGoing - aGoing
+        return sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      case 'alphabetical':
+        return sorted.sort((a, b) => a.title.localeCompare(b.title))
+      default:
+        return sorted
+    }
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )
+
+  useEffect(() => {
+    fetchEvents()
+  }, [])
+
+  // Refresh events when the tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Events tab focused - refreshing events')
+      fetchEvents()
+    }, [])
+  )

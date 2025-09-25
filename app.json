@@ -3,6 +3,7 @@
     "name": "utd-hangouts",
     "slug": "utd-hangouts",
     "version": "1.0.0",
+    "main": "index.ts",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -12,8 +13,17 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "notification": {
+      "icon": "./assets/icon.png",
+      "color": "#3498db",
+      "androidMode": "default",
+      "androidCollapsedTitle": "UTD Hangouts"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": ["background-fetch", "background-processing"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,10 +31,25 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#3498db",
+          "defaultChannel": "default"
+        }
+      ]
+    ]
   }
 }
