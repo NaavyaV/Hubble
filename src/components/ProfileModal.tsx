@@ -11,6 +11,7 @@ import {
 import Modal from 'react-native-modal'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
+import { useTheme } from '../context/ThemeContext'
 
 interface ProfileModalProps {
   isVisible: boolean
@@ -27,6 +28,7 @@ interface ProfileModalProps {
 }
 
 export default function ProfileModal({ isVisible, onClose, user }: ProfileModalProps) {
+  const { theme } = useTheme()
   const [friendshipStatus, setFriendshipStatus] = useState<'none' | 'pending' | 'accepted' | 'blocked'>('none')
   const [loading, setLoading] = useState(false)
 
@@ -112,10 +114,10 @@ export default function ProfileModal({ isVisible, onClose, user }: ProfileModalP
 
   const getActionStyle = () => {
     switch (friendshipStatus) {
-      case 'none': return styles.primaryButton
-      case 'pending': return styles.secondaryButton
-      case 'accepted': return styles.destructiveButton
-      default: return styles.primaryButton
+      case 'none': return [styles.primaryButton, { backgroundColor: theme.buttonPrimary }]
+      case 'pending': return [styles.secondaryButton, { backgroundColor: theme.warning }]
+      case 'accepted': return [styles.destructiveButton, { backgroundColor: theme.error }]
+      default: return [styles.primaryButton, { backgroundColor: theme.buttonPrimary }]
     }
   }
 
@@ -128,11 +130,11 @@ export default function ProfileModal({ isVisible, onClose, user }: ProfileModalP
       onBackButtonPress={onClose}
       style={styles.modal}
     >
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Profile</Text>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeButtonText}>×</Text>
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Profile</Text>
+          <TouchableOpacity style={[styles.closeButton, { backgroundColor: theme.surface }]} onPress={onClose}>
+            <Text style={[styles.closeButtonText, { color: theme.textSecondary }]}>×</Text>
           </TouchableOpacity>
         </View>
 
@@ -140,27 +142,27 @@ export default function ProfileModal({ isVisible, onClose, user }: ProfileModalP
           <View style={styles.profileSection}>
             <View style={styles.avatarContainer}>
               {user.avatar_url ? (
-                <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
+                <Image source={{ uri: user.avatar_url }} style={[styles.avatar, { borderColor: theme.primary }]} />
               ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Text style={styles.avatarPlaceholderText}>
+                <View style={[styles.avatarPlaceholder, { backgroundColor: theme.primary, borderColor: theme.primary }]}>
+                  <Text style={[styles.avatarPlaceholderText, { color: theme.buttonText }]}>
                     {user.full_name?.charAt(0).toUpperCase() || 'U'}
                   </Text>
                 </View>
               )}
             </View>
 
-            <Text style={styles.userName}>
+            <Text style={[styles.userName, { color: theme.text }]}>
               {user.full_name || 'User'}
             </Text>
 
             {(user.major || user.graduating_year) && (
               <View style={styles.userInfo}>
                 {user.major && (
-                  <Text style={styles.userInfoText}>{user.major}</Text>
+                  <Text style={[styles.userInfoText, { color: theme.primary }]}>{user.major}</Text>
                 )}
                 {user.graduating_year && (
-                  <Text style={styles.userInfoText}>
+                  <Text style={[styles.userInfoText, { color: theme.primary }]}>
                     Class of {user.graduating_year}
                   </Text>
                 )}
@@ -168,28 +170,28 @@ export default function ProfileModal({ isVisible, onClose, user }: ProfileModalP
             )}
 
             {user.bio && (
-              <View style={styles.bioSection}>
-                <Text style={styles.bioLabel}>About</Text>
-                <Text style={styles.bioText}>{user.bio}</Text>
+              <View style={[styles.bioSection, { backgroundColor: theme.surface }]}>
+                <Text style={[styles.bioLabel, { color: theme.text }]}>About</Text>
+                <Text style={[styles.bioText, { color: theme.textSecondary }]}>{user.bio}</Text>
               </View>
             )}
 
             {user.phone_number && (
-              <View style={[styles.bioSection, { marginTop: 12 }] }>
-                <Text style={styles.bioLabel}>Contact</Text>
+              <View style={[styles.bioSection, { marginTop: 12, backgroundColor: theme.surface }] }>
+                <Text style={[styles.bioLabel, { color: theme.text }]}>Contact</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Ionicons name="call-outline" size={16} color="#2c3e50" />
-                  <Text style={styles.bioText}>{user.phone_number}</Text>
+                  <Ionicons name="call-outline" size={16} color={theme.text} />
+                  <Text style={[styles.bioText, { color: theme.textSecondary }]}>{user.phone_number}</Text>
                 </View>
               </View>
             )}
 
             <TouchableOpacity
-              style={[getActionStyle(), loading && styles.buttonDisabled]}
+              style={[getActionStyle(), loading && { opacity: 0.6 }]}
               onPress={handleFriendAction}
               disabled={loading}
             >
-              <Text style={styles.buttonText}>
+              <Text style={[styles.buttonText, { color: theme.buttonText }]}>
                 {loading ? 'Loading...' : getActionText()}
               </Text>
             </TouchableOpacity>
@@ -206,7 +208,6 @@ const styles = StyleSheet.create({
     margin: 0,
   },
   container: {
-    backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '80%',
@@ -219,24 +220,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   closeButton: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#f8f9fa',
     justifyContent: 'center',
     alignItems: 'center',
   },
   closeButtonText: {
     fontSize: 18,
-    color: '#7f8c8d',
     fontWeight: 'bold',
   },
   content: {
@@ -254,27 +251,22 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 60,
     borderWidth: 4,
-    borderColor: '#3498db',
   },
   avatarPlaceholder: {
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#3498db',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 4,
-    borderColor: '#3498db',
   },
   avatarPlaceholderText: {
     fontSize: 48,
     fontWeight: 'bold',
-    color: 'white',
   },
   userName: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#2c3e50',
     marginBottom: 8,
     textAlign: 'center',
   },
@@ -284,53 +276,42 @@ const styles = StyleSheet.create({
   },
   userInfoText: {
     fontSize: 16,
-    color: '#3498db',
     fontWeight: '500',
     marginBottom: 4,
   },
   bioSection: {
     width: '100%',
-    backgroundColor: '#f8f9fa',
     borderRadius: 12,
     padding: 16,
   },
   bioLabel: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   bioText: {
     fontSize: 14,
-    color: '#5a6c7d',
     lineHeight: 20,
   },
   primaryButton: {
-    backgroundColor: '#3498db',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
     marginTop: 16,
   },
   secondaryButton: {
-    backgroundColor: '#f1c40f',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
     marginTop: 16,
   },
   destructiveButton: {
-    backgroundColor: '#e74c3c',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
     marginTop: 16,
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
   buttonText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',

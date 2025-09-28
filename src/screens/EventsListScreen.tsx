@@ -11,11 +11,15 @@ import {
   ScrollView,
   Dimensions,
 } from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
+import { useTheme } from '../context/ThemeContext'
+
+type EventListItem = EventWithAttendees & { goingCount: number; maybeCount: number; tags?: string[] }
 
 type FilterType = 'going' | 'today' | 'week' | 'month' | 'all'
 type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
@@ -25,14 +29,28 @@ interface AdvancedFilters {
   peopleGoing: boolean
   hasCapacity: boolean
   last24Hours: boolean
+  selectedTags: string[]
 }
+const predefinedTags = [
+  'Game Night',
+  'Study Session',
+  'Movie Night',
+  'Sports',
+  'Food & Dining',
+  'Music & Arts',
+  'Networking',
+  'Outdoor Activity',
+  'Workshop',
+  'Social Mixer'
+]
 
 const { height: screenHeight } = Dimensions.get('window')
 
 export default function EventsListScreen() {
   const navigation = useNavigation()
-  const [events, setEvents] = useState<EventWithAttendees[]>([])
-  const [filteredEvents, setFilteredEvents] = useState<EventWithAttendees[]>([])
+  const { theme } = useTheme()
+  const [events, setEvents] = useState<EventListItem[]>([])
+  const [filteredEvents, setFilteredEvents] = useState<EventListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [activeFilter, setActiveFilter] = useState<FilterType>('all')
@@ -42,11 +60,12 @@ export default function EventsListScreen() {
   const [userInvitations, setUserInvitations] = useState<Set<string>>(new Set())
   const [friends, setFriends] = useState<Set<string>>(new Set())
   const [showFilterModal, setShowFilterModal] = useState(false)
-  const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
+    const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
     friendsOnly: false,
     peopleGoing: false,
     hasCapacity: false,
     last24Hours: false,
+    selectedTags: [],
   })
   const [sortBy, setSortBy] = useState<SortType>('date_asc')
 
@@ -156,8 +175,8 @@ export default function EventsListScreen() {
       // Calculate attendee counts
       const eventsWithCounts = uniqueEvents.map(event => ({
         ...event,
-        goingCount: event.attendees?.filter(a => a.status === 'going').length || 0,
-        maybeCount: event.attendees?.filter(a => a.status === 'maybe').length || 0,
+        goingCount: event.attendees?.filter((a: any) => a.status === 'going').length || 0,
+        maybeCount: event.attendees?.filter((a: any) => a.status === 'maybe').length || 0,
       }))
 
       setEvents(eventsWithCounts)
@@ -280,7 +299,7 @@ export default function EventsListScreen() {
     }
   }
 
-  const filterEvents = (eventsList: EventWithAttendees[], filter: FilterType) => {
+    const filterEvents = (eventsList: EventListItem[], filter: FilterType) => {
     let filtered = [...eventsList]
 
     // Apply advanced filters
@@ -303,6 +322,13 @@ export default function EventsListScreen() {
       const yesterday = new Date()
       yesterday.setDate(yesterday.getDate() - 1)
       filtered = filtered.filter(event => new Date(event.created_at) > yesterday)
+    }
+
+    // Filter by selected tags
+    if (advancedFilters.selectedTags.length > 0) {
+      filtered = filtered.filter(event => 
+        event.tags && event.tags.some(tag => advancedFilters.selectedTags.includes(tag))
+      )
     }
 
     // Apply main filter
@@ -345,10 +371,10 @@ export default function EventsListScreen() {
         break
     }
 
-    setFilteredEvents(filtered)
+    setFilteredEvents(filtered as EventListItem[])
   }
 
-  const renderEventCard = ({ item }: { item: EventWithAttendees }) => {
+    const renderEventCard = ({ item }: { item: EventListItem }) => {
     const hostProfile = hostProfiles[item.host_id]
     const userAttendance = userAttendances[item.id]
     const isInvited = userInvitations.has(item.id)
@@ -357,7 +383,7 @@ export default function EventsListScreen() {
     return (
       <TouchableOpacity
         style={styles.eventCard}
-        onPress={() => navigation.navigate('EventDetail', { event: item })}
+        onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
       >
         {/* Event Image */}
         {item.image_url && (
@@ -387,21 +413,37 @@ export default function EventsListScreen() {
             {item.description}
           </Text>
 
+          {/* Event Tags */}
+          {item.tags && item.tags.length > 0 && (
+            <View style={styles.tagsContainer}>
+              {item.tags.slice(0, 3).map((tag, index) => (
+                <View key={index} style={styles.eventTag}>
+                  <Text style={styles.eventTagText}>{tag}</Text>
+                </View>
+              ))}
+              {item.tags.length > 3 && (
+                <View style={styles.eventTag}>
+                  <Text style={styles.eventTagText}>+{item.tags.length - 3}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
           <View style={styles.eventDetails}>
             <View style={styles.eventDetail}>
-              <Ionicons name="calendar" size={16} color="#7f8c8d" />
+              <Ionicons name="calendar" size={16} color="#e74c3c" />
               <Text style={styles.eventDetailText}>
                 {formatDate(item.event_date)}
               </Text>
             </View>
             <View style={styles.eventDetail}>
-              <Ionicons name="time" size={16} color="#7f8c8d" />
+              <Ionicons name="time" size={16} color="#f39c12" />
               <Text style={styles.eventDetailText}>
                 {formatTime(item.start_time)}
               </Text>
             </View>
             <View style={styles.eventDetail}>
-              <Ionicons name="location" size={16} color="#7f8c8d" />
+              <Ionicons name="location" size={16} color="#27ae60" />
               <Text style={styles.eventDetailText} numberOfLines={1}>
                 {item.location}
               </Text>
@@ -464,11 +506,13 @@ export default function EventsListScreen() {
     </TouchableOpacity>
   )
 
+  const styles = createStyles(theme)
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <Text>Loading events...</Text>
+          <Text style={styles.loadingText}>Loading events...</Text>
         </View>
       </SafeAreaView>
     )
@@ -476,22 +520,14 @@ export default function EventsListScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Events</Text>
-        <TouchableOpacity
-          style={styles.filterIcon}
-          onPress={() => setShowFilterModal(true)}
-        >
-          <Ionicons name="options" size={24} color="#2c3e50" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Fixed height filter container */}
+      {/* Filter container with integrated filter button */}
       <View style={styles.filterContainer}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.filterContent}
+          scrollEnabled={true}
+          bounces={false}
         >
           {renderFilterButton('all', 'All')}
           {renderFilterButton('going', 'Going')}
@@ -499,6 +535,22 @@ export default function EventsListScreen() {
           {renderFilterButton('week', 'This Week')}
           {renderFilterButton('month', 'This Month')}
         </ScrollView>
+        
+        {/* Filter button with fade effect */}
+        <View style={styles.filterButtonContainer}>
+          <LinearGradient
+            colors={[`${theme.headerBackground}00`, theme.headerBackground]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.fadeOverlay}
+          />
+          <TouchableOpacity
+            style={styles.filterIcon}
+            onPress={() => setShowFilterModal(true)}
+          >
+            <Ionicons name="options" size={20} color={theme.textSecondary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -510,13 +562,16 @@ export default function EventsListScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={['#3498db']}
-            tintColor="#3498db"
+            colors={[theme.primary]}
+            tintColor={theme.primary}
           />
         }
         showsVerticalScrollIndicator={false}
+        style={styles.eventsFlatList}
       />
 
+      
+      
       <Modal
         visible={showFilterModal}
         animationType="slide"
@@ -524,17 +579,23 @@ export default function EventsListScreen() {
       >
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Advanced Filters</Text>
-            <TouchableOpacity onPress={() => setShowFilterModal(false)}>
-              <Ionicons name="close" size={24} color="#2c3e50" />
+            <Text style={styles.modalTitle}>Filters</Text>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowFilterModal(false)}
+            >
+              <Ionicons name="close" size={24} color="#7f8c8d" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.modalContent}>
+          <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
             <View style={styles.filterSection}>
               <Text style={styles.filterSectionTitle}>Event Type</Text>
               <TouchableOpacity
-                style={styles.filterOption}
+                style={[
+                  styles.filterOption,
+                  advancedFilters.friendsOnly && styles.filterOptionActive
+                ]}
                 onPress={() => setAdvancedFilters(prev => ({
                   ...prev,
                   friendsOnly: !prev.friendsOnly
@@ -543,7 +604,7 @@ export default function EventsListScreen() {
                 <Ionicons
                   name={advancedFilters.friendsOnly ? 'checkbox' : 'square-outline'}
                   size={20}
-                  color={advancedFilters.friendsOnly ? '#3498db' : '#7f8c8d'}
+                  color={advancedFilters.friendsOnly ? '#3498db' : '#bdc3c7'}
                 />
                 <Text style={styles.filterOptionText}>Friends Only</Text>
               </TouchableOpacity>
@@ -552,7 +613,10 @@ export default function EventsListScreen() {
             <View style={styles.filterSection}>
               <Text style={styles.filterSectionTitle}>Activity</Text>
               <TouchableOpacity
-                style={styles.filterOption}
+                style={[
+                  styles.filterOption,
+                  advancedFilters.peopleGoing && styles.filterOptionActive
+                ]}
                 onPress={() => setAdvancedFilters(prev => ({
                   ...prev,
                   peopleGoing: !prev.peopleGoing
@@ -561,12 +625,15 @@ export default function EventsListScreen() {
                 <Ionicons
                   name={advancedFilters.peopleGoing ? 'checkbox' : 'square-outline'}
                   size={20}
-                  color={advancedFilters.peopleGoing ? '#3498db' : '#7f8c8d'}
+                  color={advancedFilters.peopleGoing ? '#3498db' : '#bdc3c7'}
                 />
                 <Text style={styles.filterOptionText}>People Going</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.filterOption}
+                style={[
+                  styles.filterOption,
+                  advancedFilters.hasCapacity && styles.filterOptionActive
+                ]}
                 onPress={() => setAdvancedFilters(prev => ({
                   ...prev,
                   hasCapacity: !prev.hasCapacity
@@ -575,12 +642,15 @@ export default function EventsListScreen() {
                 <Ionicons
                   name={advancedFilters.hasCapacity ? 'checkbox' : 'square-outline'}
                   size={20}
-                  color={advancedFilters.hasCapacity ? '#3498db' : '#7f8c8d'}
+                  color={advancedFilters.hasCapacity ? '#3498db' : '#bdc3c7'}
                 />
                 <Text style={styles.filterOptionText}>Has Capacity Limit</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.filterOption}
+                style={[
+                  styles.filterOption,
+                  advancedFilters.last24Hours && styles.filterOptionActive
+                ]}
                 onPress={() => setAdvancedFilters(prev => ({
                   ...prev,
                   last24Hours: !prev.last24Hours
@@ -589,10 +659,40 @@ export default function EventsListScreen() {
                 <Ionicons
                   name={advancedFilters.last24Hours ? 'checkbox' : 'square-outline'}
                   size={20}
-                  color={advancedFilters.last24Hours ? '#3498db' : '#7f8c8d'}
+                  color={advancedFilters.last24Hours ? '#3498db' : '#bdc3c7'}
                 />
-                <Text style={styles.filterOptionText}>Created in Last 24 Hours</Text>
+                <Text style={styles.filterOptionText}>Recently Created</Text>
               </TouchableOpacity>
+            </View>
+
+                        <View style={styles.filterSection}>
+              <Text style={styles.filterSectionTitle}>Tags</Text>
+              <View style={styles.tagsFilterContainer}>
+                {predefinedTags.map((tag) => (
+                  <TouchableOpacity
+                    key={tag}
+                    style={[
+                      styles.tagFilterButton,
+                      advancedFilters.selectedTags.includes(tag) && styles.tagFilterButtonSelected
+                    ]}
+                    onPress={() => {
+                      setAdvancedFilters(prev => ({
+                        ...prev,
+                        selectedTags: prev.selectedTags.includes(tag)
+                          ? prev.selectedTags.filter(t => t !== tag)
+                          : [...prev.selectedTags, tag]
+                      }))
+                    }}
+                  >
+                    <Text style={[
+                      styles.tagFilterText,
+                      advancedFilters.selectedTags.includes(tag) && styles.tagFilterTextSelected
+                    ]}>
+                      {tag}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
 
             <View style={styles.filterSection}>
@@ -606,13 +706,16 @@ export default function EventsListScreen() {
               ].map((option) => (
                 <TouchableOpacity
                   key={option.value}
-                  style={styles.sortOption}
+                  style={[
+                    styles.sortOption,
+                    sortBy === option.value && styles.sortOptionActive
+                  ]}
                   onPress={() => setSortBy(option.value as SortType)}
                 >
                   <Ionicons
                     name={sortBy === option.value ? 'radio-button-on' : 'radio-button-off'}
                     size={20}
-                    color={sortBy === option.value ? '#3498db' : '#7f8c8d'}
+                    color={sortBy === option.value ? '#3498db' : '#bdc3c7'}
                   />
                   <Text style={styles.sortOptionText}>{option.label}</Text>
                 </TouchableOpacity>
@@ -621,7 +724,7 @@ export default function EventsListScreen() {
           </ScrollView>
 
           <View style={styles.modalFooter}>
-            <TouchableOpacity
+                        <TouchableOpacity
               style={styles.clearButton}
               onPress={() => {
                 setAdvancedFilters({
@@ -629,6 +732,7 @@ export default function EventsListScreen() {
                   peopleGoing: false,
                   hasCapacity: false,
                   last24Hours: false,
+                  selectedTags: [],
                 })
                 setSortBy('date_asc')
               }}
@@ -648,41 +752,59 @@ export default function EventsListScreen() {
   )
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: theme.background,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
+  loadingText: {
+    fontSize: 16,
+    color: theme.textSecondary,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2c3e50',
+  filterContainer: {
+    backgroundColor: theme.headerBackground,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.headerBorder,
+    height: 60, // Fixed height to prevent squishing
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+    zIndex: 1,
+  },
+  filterButtonContainer: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 20,
+    backgroundColor: theme.headerBackground,
+    width: 80,
+    justifyContent: 'flex-end',
+  },
+  fadeOverlay: {
+    position: 'absolute',
+    left: -40,
+    top: 0,
+    bottom: 0,
+    width: 40,
   },
   filterIcon: {
     padding: 8,
-  },
-  filterContainer: {
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
-    height: 60, // Fixed height to prevent squishing
+    backgroundColor: theme.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   filterContent: {
     paddingHorizontal: 20,
+    paddingRight: 100, // Make room for filter button
     paddingVertical: 12,
     alignItems: 'center',
   },
@@ -690,17 +812,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: theme.surface,
     marginRight: 12,
     height: 36, // Fixed height for buttons
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   filterButtonActive: {
-    backgroundColor: '#3498db',
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
   },
   filterButtonText: {
     fontSize: 14,
-    color: '#7f8c8d',
+    color: theme.textSecondary,
     fontWeight: '500',
   },
   filterButtonTextActive: {
@@ -709,11 +834,14 @@ const styles = StyleSheet.create({
   eventsList: {
     padding: 20,
   },
+  eventsFlatList: {
+    flex: 1,
+  },
   eventCard: {
-    backgroundColor: 'white',
+    backgroundColor: theme.card,
     borderRadius: 12,
     marginBottom: 16,
-    shadowColor: '#000',
+    shadowColor: theme.shadow,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -722,11 +850,13 @@ const styles = StyleSheet.create({
     shadowRadius: 3.84,
     elevation: 5,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   eventImage: {
     width: '100%',
     height: 200, // Good size for event images
-    backgroundColor: '#f8f9fa',
+    backgroundColor: theme.surface,
   },
   eventContent: {
     padding: 16,
@@ -743,27 +873,29 @@ const styles = StyleSheet.create({
   eventTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
+    color: theme.text,
     marginBottom: 4,
   },
   eventHost: {
     fontSize: 14,
-    color: '#7f8c8d',
+    color: theme.textSecondary,
   },
   invitedBadge: {
-    backgroundColor: '#e8f5e8',
+    backgroundColor: theme.success + '20',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.success + '40',
   },
   invitedText: {
     fontSize: 12,
-    color: '#27ae60',
+    color: theme.success,
     fontWeight: '500',
   },
   eventDescription: {
     fontSize: 14,
-    color: '#5a6c7d',
+    color: theme.textSecondary,
     lineHeight: 20,
     marginBottom: 12,
   },
@@ -777,7 +909,7 @@ const styles = StyleSheet.create({
   },
   eventDetailText: {
     fontSize: 14,
-    color: '#7f8c8d',
+    color: theme.textSecondary,
     marginLeft: 8,
     flex: 1,
   },
@@ -792,103 +924,252 @@ const styles = StyleSheet.create({
   },
   statText: {
     fontSize: 12,
-    color: '#7f8c8d',
+    color: theme.textSecondary,
     marginLeft: 4,
   },
   attendanceStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8f9fa',
+    backgroundColor: theme.surface,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   attendanceStatusText: {
     fontSize: 12,
-    color: '#2c3e50',
+    color: theme.text,
     marginLeft: 4,
     fontWeight: '500',
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: 'white',
+    backgroundColor: theme.background,
   },
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    backgroundColor: theme.headerBackground,
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
+    borderBottomColor: theme.headerBorder,
+    shadowColor: theme.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 3,
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#2c3e50',
+    fontSize: 22,
+    fontWeight: "700",
+    color: theme.headerText,
+    letterSpacing: -0.5,
   },
   modalContent: {
     flex: 1,
-    padding: 20,
+    paddingHorizontal: 24,
+    paddingTop: 24,
   },
   filterSection: {
-    marginBottom: 24,
+    marginBottom: 32,
+    backgroundColor: theme.card,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: theme.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   filterSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginBottom: 12,
+    fontSize: 18,
+    fontWeight: "600",
+    color: theme.text,
+    marginBottom: 16,
+    letterSpacing: -0.3,
   },
   filterOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    marginBottom: 4,
+  },
+  filterOptionActive: {
+    backgroundColor: theme.primary + '10',
   },
   filterOptionText: {
     fontSize: 16,
-    color: '#2c3e50',
-    marginLeft: 12,
+    color: theme.text,
+    marginLeft: 16,
+    fontWeight: "500",
+    flex: 1,
+  },
+  filterOptionIcon: {
+    marginRight: 8,
   },
   sortOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    marginBottom: 4,
+  },
+  sortOptionActive: {
+    backgroundColor: theme.primary + '10',
   },
   sortOptionText: {
     fontSize: 16,
-    color: '#2c3e50',
-    marginLeft: 12,
+    color: theme.text,
+    marginLeft: 16,
+    fontWeight: "500",
+    flex: 1,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: theme.border,
+    marginVertical: 16,
   },
   modalFooter: {
-    flexDirection: 'row',
-    padding: 20,
+    flexDirection: "row",
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    backgroundColor: theme.headerBackground,
     borderTopWidth: 1,
-    borderTopColor: '#e1e8ed',
+    borderTopColor: theme.headerBorder,
+    shadowColor: theme.shadow,
+    shadowOffset: {
+      width: 0,
+      height: -2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 3,
   },
   clearButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#f8f9fa',
-    alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    backgroundColor: theme.surface,
+    alignItems: "center",
     marginRight: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   clearButtonText: {
     fontSize: 16,
-    color: '#7f8c8d',
-    fontWeight: '500',
+    color: theme.textSecondary,
+    fontWeight: "600",
   },
   applyButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#3498db',
-    alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    backgroundColor: theme.primary,
+    alignItems: "center",
+    shadowColor: theme.primary,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   applyButtonText: {
     fontSize: 16,
+    color: "white",
+    fontWeight: "700",
+  },
+  activeFilterCount: {
+    backgroundColor: theme.primary,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginLeft: 8,
+  },
+  activeFilterCountText: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: theme.textSecondary,
+    textAlign: "center",
+    marginTop: 12,
+  },
+  filterDescription: {
+    fontSize: 14,
+    color: theme.textSecondary,
+    marginTop: 4,
+    lineHeight: 20,
+  },
+  closeButton: {
+    padding: 8,
+  },
+  // Event tags styles
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  eventTag: {
+    backgroundColor: theme.primary + '20',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.primary + '40',
+  },
+  eventTagText: {
+    fontSize: 12,
+    color: theme.primary,
+    fontWeight: '500',
+  },
+  // Tags filter styles
+  tagsFilterContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  tagFilterButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  tagFilterButtonSelected: {
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
+  },
+  tagFilterText: {
+    fontSize: 12,
+    color: theme.textSecondary,
+    fontWeight: '500',
+  },
+  tagFilterTextSelected: {
     color: 'white',
-    fontWeight: '600',
   },
 })

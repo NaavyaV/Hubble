@@ -13,8 +13,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
+import { useTheme } from '../context/ThemeContext'
 
 export default function AuthScreen({ navigation }: any) {
+  const { theme } = useTheme()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -57,33 +59,34 @@ export default function AuthScreen({ navigation }: any) {
 
   if (isSignIn) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardView}
         >
           <ScrollView contentContainerStyle={styles.scrollContent}>
-            <View style={styles.header}>
+            <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
               <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-                <Ionicons name="arrow-back" size={24} color="#2c3e50" />
+                <Ionicons name="arrow-back" size={24} color={theme.text} />
               </TouchableOpacity>
-              <Text style={styles.headerTitle}>Sign In</Text>
+              <Text style={[styles.headerTitle, { color: theme.text }]}>Sign In</Text>
               <View style={styles.placeholder} />
             </View>
 
             <View style={styles.content}>
               <View style={styles.logoContainer}>
-                <Ionicons name="calendar" size={64} color="#3498db" />
-                <Text style={styles.logoText}>UTD Hangouts</Text>
-                <Text style={styles.logoSubtext}>Connect with fellow students</Text>
+                <Ionicons name="calendar" size={64} color={theme.primary} />
+                <Text style={[styles.logoText, { color: theme.text }]}>UTD Hangouts</Text>
+                <Text style={[styles.logoSubtext, { color: theme.textSecondary }]}>Connect with fellow students</Text>
               </View>
 
               <View style={styles.form}>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Email</Text>
+                  <Text style={[styles.label, { color: theme.text }]}>Email</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                     placeholder="Enter your email"
+                    placeholderTextColor={theme.inputPlaceholder}
                     value={email}
                     onChangeText={setEmail}
                     keyboardType="email-address"
@@ -93,10 +96,11 @@ export default function AuthScreen({ navigation }: any) {
                 </View>
 
                 <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Password</Text>
+                  <Text style={[styles.label, { color: theme.text }]}>Password</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                     placeholder="Enter your password"
+                    placeholderTextColor={theme.inputPlaceholder}
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry
@@ -106,11 +110,15 @@ export default function AuthScreen({ navigation }: any) {
                 </View>
 
                 <TouchableOpacity
-                  style={[styles.signInButton, loading && styles.buttonDisabled]}
+                  style={[
+                    styles.signInButton,
+                    { backgroundColor: theme.buttonPrimary },
+                    loading && { backgroundColor: theme.textTertiary }
+                  ]}
                   onPress={handleSignIn}
                   disabled={loading}
                 >
-                  <Text style={styles.signInButtonText}>
+                  <Text style={[styles.signInButtonText, { color: theme.buttonText }]}>
                     {loading ? 'Signing In...' : 'Sign In'}
                   </Text>
                 </TouchableOpacity>
@@ -123,23 +131,23 @@ export default function AuthScreen({ navigation }: any) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={styles.welcomeContainer}>
         <View style={styles.logoContainer}>
-          <Ionicons name="calendar" size={80} color="#3498db" />
-          <Text style={styles.welcomeTitle}>Welcome to UTD Hangouts</Text>
-          <Text style={styles.welcomeSubtext}>
+          <Ionicons name="calendar" size={80} color={theme.primary} />
+          <Text style={[styles.welcomeTitle, { color: theme.text }]}>Welcome to UTD Hangouts</Text>
+          <Text style={[styles.welcomeSubtext, { color: theme.textSecondary }]}>
             Connect with fellow students, discover events, and make lasting friendships on campus.
           </Text>
         </View>
 
         <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.getStartedButton} onPress={handleGetStarted}>
-            <Text style={styles.getStartedButtonText}>Get Started</Text>
+          <TouchableOpacity style={[styles.getStartedButton, { backgroundColor: theme.buttonPrimary }]} onPress={handleGetStarted}>
+            <Text style={[styles.getStartedButtonText, { color: theme.buttonText }]}>Get Started</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.signInLink} onPress={handleSignInPress}>
-            <Text style={styles.signInLinkText}>Have an account? Sign in</Text>
+            <Text style={[styles.signInLinkText, { color: theme.primary }]}>Have an account? Sign in</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -150,7 +158,6 @@ export default function AuthScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   keyboardView: {
     flex: 1,
@@ -164,9 +171,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   backButton: {
     padding: 8,
@@ -174,7 +179,6 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   placeholder: {
     width: 40,
@@ -192,25 +196,21 @@ const styles = StyleSheet.create({
   logoText: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#2c3e50',
     marginTop: 16,
   },
   logoSubtext: {
     fontSize: 16,
-    color: '#7f8c8d',
     marginTop: 8,
     textAlign: 'center',
   },
   welcomeTitle: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#2c3e50',
     marginTop: 24,
     textAlign: 'center',
   },
   welcomeSubtext: {
     fontSize: 18,
-    color: '#7f8c8d',
     marginTop: 16,
     textAlign: 'center',
     lineHeight: 24,
@@ -220,7 +220,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   getStartedButton: {
-    backgroundColor: '#3498db',
     paddingVertical: 16,
     paddingHorizontal: 40,
     borderRadius: 12,
@@ -229,7 +228,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   getStartedButtonText: {
-    color: 'white',
     fontSize: 18,
     fontWeight: '600',
   },
@@ -237,7 +235,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   signInLinkText: {
-    color: '#3498db',
     fontSize: 16,
     fontWeight: '500',
   },
@@ -255,28 +252,22 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   input: {
-    backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#2c3e50',
   },
   signInButton: {
-    backgroundColor: '#3498db',
     paddingVertical: 16,
     borderRadius: 8,
     alignItems: 'center',
     marginTop: 20,
   },
   signInButtonText: {
-    color: 'white',
     fontSize: 18,
     fontWeight: '600',
   },

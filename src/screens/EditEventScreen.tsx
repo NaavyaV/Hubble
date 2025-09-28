@@ -19,13 +19,28 @@ import * as ImagePicker from 'expo-image-picker'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { useTheme } from '../context/ThemeContext'
 
 interface EditEventScreenProps {
   route: { params: { event: any } }
   navigation: any
 }
 
+const predefinedTags = [
+  'Game Night',
+  'Study Session',
+  'Movie Night',
+  'Sports',
+  'Food & Dining',
+  'Music & Arts',
+  'Networking',
+  'Outdoor Activity',
+  'Workshop',
+  'Social Mixer'
+]
+
 export default function EditEventScreen({ route, navigation }: EditEventScreenProps) {
+  const { theme } = useTheme()
   const { event } = route.params
   const [title, setTitle] = useState(event.title || '')
   const [description, setDescription] = useState(event.description || '')
@@ -37,6 +52,7 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
   const [hasEndTime, setHasEndTime] = useState(!!event.end_time)
   const [privacy, setPrivacy] = useState<'public' | 'friends_only'>(event.privacy || 'public')
   const [imageUri, setImageUri] = useState<string | null>(event.image_url || null)
+  const [selectedTags, setSelectedTags] = useState<string[]>(event.tags || [])
   const [loading, setLoading] = useState(false)
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [showStartTimePicker, setShowStartTimePicker] = useState(false)
@@ -70,6 +86,14 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
     } catch (error) {
       console.error('Error fetching invited users:', error)
     }
+  }
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags(prev => 
+      prev.includes(tag) 
+        ? prev.filter(t => t !== tag)
+        : [...prev, tag]
+    )
   }
 
   const pickImage = async () => {
@@ -210,6 +234,7 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
           max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
           image_url: imageUrl,
           privacy: privacy,
+          tags: selectedTags.length > 0 ? selectedTags : null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', event.id)
@@ -235,31 +260,31 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingView}
       >
         <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-          <View style={styles.header}>
+          <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
             <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-              <Ionicons name="arrow-back" size={24} color="#2c3e50" />
+              <Ionicons name="arrow-back" size={24} color={theme.text} />
             </TouchableOpacity>
-            <Text style={styles.title}>Edit Event</Text>
+            <Text style={[styles.title, { color: theme.text }]}>Edit Event</Text>
             <View style={styles.placeholder} />
           </View>
 
           <View style={styles.form}>
             {/* Event Image */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Event Image (Optional)</Text>
-              <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Event Image (Optional)</Text>
+              <TouchableOpacity style={[styles.imageButton, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={pickImage}>
                 {imageUri ? (
                   <Image source={{ uri: imageUri }} style={styles.imagePreview} />
                 ) : (
                   <View style={styles.imagePlaceholder}>
-                    <Ionicons name="camera" size={32} color="#7f8c8d" />
-                    <Text style={styles.imagePlaceholderText}>Tap to add image</Text>
+                    <Ionicons name="camera" size={32} color={theme.textSecondary} />
+                    <Text style={[styles.imagePlaceholderText, { color: theme.textSecondary }]}>Tap to add image</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -349,25 +374,25 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
 
             {/* Event Title */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Event Title *</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Event Title *</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 value={title}
                 onChangeText={setTitle}
                 placeholder="Enter event title"
-                placeholderTextColor="#7f8c8d"
+                placeholderTextColor={theme.inputPlaceholder}
               />
             </View>
 
             {/* Event Description */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Description</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Description</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 value={description}
                 onChangeText={setDescription}
                 placeholder="Describe your event..."
-                placeholderTextColor="#7f8c8d"
+                placeholderTextColor={theme.inputPlaceholder}
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
@@ -376,27 +401,52 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
 
             {/* Location */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Location *</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Location *</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 value={location}
                 onChangeText={setLocation}
                 placeholder="Where is the event?"
-                placeholderTextColor="#7f8c8d"
+                placeholderTextColor={theme.inputPlaceholder}
               />
             </View>
 
             {/* Max Attendees */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Max Attendees (Optional)</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Max Attendees (Optional)</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 value={maxAttendees}
                 onChangeText={setMaxAttendees}
                 placeholder="Leave empty for unlimited"
-                placeholderTextColor="#7f8c8d"
+                placeholderTextColor={theme.inputPlaceholder}
                 keyboardType="numeric"
               />
+            </View>
+
+            {/* Tags */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Tags</Text>
+              <Text style={styles.tagsDescription}>Select relevant tags for your event</Text>
+              <View style={styles.tagsContainer}>
+                {predefinedTags.map((tag) => (
+                  <TouchableOpacity
+                    key={tag}
+                    style={[
+                      styles.tagButton,
+                      selectedTags.includes(tag) && styles.tagButtonSelected
+                    ]}
+                    onPress={() => toggleTag(tag)}
+                  >
+                    <Text style={[
+                      styles.tagText,
+                      selectedTags.includes(tag) && styles.tagTextSelected
+                    ]}>
+                      {tag}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
 
             {/* Event Date */}
@@ -474,11 +524,15 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
 
             {/* Submit Button */}
             <TouchableOpacity
-              style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+              style={[
+                styles.submitButton,
+                { backgroundColor: theme.buttonPrimary },
+                loading && { backgroundColor: theme.textTertiary }
+              ]}
               onPress={handleUpdateEvent}
               disabled={loading}
             >
-              <Text style={styles.submitButtonText}>
+              <Text style={[styles.submitButtonText, { color: theme.buttonText }]}>
                 {loading ? 'Updating Event...' : 'Update Event'}
               </Text>
             </TouchableOpacity>
@@ -492,7 +546,6 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   keyboardAvoidingView: {
     flex: 1,
@@ -505,9 +558,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 20,
-    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   backButton: {
     padding: 4,
@@ -515,7 +566,6 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#2c3e50',
   },
   placeholder: {
     width: 32,
@@ -529,17 +579,14 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   input: {
-    backgroundColor: 'white',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   textArea: {
     height: 100,
@@ -549,8 +596,6 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
-    backgroundColor: 'white',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -565,15 +610,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   imagePlaceholderText: {
-    color: '#7f8c8d',
     marginTop: 8,
     fontSize: 14,
   },
   privacyContainer: {
-    backgroundColor: 'white',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     overflow: 'hidden',
   },
   privacyOption: {
@@ -581,7 +623,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#f8f9fa',
   },
   privacyOptionSelected: {
     backgroundColor: '#e3f2fd',
@@ -592,7 +633,6 @@ const styles = StyleSheet.create({
   privacyText: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2c3e50',
     marginLeft: 12,
   },
   privacyTextSelected: {
@@ -610,38 +650,58 @@ const styles = StyleSheet.create({
   inviteButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
     padding: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     marginBottom: 8,
   },
   inviteButtonText: {
     flex: 1,
     fontSize: 16,
-    color: '#2c3e50',
     marginLeft: 12,
   },
   inviteNote: {
     fontSize: 12,
-    color: '#7f8c8d',
     fontStyle: 'italic',
+  },
+  tagsDescription: {
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  tagButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  tagButtonSelected: {
+    backgroundColor: '#3498db',
+    borderColor: '#3498db',
+  },
+  tagText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  tagTextSelected: {
+    color: 'white',
   },
   dateTimeButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   dateTimeText: {
     flex: 1,
     fontSize: 16,
-    color: '#2c3e50',
     marginLeft: 8,
   },
   endTimeHeader: {
@@ -651,7 +711,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   submitButton: {
-    backgroundColor: '#3498db',
     borderRadius: 8,
     paddingVertical: 16,
     alignItems: 'center',
@@ -661,7 +720,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#bdc3c7',
   },
   submitButtonText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },

@@ -9,6 +9,7 @@ import {
 } from 'react-native'
 import Modal from 'react-native-modal'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useTheme } from '../context/ThemeContext'
 
 interface UserProfile {
   id: string
@@ -26,6 +27,8 @@ interface UserProfileModalProps {
 }
 
 export default function UserProfileModal({ isVisible, onClose, user }: UserProfileModalProps) {
+  const { theme } = useTheme()
+  
   if (!user) return null
 
   return (
@@ -37,11 +40,11 @@ export default function UserProfileModal({ isVisible, onClose, user }: UserProfi
       animationIn="slideInUp"
       animationOut="slideOutDown"
     >
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Profile</Text>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeButtonText}>✕</Text>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Profile</Text>
+          <TouchableOpacity style={[styles.closeButton, { backgroundColor: theme.surface }]} onPress={onClose}>
+            <Text style={[styles.closeButtonText, { color: theme.textSecondary }]}>✕</Text>
           </TouchableOpacity>
         </View>
 
@@ -51,27 +54,27 @@ export default function UserProfileModal({ isVisible, onClose, user }: UserProfi
               {user.avatar_url ? (
                 <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
               ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Text style={styles.avatarText}>
+                <View style={[styles.avatarPlaceholder, { backgroundColor: theme.primary }]}>
+                  <Text style={[styles.avatarText, { color: theme.buttonText }]}>
                     {user.full_name?.charAt(0).toUpperCase() || 'U'}
                   </Text>
                 </View>
               )}
             </View>
             
-            <Text style={styles.userName}>
+            <Text style={[styles.userName, { color: theme.text }]}>
               {user.full_name || 'User'}
             </Text>
             
             {(user.major || user.graduating_year) && (
               <View style={styles.userInfo}>
                 {user.major && (
-                  <Text style={styles.userInfoText}>
+                  <Text style={[styles.userInfoText, { color: theme.primary }]}>
                     {user.major}
                   </Text>
                 )}
                 {user.graduating_year && (
-                  <Text style={styles.userInfoText}>
+                  <Text style={[styles.userInfoText, { color: theme.primary }]}>
                     Class of {user.graduating_year}
                   </Text>
                 )}
@@ -80,8 +83,8 @@ export default function UserProfileModal({ isVisible, onClose, user }: UserProfi
 
             {user.bio && (
               <View style={styles.bioContainer}>
-                <Text style={styles.bioLabel}>About</Text>
-                <Text style={styles.bioText}>{user.bio}</Text>
+                <Text style={[styles.bioLabel, { color: theme.text }]}>About</Text>
+                <Text style={[styles.bioText, { color: theme.textSecondary }]}>{user.bio}</Text>
               </View>
             )}
           </View>
@@ -97,7 +100,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   container: {
-    backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '80%',
@@ -110,24 +112,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   closeButton: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#f8f9fa',
     justifyContent: 'center',
     alignItems: 'center',
   },
   closeButtonText: {
     fontSize: 16,
-    color: '#7f8c8d',
     fontWeight: 'bold',
   },
   content: {
@@ -149,19 +147,16 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: '#3498db',
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
     fontSize: 40,
     fontWeight: 'bold',
-    color: 'white',
   },
   userName: {
     fontSize: 24,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
     textAlign: 'center',
   },
@@ -171,7 +166,6 @@ const styles = StyleSheet.create({
   },
   userInfoText: {
     fontSize: 16,
-    color: '#3498db',
     fontWeight: '500',
     marginBottom: 4,
   },
@@ -182,12 +176,10 @@ const styles = StyleSheet.create({
   bioLabel: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   bioText: {
     fontSize: 14,
-    color: '#5a6c7d',
     lineHeight: 20,
     textAlign: 'center',
   },

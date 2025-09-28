@@ -14,6 +14,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import ProfileModal from '../components/ProfileModal'
 import { EventWithAttendees } from '../types'
+import { useTheme } from '../context/ThemeContext'
 
 interface EventAttendee {
   id: string
@@ -36,6 +37,7 @@ type RootStackParamList = {
 type EventDetailRouteProp = RouteProp<RootStackParamList, 'EventDetail'>
 
 export default function EventDetailScreen() {
+  const { theme } = useTheme()
   const navigation = useNavigation()
   const route = useRoute<EventDetailRouteProp>()
   const { event } = route.params
@@ -270,28 +272,28 @@ export default function EventDetailScreen() {
           {user.avatar_url ? (
             <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
           ) : (
-            <Ionicons name="person" size={24} color="#7f8c8d" />
+            <Ionicons name="person" size={24} color={theme.textSecondary} />
           )}
         </View>
         <View style={styles.attendeeInfo}>
           <View style={styles.attendeeNameRow}>
-            <Text style={styles.attendeeName}>{user.full_name || 'Unknown'}</Text>
+            <Text style={[styles.attendeeName, { color: theme.text }]}>{user.full_name || 'Unknown'}</Text>
             {user.id === event.host_id && (
-              <View style={styles.hostBadge}>
-                <Ionicons name="star" size={12} color="white" />
-                <Text style={styles.hostBadgeText}>Host</Text>
+              <View style={[styles.hostBadge, { backgroundColor: theme.warning }]}>
+                <Ionicons name="star" size={12} color={theme.buttonText} />
+                <Text style={[styles.hostBadgeText, { color: theme.buttonText }]}>Host</Text>
               </View>
             )}
           </View>
-          <Text style={styles.attendeeStatus}>
+          <Text style={[styles.attendeeStatus, { color: theme.textSecondary }]}>
             {attendee.status === 'going' ? 'Going' : 
              attendee.status === 'maybe' ? 'Maybe' : 'Not Going'}
           </Text>
         </View>
         <View style={[
           styles.statusIndicator,
-          attendee.status === 'going' ? styles.goingIndicator :
-          attendee.status === 'maybe' ? styles.maybeIndicator : styles.notGoingIndicator
+          { backgroundColor: attendee.status === 'going' ? theme.success :
+                           attendee.status === 'maybe' ? theme.warning : theme.error }
         ]} />
       </TouchableOpacity>
     )
@@ -314,7 +316,7 @@ export default function EventDetailScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Event Image */}
         {event.image_url && (
@@ -325,10 +327,10 @@ export default function EventDetailScreen() {
         <View style={styles.content}>
           {/* Title and Privacy */}
           <View style={styles.titleRow}>
-            <Text style={styles.eventTitle}>{event.title}</Text>
+            <Text style={[styles.eventTitle, { color: theme.text }]}>{event.title}</Text>
             {event.privacy === 'friends_only' && (
               <View style={styles.privacyBadge}>
-                <Ionicons name="lock-closed" size={16} color="#e74c3c" />
+                <Ionicons name="lock-closed" size={16} color={theme.error} />
                 <Text style={styles.privacyText}>Friends Only</Text>
               </View>
             )}
@@ -336,26 +338,26 @@ export default function EventDetailScreen() {
 
           {/* Description */}
           {event.description && (
-            <Text style={styles.eventDescription}>{event.description}</Text>
+            <Text style={[styles.eventDescription, { color: theme.textSecondary }]}>{event.description}</Text>
           )}
 
           {/* Host Info */}
           {hostProfile && (
             <View style={styles.hostSection}>
-              <Text style={styles.sectionTitle}>Hosted by</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Hosted by</Text>
               <TouchableOpacity 
-                style={styles.hostInfo}
+                style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}
                 onPress={() => handleUserPress(hostProfile)}
               >
-                <View style={styles.hostAvatar}>
+                <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
                   {hostProfile.avatar_url ? (
                     <Image source={{ uri: hostProfile.avatar_url }} style={styles.avatarImage} />
                   ) : (
-                    <Ionicons name="person" size={24} color="#7f8c8d" />
+                    <Ionicons name="person" size={24} color={theme.textSecondary} />
                   )}
                 </View>
                 <View style={styles.hostNameRow}>
-                  <Text style={styles.hostName}>{hostProfile.full_name || 'Unknown'}</Text>
+                  <Text style={[styles.hostName, { color: theme.text }]}>{hostProfile.full_name || 'Unknown'}</Text>
                   {isHost && (
                     <View style={styles.hostBadge}>
                       <Ionicons name="star" size={12} color="white" />
@@ -368,33 +370,46 @@ export default function EventDetailScreen() {
           )}
 
           {/* Event Details */}
-          <View style={styles.detailsSection}>
+          <View style={[styles.detailsSection, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={styles.detailRow}>
-              <Ionicons name="calendar-outline" size={20} color="#3498db" />
-              <Text style={styles.detailText}>{formatDate(event.event_date)}</Text>
+              <Ionicons name="calendar-outline" size={20} color={theme.primary} />
+              <Text style={[styles.detailText, { color: theme.text }]}>{formatDate(event.event_date)}</Text>
             </View>
             
             <View style={styles.detailRow}>
-              <Ionicons name="time-outline" size={20} color="#f39c12" />
-              <Text style={styles.detailText}>
+              <Ionicons name="time-outline" size={20} color={theme.warning} />
+              <Text style={[styles.detailText, { color: theme.text }]}>
                 {formatTime(event.start_time)}
                 {event.end_time && ` - ${formatTime(event.end_time)}`}
               </Text>
             </View>
             
             <View style={styles.detailRow}>
-              <Ionicons name="location-outline" size={20} color="#e74c3c" />
-              <Text style={styles.detailText}>{event.location}</Text>
+              <Ionicons name="location-outline" size={20} color={theme.error} />
+              <Text style={[styles.detailText, { color: theme.text }]}>{event.location}</Text>
             </View>
             
             {event.max_attendees && (
               <View style={styles.detailRow}>
-                <Ionicons name="people-outline" size={20} color="#7f8c8d" />
-                <Text style={styles.detailText}>
+                <Ionicons name="people-outline" size={20} color={theme.textSecondary} />
+                <Text style={[styles.detailText, { color: theme.text }]}>
                   Max {event.max_attendees} attendees
                 </Text>
               </View>
             )}
+
+          {/* Event Tags */}
+          {Array.isArray((event as any).tags) && (event as any).tags.length > 0 && (
+            <View style={styles.tagsContainer}>
+              {(event as any).tags.map((tag: string, index: number) => (
+                <View key={index} style={styles.eventTag}>
+                  <Text style={styles.eventTagText}>{tag}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          
           </View>
 
           {/* Attendance Actions */}
@@ -402,24 +417,24 @@ export default function EventDetailScreen() {
             <View style={styles.attendanceSection}>
               <Text style={styles.sectionTitle}>Your Attendance</Text>
               {isEventFull() ? (
-                <View style={styles.eventFullContainer}>
+                <View style={[styles.eventFullContainer, { backgroundColor: theme.errorLight, borderColor: theme.error }]}>
                   <View style={styles.eventFullHeader}>
-                    <Ionicons name="people" size={24} color="#e74c3c" />
-                    <Text style={styles.eventFullTitle}>Event is Full</Text>
+                    <Ionicons name="people" size={24} color={theme.error} />
+                    <Text style={[styles.eventFullTitle, { color: theme.error }]}>Event is Full</Text>
                   </View>
-                  <Text style={styles.eventFullMessage}>
+                  <Text style={[styles.eventFullMessage, { color: theme.text }]}>
                     This event has reached its maximum capacity. Contact the host if you'd like to join:
                   </Text>
                   {hostProfile?.phone_number && (
-                    <TouchableOpacity style={styles.contactHostButton}>
-                      <Ionicons name="call" size={16} color="#3498db" />
-                      <Text style={styles.contactHostText}>
+                    <TouchableOpacity style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
+                      <Ionicons name="call" size={16} color={theme.primary} />
+                      <Text style={[styles.contactHostText, { color: theme.primary }]}>
                         {hostProfile.phone_number}
                       </Text>
                     </TouchableOpacity>
                   )}
                   {!hostProfile?.phone_number && (
-                    <Text style={styles.noContactText}>
+                    <Text style={[styles.noContactText, { color: theme.textSecondary }]}>
                       Host contact information not available
                     </Text>
                   )}
@@ -429,18 +444,20 @@ export default function EventDetailScreen() {
                   <TouchableOpacity
                     style={[
                       styles.attendanceButton,
-                      userAttendance === 'going' && styles.attendanceButtonActive
+                      { backgroundColor: theme.surface, borderColor: theme.border },
+                      userAttendance === 'going' && { backgroundColor: theme.primary, borderColor: theme.primary }
                     ]}
                     onPress={() => handleAttendanceChange('going')}
                   >
                     <Ionicons 
                       name="checkmark-circle" 
                       size={20} 
-                      color={userAttendance === 'going' ? 'white' : '#27ae60'} 
+                      color={userAttendance === 'going' ? theme.buttonText : theme.success} 
                     />
                     <Text style={[
                       styles.attendanceButtonText,
-                      userAttendance === 'going' && styles.attendanceButtonTextActive
+                      { color: theme.text },
+                      userAttendance === 'going' && { color: theme.buttonText }
                     ]}>
                       Going
                     </Text>
@@ -449,18 +466,20 @@ export default function EventDetailScreen() {
                   <TouchableOpacity
                     style={[
                       styles.attendanceButton,
-                      userAttendance === 'maybe' && styles.attendanceButtonActive
+                      { backgroundColor: theme.surface, borderColor: theme.border },
+                      userAttendance === 'maybe' && { backgroundColor: theme.primary, borderColor: theme.primary }
                     ]}
                     onPress={() => handleAttendanceChange('maybe')}
                   >
                     <Ionicons 
                       name="help-circle" 
                       size={20} 
-                      color={userAttendance === 'maybe' ? 'white' : '#f39c12'} 
+                      color={userAttendance === 'maybe' ? theme.buttonText : theme.warning} 
                     />
                     <Text style={[
                       styles.attendanceButtonText,
-                      userAttendance === 'maybe' && styles.attendanceButtonTextActive
+                      { color: theme.text },
+                      userAttendance === 'maybe' && { color: theme.buttonText }
                     ]}>
                       Maybe
                     </Text>
@@ -469,18 +488,20 @@ export default function EventDetailScreen() {
                   <TouchableOpacity
                     style={[
                       styles.attendanceButton,
-                      userAttendance === 'not_going' && styles.attendanceButtonActive
+                      { backgroundColor: theme.surface, borderColor: theme.border },
+                      userAttendance === 'not_going' && { backgroundColor: theme.primary, borderColor: theme.primary }
                     ]}
                     onPress={() => handleAttendanceChange('not_going')}
                   >
                     <Ionicons 
                       name="close-circle" 
                       size={20} 
-                      color={userAttendance === 'not_going' ? 'white' : '#e74c3c'} 
+                      color={userAttendance === 'not_going' ? theme.buttonText : theme.error} 
                     />
                     <Text style={[
                       styles.attendanceButtonText,
-                      userAttendance === 'not_going' && styles.attendanceButtonTextActive
+                      { color: theme.text },
+                      userAttendance === 'not_going' && { color: theme.buttonText }
                     ]}>
                       Not Going
                     </Text>
@@ -492,23 +513,23 @@ export default function EventDetailScreen() {
 
           {/* Host Status */}
           {isHost && (
-            <View style={styles.hostStatusContainer}>
+            <View style={[styles.hostStatusContainer, { backgroundColor: theme.warningLight, borderColor: theme.warning }]}>
               <View style={styles.hostStatusHeader}>
-                <Ionicons name="star" size={20} color="#f39c12" />
-                <Text style={styles.hostStatusTitle}>You are the host</Text>
+                <Ionicons name="star" size={20} color={theme.warning} />
+                <Text style={[styles.hostStatusTitle, { color: theme.warning }]}>You are the host</Text>
               </View>
-              <Text style={styles.hostStatusText}>
+              <Text style={[styles.hostStatusText, { color: theme.text }]}>
                 You are automatically marked as going to this event.
               </Text>
             </View>
           )}
 
           {/* Attendees Section - Only show going and maybe */}
-          <View style={styles.attendeesContainer}>
+          <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={styles.attendeesHeader}>
-              <Text style={styles.attendeesTitle}>Who's Going</Text>
+              <Text style={[styles.attendeesTitle, { color: theme.text }]}>Who's Going</Text>
               <View style={styles.attendeeStats}>
-                <Text style={styles.attendeeStatsText}>
+                <Text style={[styles.attendeeStatsText, { color: theme.textSecondary }]}>
                   {getGoingCount()} going
                   {getMaybeCount() > 0 && `, ${getMaybeCount()} maybe`}
                   {event.max_attendees && ` out of ${event.max_attendees} max`}
@@ -518,7 +539,7 @@ export default function EventDetailScreen() {
 
             {loading ? (
               <View style={styles.loadingContainer}>
-                <Text style={styles.loadingText}>Loading attendees...</Text>
+                <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading attendees...</Text>
               </View>
             ) : profilesLoaded ? (
               <View style={styles.attendeesList}>
@@ -527,12 +548,12 @@ export default function EventDetailScreen() {
                     .filter(a => a.status !== 'not_going') // Filter out "not going" attendees
                     .map(renderAttendee)
                 ) : (
-                  <Text style={styles.noAttendeesText}>No attendees yet</Text>
+                  <Text style={[styles.noAttendeesText, { color: theme.textSecondary }]}>No attendees yet</Text>
                 )}
               </View>
             ) : (
               <View style={styles.loadingContainer}>
-                <Text style={styles.loadingText}>Loading...</Text>
+                <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading...</Text>
               </View>
             )}
           </View>
@@ -555,7 +576,6 @@ export default function EventDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   scrollView: {
     flex: 1,
@@ -568,7 +588,6 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 18,
-    color: '#e74c3c',
     marginBottom: 20,
   },
   eventImage: {
@@ -588,7 +607,6 @@ const styles = StyleSheet.create({
   eventTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#2c3e50',
     flex: 1,
   },
   privacyBadge: {
@@ -608,7 +626,6 @@ const styles = StyleSheet.create({
   },
   eventDescription: {
     fontSize: 16,
-    color: '#7f8c8d',
     lineHeight: 24,
     marginBottom: 20,
   },
@@ -618,23 +635,19 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   hostInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
     padding: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   hostAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#f8f9fa',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -647,7 +660,6 @@ const styles = StyleSheet.create({
   hostName: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2c3e50',
     marginRight: 8,
   },
   hostBadge: {
@@ -665,12 +677,10 @@ const styles = StyleSheet.create({
     marginLeft: 2,
   },
   detailsSection: {
-    backgroundColor: 'white',
     padding: 16,
     borderRadius: 8,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   detailRow: {
     flexDirection: 'row',
@@ -679,7 +689,6 @@ const styles = StyleSheet.create({
   },
   detailText: {
     fontSize: 16,
-    color: '#2c3e50',
     marginLeft: 12,
     flex: 1,
   },
@@ -699,8 +708,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
-    backgroundColor: 'white',
     marginHorizontal: 4,
   },
   attendanceButtonActive: {
@@ -710,7 +717,6 @@ const styles = StyleSheet.create({
   attendanceButtonText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#2c3e50',
     marginLeft: 6,
   },
   attendanceButtonTextActive: {
@@ -784,10 +790,8 @@ const styles = StyleSheet.create({
     color: '#2c3e50',
   },
   attendeesContainer: {
-    backgroundColor: 'white',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     padding: 16,
   },
   attendeesHeader: {
@@ -799,7 +803,6 @@ const styles = StyleSheet.create({
   attendeesTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   attendeeStats: {
     flex: 1,
@@ -807,7 +810,6 @@ const styles = StyleSheet.create({
   },
   attendeeStatsText: {
     fontSize: 14,
-    color: '#7f8c8d',
   },
   attendeesList: {
     gap: 12,
@@ -821,7 +823,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#f8f9fa',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -842,12 +843,10 @@ const styles = StyleSheet.create({
   attendeeName: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2c3e50',
     marginRight: 8,
   },
   attendeeStatus: {
     fontSize: 14,
-    color: '#7f8c8d',
   },
   statusIndicator: {
     width: 12,
@@ -869,11 +868,9 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#7f8c8d',
   },
   noAttendeesText: {
     fontSize: 16,
-    color: '#7f8c8d',
     textAlign: 'center',
     padding: 20,
   },
@@ -888,4 +885,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
+  // Tags styles
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 20,
+  },
+  eventTag: {
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bbdefb',
+  },
+  eventTagText: {
+    fontSize: 12,
+    color: '#1976d2',
+    fontWeight: '600',
+  },
+
 })

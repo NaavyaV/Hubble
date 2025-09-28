@@ -16,8 +16,10 @@ import { Picker } from '@react-native-picker/picker'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { useTheme } from '../context/ThemeContext'
 
 export default function EditProfileScreen({ navigation }: any) {
+  const { theme } = useTheme()
   const [fullName, setFullName] = useState('')
   const [major, setMajor] = useState('')
   const [graduatingYear, setGraduatingYear] = useState('')
@@ -168,7 +170,7 @@ export default function EditProfileScreen({ navigation }: any) {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -176,23 +178,24 @@ export default function EditProfileScreen({ navigation }: any) {
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.form}>
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Profile Picture</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Profile Picture</Text>
               <TouchableOpacity style={styles.profileImageButton} onPress={pickProfileImage}>
                 {profileImageUri ? (
-                  <Image source={{ uri: profileImageUri }} style={styles.profileImage} />
+                  <Image source={{ uri: profileImageUri }} style={[styles.profileImage, { borderColor: theme.primary }]} />
                 ) : (
-                  <View style={styles.profileImagePlaceholder}>
-                    <Text style={styles.profileImagePlaceholderText}>+</Text>
+                  <View style={[styles.profileImagePlaceholder, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
+                    <Text style={[styles.profileImagePlaceholderText, { color: theme.textSecondary }]}>+</Text>
                   </View>
                 )}
               </TouchableOpacity>
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Full Name *</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Full Name *</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="Enter your full name"
+                placeholderTextColor={theme.inputPlaceholder}
                 value={fullName}
                 onChangeText={setFullName}
                 autoCorrect={false}
@@ -201,10 +204,11 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Major</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Major</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="e.g., Computer Science, Business, etc."
+                placeholderTextColor={theme.inputPlaceholder}
                 value={major}
                 onChangeText={setMajor}
                 autoCorrect={false}
@@ -213,17 +217,25 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Graduating Year</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Graduating Year</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsRow}>
                 {graduatingYearOptions.map((year) => {
                   const selected = graduatingYear === year
                   return (
                     <TouchableOpacity
                       key={year}
-                      style={[styles.chip, selected && styles.chipSelected]}
+                      style={[
+                        styles.chip,
+                        { backgroundColor: theme.surface, borderColor: theme.border },
+                        selected && { backgroundColor: theme.primary, borderColor: theme.primary }
+                      ]}
                       onPress={() => setGraduatingYear(year)}
                     >
-                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                      <Text style={[
+                        styles.chipText,
+                        { color: theme.textSecondary },
+                        selected && { color: theme.buttonText }
+                      ]}>
                         {year}
                       </Text>
                     </TouchableOpacity>
@@ -233,10 +245,11 @@ export default function EditProfileScreen({ navigation }: any) {
               </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Phone Number</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Phone Number</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="Enter your phone number"
+                placeholderTextColor={theme.inputPlaceholder}
                 value={phoneNumber}
                 onChangeText={(t) => setPhoneNumber(formatUSPhone(t))}
                 keyboardType="phone-pad"
@@ -247,10 +260,11 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Bio</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Bio</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="Tell us about yourself"
+                placeholderTextColor={theme.inputPlaceholder}
                 value={bio}
                 onChangeText={setBio}
                 multiline
@@ -261,11 +275,15 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
 
             <TouchableOpacity
-              style={[styles.saveButton, loading && styles.saveButtonDisabled]}
+              style={[
+                styles.saveButton,
+                { backgroundColor: theme.buttonPrimary },
+                loading && { backgroundColor: theme.textTertiary }
+              ]}
               onPress={handleSave}
               disabled={loading}
             >
-              <Text style={styles.saveButtonText}>
+              <Text style={[styles.saveButtonText, { color: theme.buttonText }]}>
                 {loading ? 'Saving...' : 'Save Changes'}
               </Text>
             </TouchableOpacity>
@@ -279,7 +297,6 @@ export default function EditProfileScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   keyboardView: {
     flex: 1,
@@ -296,18 +313,14 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   input: {
-    backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#2c3e50',
   },
   textArea: {
     height: 100,
@@ -322,49 +335,40 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     borderWidth: 3,
-    borderColor: '#3498db',
   },
   profileImagePlaceholder: {
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: '#e1e8ed',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#3498db',
   },
   profileImagePlaceholderText: {
     fontSize: 32,
-    color: '#7f8c8d',
     fontWeight: 'bold',
   },
   chipsRow: {
     flexDirection: 'row',
   },
   chip: {
-    backgroundColor: '#f8f9fa',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
     marginRight: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   chipSelected: {
-    backgroundColor: '#3498db',
-    borderColor: '#3498db',
+    // Colors applied inline with theme
   },
   chipText: {
     fontSize: 14,
-    color: '#7f8c8d',
     fontWeight: '500',
   },
   chipTextSelected: {
-    color: 'white',
+    // Colors applied inline with theme
   },
   saveButton: {
-    backgroundColor: '#3498db',
     borderRadius: 8,
     paddingVertical: 16,
     alignItems: 'center',
@@ -376,6 +380,5 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 18,
     fontWeight: '600',
-    color: 'white',
   },
 })

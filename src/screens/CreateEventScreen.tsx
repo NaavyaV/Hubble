@@ -9,27 +9,113 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Image,
+  Switch,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Ionicons } from '@expo/vector-icons'
+import DateTimePicker from '@react-native-community/datetimepicker'
+import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
+import { useTheme } from '../context/ThemeContext'
+import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 
 interface CreateEventScreenProps {
   onBack: () => void
   onEventCreated: () => void
 }
 
+const predefinedTags = [
+  'Game Night',
+  'Study Session',
+  'Movie Night',
+  'Sports',
+  'Food & Dining',
+  'Music & Arts',
+  'Networking',
+  'Outdoor Activity',
+  'Workshop',
+  'Social Mixer'
+]
+
 export default function CreateEventScreen({ onBack, onEventCreated }: CreateEventScreenProps) {
+  const { theme } = useTheme()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [location, setLocation] = useState('')
   const [maxAttendees, setMaxAttendees] = useState('')
-  const [eventDate, setEventDate] = useState('')
-  const [startTime, setStartTime] = useState('')
-  const [endTime, setEndTime] = useState('')
+  const [eventDate, setEventDate] = useState(new Date())
+  const [startTime, setStartTime] = useState(new Date())
+  const [endTime, setEndTime] = useState(new Date())
+  const [hasEndTime, setHasEndTime] = useState(false)
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
+  const [imageUri, setImageUri] = useState<string | null>(null)
+  const [showDatePicker, setShowDatePicker] = useState(false)
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false)
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false)
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags(prev => 
+      prev.includes(tag) 
+        ? prev.filter(t => t !== tag)
+        : [...prev, tag]
+    )
+  }
+
+  const pickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please grant permission to access your photo library')
+        return
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 0.8,
+      })
+
+      if (!result.canceled) {
+        setImageUri(result.assets[0].uri)
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to pick image')
+    }
+  }
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    })
+  }
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  }
+
+  const toggleDatePicker = () => {
+    setShowDatePicker(!showDatePicker)
+  }
+
+  const toggleStartTimePicker = () => {
+    setShowStartTimePicker(!showStartTimePicker)
+  }
+
+  const toggleEndTimePicker = () => {
+    setShowEndTimePicker(!showEndTimePicker)
+  }
 
   const handleCreateEvent = async () => {
-    if (!title || !location || !eventDate || !startTime) {
+    if (!title.trim() || !location.trim()) {
       Alert.alert('Error', 'Please fill in all required fields')
       return
     }
@@ -42,39 +128,94 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
         return
       }
 
-      const { error } = await supabase
+      let imageUrl = null
+      if (imageUri) {
+        try {
+          const contentType = guessContentTypeFromUri(imageUri)
+          const filePath = `events/${Date.now()}-${Math.random().toString(36).substring(7)}.${contentType.split('/')[1]}`
+          
+          await uploadBytesToBucket({
+            bucket: 'event-images',
+            filePath,
+            uri: imageUri,
+            contentType
+          })
+          
+          const { data } = supabase.storage
+            .from('event-images')
+            .getPublicUrl(filePath)
+          
+          imageUrl = data.publicUrl
+        } catch (error) {
+          console.warn('Image upload failed:', error)
+          // Continue without image if upload fails
+        }
+      }
+
+      // Create event
+      const { data: event, error: eventError } = await supabase
         .from('events')
         .insert({
           host_id: user.id,
-          title,
-          description: description || null,
-          location,
-          event_date: eventDate,
-          start_time: startTime,
-          end_time: endTime || null,
+          title: title.trim(),
+          description: description.trim() || null,
+          event_date: eventDate.toISOString().split('T')[0],
+          start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
+          end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+          location: location.trim(),
           max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+          image_url: imageUrl,
+          tags: selectedTags.length > 0 ? selectedTags : null,
+        })
+        .select()
+        .single()
+
+      if (eventError) throw eventError
+
+      // Automatically add host as going to their own event
+      const { error: hostAttendanceError } = await supabase
+        .from('event_attendees')
+        .insert({
+          event_id: event.id,
+          user_id: user.id,
+          status: 'going'
         })
 
-      if (error) throw error
+      if (hostAttendanceError) {
+        console.warn('Failed to add host as going:', hostAttendanceError)
+      } else {
+        console.log('Host automatically added as going to event')
+      }
 
-      Alert.alert('Success', 'Event created successfully!')
-      onEventCreated()
+      Alert.alert('Success', 'Event created successfully!', [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Reset form
+            setTitle('')
+            setDescription('')
+            setLocation('')
+            setMaxAttendees('')
+            setEventDate(new Date())
+            setStartTime(new Date())
+            setEndTime(new Date())
+            setHasEndTime(false)
+            setImageUri(null)
+            setSelectedTags([])
+            onEventCreated()
+          }
+        }
+      ])
     } catch (error: any) {
-      Alert.alert('Error', error.message)
+      console.error('Error creating event:', error)
+      Alert.alert('Error', 'Failed to create event. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={onBack}>
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Create Event</Text>
-        <View style={styles.placeholder} />
-      </View>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
 
       <KeyboardAvoidingView
         style={styles.keyboardView}
@@ -82,21 +223,38 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
       >
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.form}>
+            {/* Event Image */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Event Title *</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Event Image (Optional)</Text>
+              <TouchableOpacity style={[styles.imageButton, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={pickImage}>
+                {imageUri ? (
+                  <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+                ) : (
+                  <View style={styles.imagePlaceholder}>
+                    <Ionicons name="camera" size={32} color={theme.textSecondary} />
+                    <Text style={[styles.imagePlaceholderText, { color: theme.textSecondary }]}>Tap to add image</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Event Title *</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="Enter event title"
+                placeholderTextColor={theme.inputPlaceholder}
                 value={title}
                 onChangeText={setTitle}
               />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Description</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Description</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="Enter event description"
+                placeholderTextColor={theme.inputPlaceholder}
                 value={description}
                 onChangeText={setDescription}
                 multiline
@@ -105,31 +263,51 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Location *</Text>
+              <Text style={[styles.label, { color: theme.text }]}>Location *</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                 placeholder="Enter event location"
+                placeholderTextColor={theme.inputPlaceholder}
                 value={location}
                 onChangeText={setLocation}
               />
             </View>
 
+            {/* Event Date */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Date</Text>
+              <TouchableOpacity
+                style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                onPress={toggleDatePicker}
+              >
+                <Ionicons name="calendar" size={20} color={theme.primary} />
+                <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatDate(eventDate)}</Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={eventDate}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={(event, selectedDate) => {
+                    setShowDatePicker(Platform.OS === 'ios')
+                    if (selectedDate) {
+                      setEventDate(selectedDate)
+                    }
+                  }}
+                  minimumDate={new Date()}
+                  textColor={theme.text}
+                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                />
+              )}
+            </View>
+
             <View style={styles.row}>
               <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>Date *</Text>
+                <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
                 <TextInput
-                  style={styles.input}
-                  placeholder="YYYY-MM-DD"
-                  value={eventDate}
-                  onChangeText={setEventDate}
-                />
-              </View>
-
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>Max Attendees</Text>
-                <TextInput
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
                   placeholder="Optional"
+                  placeholderTextColor={theme.inputPlaceholder}
                   value={maxAttendees}
                   onChangeText={setMaxAttendees}
                   keyboardType="numeric"
@@ -137,34 +315,108 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               </View>
             </View>
 
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>Start Time *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="HH:MM"
+            {/* Start Time */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Start Time</Text>
+              <TouchableOpacity
+                style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                onPress={toggleStartTimePicker}
+              >
+                <Ionicons name="time" size={20} color={theme.primary} />
+                <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(startTime)}</Text>
+              </TouchableOpacity>
+              {showStartTimePicker && (
+                <DateTimePicker
                   value={startTime}
-                  onChangeText={setStartTime}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={(event, selectedTime) => {
+                    setShowStartTimePicker(Platform.OS === 'ios')
+                    if (selectedTime) {
+                      setStartTime(selectedTime)
+                    }
+                  }}
+                  textColor={theme.text}
+                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                />
+              )}
+            </View>
+
+            {/* End Time */}
+            <View style={styles.inputGroup}>
+              <View style={styles.endTimeHeader}>
+                <Text style={[styles.label, { color: theme.text }]}>End Time</Text>
+                <Switch
+                  value={hasEndTime}
+                  onValueChange={setHasEndTime}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                  thumbColor={hasEndTime ? theme.buttonText : theme.textSecondary}
                 />
               </View>
+              {hasEndTime && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    onPress={toggleEndTimePicker}
+                  >
+                    <Ionicons name="time" size={20} color={theme.primary} />
+                    <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(endTime)}</Text>
+                  </TouchableOpacity>
+                  {showEndTimePicker && (
+                    <DateTimePicker
+                      value={endTime}
+                      mode="time"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, selectedTime) => {
+                        setShowEndTimePicker(Platform.OS === 'ios')
+                        if (selectedTime) {
+                          setEndTime(selectedTime)
+                        }
+                      }}
+                      textColor={theme.text}
+                      themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                    />
+                  )}
+                </>
+              )}
+            </View>
 
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>End Time</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="HH:MM"
-                  value={endTime}
-                  onChangeText={setEndTime}
-                />
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Tags</Text>
+              <Text style={[styles.tagsDescription, { color: theme.textSecondary }]}>Select relevant tags for your event</Text>
+              <View style={styles.tagsContainer}>
+                {predefinedTags.map((tag) => (
+                  <TouchableOpacity
+                    key={tag}
+                    style={[
+                      styles.tagButton,
+                      { backgroundColor: theme.surface, borderColor: theme.border },
+                      selectedTags.includes(tag) && { backgroundColor: theme.primary, borderColor: theme.primary }
+                    ]}
+                    onPress={() => toggleTag(tag)}
+                  >
+                    <Text style={[
+                      styles.tagText,
+                      { color: theme.textSecondary },
+                      selectedTags.includes(tag) && { color: theme.buttonText }
+                    ]}>
+                      {tag}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
             </View>
 
             <TouchableOpacity
-              style={[styles.createButton, loading && styles.createButtonDisabled]}
+              style={[
+                styles.createButton,
+                { backgroundColor: theme.buttonPrimary },
+                loading && { backgroundColor: theme.textTertiary }
+              ]}
               onPress={handleCreateEvent}
               disabled={loading}
             >
-              <Text style={styles.createButtonText}>
+              <Text style={[styles.createButtonText, { color: theme.buttonText }]}>
                 {loading ? 'Creating...' : 'Create Event'}
               </Text>
             </TouchableOpacity>
@@ -178,34 +430,6 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
-  },
-  backButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  backButtonText: {
-    fontSize: 16,
-    color: '#3498db',
-    fontWeight: '500',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2c3e50',
-  },
-  placeholder: {
-    width: 60,
   },
   keyboardView: {
     flex: 1,
@@ -222,17 +446,14 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   input: {
-    backgroundColor: 'white',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   textArea: {
     height: 100,
@@ -245,19 +466,70 @@ const styles = StyleSheet.create({
   halfWidth: {
     width: '48%',
   },
+  tagsDescription: {
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  tagButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  tagText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
   createButton: {
-    backgroundColor: '#3498db',
     borderRadius: 8,
     paddingVertical: 16,
     alignItems: 'center',
     marginTop: 20,
   },
-  createButtonDisabled: {
-    backgroundColor: '#bdc3c7',
-  },
   createButtonText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  imageButton: {
+    height: 120,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imagePreview: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  imagePlaceholder: {
+    alignItems: 'center',
+  },
+  imagePlaceholderText: {
+    fontSize: 14,
+    marginTop: 8,
+  },
+  dateTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+  },
+  dateTimeText: {
+    fontSize: 16,
+    marginLeft: 12,
+  },
+  endTimeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
 })

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
 import ProfileModal from '../components/ProfileModal'
+import { useTheme } from '../context/ThemeContext'
 
 interface ProfileRow {
   id: string
@@ -23,6 +24,7 @@ interface FriendshipRow {
 }
 
 export default function FriendsScreen() {
+  const { theme } = useTheme()
   const [me, setMe] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [allUsers, setAllUsers] = useState<ProfileRow[]>([])
@@ -356,8 +358,8 @@ export default function FriendsScreen() {
       )
     }
     return (
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>
+      <View style={[styles.avatar, { backgroundColor: theme.primary }]}>
+        <Text style={[styles.avatarText, { color: theme.buttonText }]}>
           {user.full_name?.charAt(0).toUpperCase() || 'U'}
         </Text>
       </View>
@@ -371,17 +373,17 @@ export default function FriendsScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.userItem}
+        style={[styles.userItem, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}
         onPress={() => setSelectedUser(item)}
       >
         <View style={styles.userInfo}>
           {renderAvatar(item)}
           <View style={styles.userDetails}>
             <View style={styles.nameRow}>
-              <Text style={styles.userName}>{item.full_name || 'Unknown'}</Text>
+              <Text style={[styles.userName, { color: theme.text }]}>{item.full_name || 'Unknown'}</Text>
               {status === 'pending' && (
-                <View style={styles.pendingBadge}>
-                  <Text style={styles.pendingText}>Pending</Text>
+                <View style={[styles.pendingBadge, { backgroundColor: theme.warning }]}>
+                  <Text style={[styles.pendingText, { color: theme.buttonText }]}>Pending</Text>
                 </View>
               )}
             </View>
@@ -390,52 +392,52 @@ export default function FriendsScreen() {
         <View style={styles.actionButton}>
           {status === 'accepted' ? (
             <TouchableOpacity
-              style={styles.unfriendButton}
+              style={[styles.unfriendButton, { backgroundColor: theme.textTertiary }]}
               onPress={() => unfriend(item.id, item.full_name || 'this person')}
             >
-              <Text style={styles.unfriendText}>Unfriend</Text>
+              <Text style={[styles.unfriendText, { color: theme.buttonText }]}>Unfriend</Text>
             </TouchableOpacity>
           ) : status === 'pending' ? (
             <TouchableOpacity
-              style={styles.cancelButton}
+              style={[styles.cancelButton, { backgroundColor: theme.error }]}
               onPress={() => cancelFriendRequest(item.id)}
             >
-              <Text style={styles.cancelText}>Cancel</Text>
+              <Text style={[styles.cancelText, { color: theme.buttonText }]}>Cancel</Text>
             </TouchableOpacity>
           ) : isIncoming ? (
             <View style={styles.requestActions}>
               <TouchableOpacity
-                style={styles.acceptButton}
+                style={[styles.acceptButton, { backgroundColor: theme.success }]}
                 onPress={() => {
                   const friendship = incoming.find(f => f.user_id === item.id)
                   if (friendship) acceptFriendRequest(friendship.id, item.id)
                 }}
               >
-                <Text style={styles.acceptText}>Accept</Text>
+                <Text style={[styles.acceptText, { color: theme.buttonText }]}>Accept</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.ignoreButton}
+                style={[styles.ignoreButton, { backgroundColor: theme.error }]}
                 onPress={() => {
                   const friendship = incoming.find(f => f.user_id === item.id)
                   if (friendship) ignoreFriendRequest(friendship.id)
                 }}
               >
-                <Text style={styles.ignoreText}>Ignore</Text>
+                <Text style={[styles.ignoreText, { color: theme.buttonText }]}>Ignore</Text>
               </TouchableOpacity>
             </View>
           ) : isRecentlyAccepted ? (
             <TouchableOpacity
-              style={styles.undoButton}
+              style={[styles.undoButton, { backgroundColor: theme.warning }]}
               onPress={() => undoAcceptFriendRequest(item.id)}
             >
-              <Text style={styles.undoText}>Undo</Text>
+              <Text style={[styles.undoText, { color: theme.buttonText }]}>Undo</Text>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
-              style={styles.addButton}
+              style={[styles.addButton, { backgroundColor: theme.buttonPrimary }]}
               onPress={() => sendFriendRequest(item.id)}
             >
-              <Text style={styles.addText}>Add Friend</Text>
+              <Text style={[styles.addText, { color: theme.buttonText }]}>Add Friend</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -451,38 +453,38 @@ export default function FriendsScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.userItem}
+        style={[styles.userItem, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}
         onPress={() => setSelectedUser(profile)}
       >
         <View style={styles.userInfo}>
           {renderAvatar(profile)}
           <View style={styles.userDetails}>
             <View style={styles.nameRow}>
-              <Text style={styles.userName}>{profile.full_name || 'Unknown'}</Text>
+              <Text style={[styles.userName, { color: theme.text }]}>{profile.full_name || 'Unknown'}</Text>
             </View>
           </View>
         </View>
         <View style={styles.actionButton}>
           {isRecentlyAccepted ? (
             <TouchableOpacity
-              style={styles.undoButton}
+              style={[styles.undoButton, { backgroundColor: theme.warning }]}
               onPress={() => undoAcceptFriendRequest(profile.id)}
             >
-              <Text style={styles.undoText}>Undo</Text>
+              <Text style={[styles.undoText, { color: theme.buttonText }]}>Undo</Text>
             </TouchableOpacity>
           ) : (
             <View style={styles.requestActions}>
               <TouchableOpacity
-                style={styles.acceptButton}
+                style={[styles.acceptButton, { backgroundColor: theme.success }]}
                 onPress={() => acceptFriendRequest(item.id, profile.id)}
               >
-                <Text style={styles.acceptText}>Accept</Text>
+                <Text style={[styles.acceptText, { color: theme.buttonText }]}>Accept</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.ignoreButton}
+                style={[styles.ignoreButton, { backgroundColor: theme.error }]}
                 onPress={() => ignoreFriendRequest(item.id)}
               >
-                <Text style={styles.ignoreText}>Ignore</Text>
+                <Text style={[styles.ignoreText, { color: theme.buttonText }]}>Ignore</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -497,26 +499,26 @@ export default function FriendsScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.userItem}
+        style={[styles.userItem, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}
         onPress={() => setSelectedUser(profile)}
       >
         <View style={styles.userInfo}>
           {renderAvatar(profile)}
           <View style={styles.userDetails}>
             <View style={styles.nameRow}>
-              <Text style={styles.userName}>{profile.full_name || 'Unknown'}</Text>
-              <View style={styles.pendingBadge}>
-                <Text style={styles.pendingText}>Pending</Text>
+              <Text style={[styles.userName, { color: theme.text }]}>{profile.full_name || 'Unknown'}</Text>
+              <View style={[styles.pendingBadge, { backgroundColor: theme.warning }]}>
+                <Text style={[styles.pendingText, { color: theme.buttonText }]}>Pending</Text>
               </View>
             </View>
           </View>
         </View>
         <View style={styles.actionButton}>
           <TouchableOpacity
-            style={styles.cancelButton}
+            style={[styles.cancelButton, { backgroundColor: theme.error }]}
             onPress={() => cancelFriendRequest(profile.id)}
           >
-            <Text style={styles.cancelText}>Cancel</Text>
+            <Text style={[styles.cancelText, { color: theme.buttonText }]}>Cancel</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -529,8 +531,9 @@ export default function FriendsScreen() {
         return (
           <View style={styles.searchContainer}>
             <TextInput
-              style={styles.searchInput}
+              style={[styles.searchInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
               placeholder="Search users..."
+              placeholderTextColor={theme.inputPlaceholder}
               value={query}
               onChangeText={setQuery}
               autoCorrect={false}
@@ -538,11 +541,11 @@ export default function FriendsScreen() {
             />
             {loading ? (
               <View style={styles.loadingContainer}>
-                <Text style={styles.loadingText}>Loading users...</Text>
+                <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading users...</Text>
               </View>
             ) : searchResults.length === 0 ? (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>
+                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
                   {allUsers.length === 0 
                     ? 'No users found. Make sure you have created profiles in the database.'
                     : query.trim()
@@ -551,10 +554,10 @@ export default function FriendsScreen() {
                   }
                 </Text>
                 <TouchableOpacity 
-                  style={styles.refreshButton}
+                  style={[styles.refreshButton, { backgroundColor: theme.buttonPrimary }]}
                   onPress={fetchAllUsers}
                 >
-                  <Text style={styles.refreshButtonText}>Refresh</Text>
+                  <Text style={[styles.refreshButtonText, { color: theme.buttonText }]}>Refresh</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -574,7 +577,7 @@ export default function FriendsScreen() {
             {/* Incoming Requests Section */}
             {incoming.length > 0 && (
               <View style={styles.sectionContainer}>
-                <Text style={styles.sectionTitle}>Incoming Requests</Text>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Incoming Requests</Text>
                 <FlatList
                   data={incoming}
                   keyExtractor={(item) => `incoming-${item.id}`}
@@ -588,7 +591,7 @@ export default function FriendsScreen() {
             {/* Outgoing Requests Section */}
             {outgoing.length > 0 && (
               <View style={styles.sectionContainer}>
-                <Text style={styles.sectionTitle}>Outgoing Requests</Text>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Outgoing Requests</Text>
                 <FlatList
                   data={outgoing}
                   keyExtractor={(item) => `outgoing-${item.id}`}
@@ -602,7 +605,7 @@ export default function FriendsScreen() {
             {/* Empty State */}
             {incoming.length === 0 && outgoing.length === 0 && (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>No pending requests</Text>
+                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>No pending requests</Text>
               </View>
             )}
           </View>
@@ -617,7 +620,7 @@ export default function FriendsScreen() {
             showsVerticalScrollIndicator={false}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>No friends yet</Text>
+                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>No friends yet</Text>
               </View>
             }
           />
@@ -629,55 +632,51 @@ export default function FriendsScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading...</Text>
+          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading...</Text>
         </View>
       </SafeAreaView>
     )
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Friends</Text>
-      </View>
-
-      <View style={styles.tabContainer}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      <View style={[styles.tabContainer, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
         <TouchableOpacity
-          style={[styles.tab, activeTab === 'search' && styles.activeTab]}
+          style={[styles.tab, activeTab === 'search' && { borderBottomColor: theme.primary }]}
           onPress={() => setActiveTab('search')}
         >
-          <Text style={[styles.tabText, activeTab === 'search' && styles.activeTabText]}>
+          <Text style={[styles.tabText, { color: theme.textSecondary }, activeTab === 'search' && { color: theme.primary, fontWeight: '600' }]}>
             Search
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.tab, activeTab === 'pending' && styles.activeTab]}
+          style={[styles.tab, activeTab === 'pending' && { borderBottomColor: theme.primary }]}
           onPress={() => setActiveTab('pending')}
         >
           <View style={styles.tabWithBadge}>
-            <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
+            <Text style={[styles.tabText, { color: theme.textSecondary }, activeTab === 'pending' && { color: theme.primary, fontWeight: '600' }]}>
               Pending
             </Text>
             {(incoming.length + outgoing.length) > 0 && (
-              <View style={incoming.length > 0 ? styles.redBadge : styles.grayBadge}>
-                <Text style={styles.badgeText}>{incoming.length + outgoing.length}</Text>
+              <View style={[styles.redBadge, { backgroundColor: theme.error }]}>
+                <Text style={[styles.badgeText, { color: theme.buttonText }]}>{incoming.length + outgoing.length}</Text>
               </View>
             )}
           </View>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.tab, activeTab === 'friends' && styles.activeTab]}
+          style={[styles.tab, activeTab === 'friends' && { borderBottomColor: theme.primary }]}
           onPress={() => setActiveTab('friends')}
         >
           <View style={styles.tabWithBadge}>
-            <Text style={[styles.tabText, activeTab === 'friends' && styles.activeTabText]}>
+            <Text style={[styles.tabText, { color: theme.textSecondary }, activeTab === 'friends' && { color: theme.primary, fontWeight: '600' }]}>
               Friends
             </Text>
             {friends.length > 0 && (
-              <View style={styles.grayBadge}>
-                <Text style={styles.badgeText}>{friends.length}</Text>
+              <View style={[styles.grayBadge, { backgroundColor: theme.textTertiary }]}>
+                <Text style={[styles.badgeText, { color: theme.buttonText }]}>{friends.length}</Text>
               </View>
             )}
           </View>
@@ -700,7 +699,6 @@ export default function FriendsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   loadingContainer: {
     flex: 1,
@@ -710,25 +708,10 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#7f8c8d',
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2c3e50',
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   tab: {
     flex: 1,
@@ -737,17 +720,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
-  activeTab: {
-    borderBottomColor: '#3498db',
-  },
   tabText: {
     fontSize: 14,
-    color: '#7f8c8d',
     fontWeight: '500',
-  },
-  activeTabText: {
-    color: '#3498db',
-    fontWeight: '600',
   },
   tabWithBadge: {
     flexDirection: 'row',
@@ -755,7 +730,6 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   redBadge: {
-    backgroundColor: '#e74c3c',
     borderRadius: 10,
     minWidth: 18,
     height: 18,
@@ -764,7 +738,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   grayBadge: {
-    backgroundColor: '#95a5a6',
     borderRadius: 10,
     minWidth: 18,
     height: 18,
@@ -773,7 +746,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   badgeText: {
-    color: 'white',
     fontSize: 10,
     fontWeight: 'bold',
   },
@@ -785,13 +757,11 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   searchInput: {
-    backgroundColor: 'white',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     marginBottom: 16,
   },
   pendingContainer: {
@@ -804,7 +774,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 12,
   },
   sectionList: {
@@ -817,11 +786,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'white',
     padding: 16,
     marginBottom: 8,
     borderRadius: 8,
-    shadowColor: '#000',
     shadowOffset: {
       width: 0,
       height: 1,
@@ -839,7 +806,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#3498db',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -853,7 +819,6 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: 'white',
   },
   userDetails: {
     flex: 1,
@@ -866,17 +831,14 @@ const styles = StyleSheet.create({
   userName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   pendingBadge: {
-    backgroundColor: '#f39c12',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 4,
   },
   pendingText: {
     fontSize: 12,
-    color: 'white',
     fontWeight: '600',
   },
   actionButton: {
@@ -887,68 +849,56 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   addButton: {
-    backgroundColor: '#3498db',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 6,
   },
   addText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
   acceptButton: {
-    backgroundColor: '#27ae60',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 6,
   },
   acceptText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
   ignoreButton: {
-    backgroundColor: '#e74c3c',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 6,
   },
   ignoreText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
   cancelButton: {
-    backgroundColor: '#e74c3c',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 6,
   },
   cancelText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
   undoButton: {
-    backgroundColor: '#f39c12',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 6,
   },
   undoText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
   unfriendButton: {
-    backgroundColor: '#95a5a6',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 6,
   },
   unfriendText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -960,18 +910,15 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: '#7f8c8d',
     textAlign: 'center',
     marginBottom: 16,
   },
   refreshButton: {
-    backgroundColor: '#3498db',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 8,
   },
   refreshButtonText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },

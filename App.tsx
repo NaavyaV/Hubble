@@ -9,12 +9,12 @@ import { supabase } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
 import notificationProcessor from './src/services/notificationProcessor'
+import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 
 // Import screens
 import AuthScreen from './src/screens/AuthScreen'
 import OnboardingScreen from './src/screens/OnboardingScreen'
 import EventsListScreen from './src/screens/EventsListScreen'
-import HostScreen from './src/screens/HostScreen'
 import ProfileScreen from './src/screens/ProfileScreen'
 import EventDetailScreen from './src/screens/EventDetailScreen'
 import EditProfileScreen from './src/screens/EditProfileScreen'
@@ -23,6 +23,7 @@ import CreateEventScreen from './src/screens/CreateEventScreen'
 import EditEventScreen from './src/screens/EditEventScreen'
 import FriendsScreen from './src/screens/FriendsScreen'
 import EventInviteScreen from './src/screens/EventInviteScreen'
+import SettingsScreen from './src/screens/SettingsScreen'
 
 type RootStackParamList = {
   Auth: undefined
@@ -31,8 +32,10 @@ type RootStackParamList = {
   EventDetail: { event: EventWithAttendees }
   EditProfile: undefined
   MyEvents: undefined
+  CreateEvent: undefined
   EditEvent: { event: any }
   EventInvite: { invitedUsers: string[] }
+  Settings: undefined
 }
 
 type MainTabParamList = {
@@ -47,6 +50,7 @@ const Tab = createBottomTabNavigator<MainTabParamList>()
 
 function MainTabNavigator() {
   const insets = useSafeAreaInsets()
+  const { theme } = useTheme()
   const [pendingCount, setPendingCount] = useState(0)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
 
@@ -138,16 +142,19 @@ function MainTabNavigator() {
             )
           } else if (route.name === 'Profile') {
             iconName = focused ? 'person' : 'person-outline'
+          } else {
+            // Default fallback icon
+            iconName = 'help-outline'
           }
 
           return <Ionicons name={iconName} size={size} color={color} />
         },
-        tabBarActiveTintColor: '#3498db',
-        tabBarInactiveTintColor: '#7f8c8d',
+        tabBarActiveTintColor: theme.tabBarActive,
+        tabBarInactiveTintColor: theme.tabBarInactive,
         tabBarStyle: {
-          backgroundColor: 'white',
+          backgroundColor: theme.tabBarBackground,
           borderTopWidth: 1,
-          borderTopColor: '#e1e8ed',
+          borderTopColor: theme.tabBarBorder,
           paddingBottom: insets.bottom,
           height: 60 + insets.bottom,
         },
@@ -167,12 +174,18 @@ function MainTabNavigator() {
       />
       <Tab.Screen
         name="Host"
-        component={HostScreen}
         options={{
           title: 'Create',
           headerShown: false,
         }}
-      />
+      >
+        {({ navigation }) => (
+          <CreateEventScreen
+            onBack={() => navigation.goBack()}
+            onEventCreated={() => navigation.goBack()}
+          />
+        )}
+      </Tab.Screen>
       <Tab.Screen
         name="Friends"
         component={FriendsScreen}
@@ -193,9 +206,10 @@ function MainTabNavigator() {
   )
 }
 
-export default function App() {
+function AppContent() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const { theme } = useTheme()
 
   useEffect(() => {
     // Check if user is already logged in
@@ -232,8 +246,8 @@ export default function App() {
   if (loading) {
     return (
       <SafeAreaProvider>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text>Loading...</Text>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.background }}>
+          <Text style={{ color: theme.text }}>Loading...</Text>
         </View>
       </SafeAreaProvider>
     )
@@ -259,13 +273,13 @@ export default function App() {
                   headerShown: true,
                   title: 'Event Details',
                   headerStyle: { 
-                    backgroundColor: 'white',
+                    backgroundColor: theme.headerBackground,
                     elevation: 0,
                     shadowOpacity: 0,
                     borderBottomWidth: 1,
-                    borderBottomColor: '#e1e8ed',
+                    borderBottomColor: theme.headerBorder,
                   },
-                  headerTintColor: '#2c3e50',
+                  headerTintColor: theme.headerText,
                   headerTitleStyle: { 
                     fontWeight: '600',
                     fontSize: 18,
@@ -275,7 +289,7 @@ export default function App() {
                       style={{ marginLeft: 16 }}
                       onPress={() => navigation.goBack()}
                     >
-                      <Ionicons name="arrow-back" size={24} color="#2c3e50" />
+                      <Ionicons name="arrow-back" size={24} color={theme.headerText} />
                     </TouchableOpacity>
                   ),
                 })}
@@ -287,13 +301,13 @@ export default function App() {
                   headerShown: true,
                   title: 'Edit Profile',
                   headerStyle: { 
-                    backgroundColor: 'white',
+                    backgroundColor: theme.headerBackground,
                     elevation: 0,
                     shadowOpacity: 0,
                     borderBottomWidth: 1,
-                    borderBottomColor: '#e1e8ed',
+                    borderBottomColor: theme.headerBorder,
                   },
-                  headerTintColor: '#2c3e50',
+                  headerTintColor: theme.headerText,
                   headerTitleStyle: { 
                     fontWeight: '600',
                     fontSize: 18,
@@ -307,13 +321,13 @@ export default function App() {
                   headerShown: true,
                   title: 'My Events',
                   headerStyle: { 
-                    backgroundColor: 'white',
+                    backgroundColor: theme.headerBackground,
                     elevation: 0,
                     shadowOpacity: 0,
                     borderBottomWidth: 1,
-                    borderBottomColor: '#e1e8ed',
+                    borderBottomColor: theme.headerBorder,
                   },
-                  headerTintColor: '#2c3e50',
+                  headerTintColor: theme.headerText,
                   headerTitleStyle: { 
                     fontWeight: '600',
                     fontSize: 18,
@@ -323,18 +337,24 @@ export default function App() {
                       style={{ marginLeft: 16 }}
                       onPress={() => navigation.goBack()}
                     >
-                      <Ionicons name="arrow-back" size={24} color="#2c3e50" />
+                      <Ionicons name="arrow-back" size={24} color={theme.headerText} />
                     </TouchableOpacity>
                   ),
                 })}
               />
               <Stack.Screen
                 name="CreateEvent"
-                component={CreateEventScreen}
                 options={{
                   headerShown: false,
                 }}
-              />
+              >
+                {({ navigation }) => (
+                  <CreateEventScreen
+                    onBack={() => navigation.goBack()}
+                    onEventCreated={() => navigation.goBack()}
+                  />
+                )}
+              </Stack.Screen>
               <Stack.Screen
                 name="EditEvent"
                 component={EditEventScreen}
@@ -345,6 +365,13 @@ export default function App() {
               <Stack.Screen
                 name="EventInvite"
                 component={EventInviteScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="Settings"
+                component={SettingsScreen}
                 options={{
                   headerShown: false,
                 }}
@@ -368,8 +395,15 @@ export default function App() {
               />
             </>
           )}
-        </Stack.Navigator>
-      </NavigationContainer>
-    </SafeAreaProvider>
+          </Stack.Navigator>
+        </NavigationContainer>
+      </SafeAreaProvider>
+    )
+  }
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
   )
 }

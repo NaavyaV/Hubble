@@ -20,6 +20,7 @@ export interface Event {
   max_attendees?: number
   image_url?: string
   privacy?: 'public' | 'friends_only'
+  tags?: string[]
   created_at: string
   updated_at: string
 }

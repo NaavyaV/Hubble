@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { useTheme } from '../context/ThemeContext'
 
 interface OnboardingData {
   fullName: string
@@ -30,6 +31,7 @@ interface OnboardingData {
 }
 
 export default function OnboardingScreen({ navigation }: any) {
+  const { theme } = useTheme()
   const [currentStep, setCurrentStep] = useState(0)
   const [data, setData] = useState<OnboardingData>({
     fullName: '',
@@ -207,11 +209,12 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const renderNameStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>What's your name?</Text>
-      <Text style={styles.stepSubtitle}>This will be displayed on your profile</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>What's your name?</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>This will be displayed on your profile</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
         placeholder="Enter your full name"
+        placeholderTextColor={theme.inputPlaceholder}
         value={data.fullName}
         onChangeText={(value) => updateData('fullName', value)}
         autoFocus
@@ -235,21 +238,23 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const renderGraduatingYearStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>When do you graduate?</Text>
-      <Text style={styles.stepSubtitle}>Select your graduating year</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>When do you graduate?</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Select your graduating year</Text>
       <View style={styles.yearGrid}>
         {graduatingYearOptions.map((year) => (
           <TouchableOpacity
             key={year}
             style={[
               styles.yearButton,
-              data.graduatingYear === year && styles.yearButtonSelected
+              { backgroundColor: theme.surface, borderColor: theme.border },
+              data.graduatingYear === year && { backgroundColor: theme.primary, borderColor: theme.primary }
             ]}
             onPress={() => updateData('graduatingYear', year)}
           >
             <Text style={[
               styles.yearButtonText,
-              data.graduatingYear === year && styles.yearButtonTextSelected
+              { color: theme.text },
+              data.graduatingYear === year && { color: theme.buttonText }
             ]}>
               {year}
             </Text>
@@ -403,27 +408,27 @@ export default function OnboardingScreen({ navigation }: any) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <View style={styles.header}>
+        <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
           {currentStep > 0 && (
             <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-              <Ionicons name="arrow-back" size={24} color="#2c3e50" />
+              <Ionicons name="arrow-back" size={24} color={theme.text} />
             </TouchableOpacity>
           )}
           <View style={styles.progressContainer}>
-            <View style={styles.progressBar}>
+            <View style={[styles.progressBar, { backgroundColor: theme.border }]}>
               <View 
                 style={[
                   styles.progressFill, 
-                  { width: `${((currentStep + 1) / steps.length) * 100}%` }
+                  { width: `${((currentStep + 1) / steps.length) * 100}%`, backgroundColor: theme.primary }
                 ]} 
               />
             </View>
-            <Text style={styles.progressText}>
+            <Text style={[styles.progressText, { color: theme.textSecondary }]}>
               {currentStep + 1} of {steps.length}
             </Text>
           </View>
@@ -433,16 +438,17 @@ export default function OnboardingScreen({ navigation }: any) {
           {renderCurrentStep()}
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { backgroundColor: theme.surface, borderTopColor: theme.border }]}>
           <TouchableOpacity
             style={[
               styles.nextButton,
-              (!canProceed() || loading) && styles.nextButtonDisabled
+              { backgroundColor: theme.buttonPrimary },
+              (!canProceed() || loading) && { backgroundColor: theme.textTertiary }
             ]}
             onPress={handleNext}
             disabled={!canProceed() || loading}
           >
-            <Text style={styles.nextButtonText}>
+            <Text style={[styles.nextButtonText, { color: theme.buttonText }]}>
               {loading ? 'Creating Account...' : 
                currentStep === steps.length - 1 ? 'Create Account' : 'Next'}
             </Text>
@@ -456,7 +462,6 @@ export default function OnboardingScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   keyboardView: {
     flex: 1,
@@ -466,9 +471,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   backButton: {
     marginRight: 16,
@@ -480,18 +483,15 @@ const styles = StyleSheet.create({
   progressBar: {
     width: '100%',
     height: 4,
-    backgroundColor: '#e1e8ed',
     borderRadius: 2,
     marginBottom: 8,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#3498db',
     borderRadius: 2,
   },
   progressText: {
     fontSize: 12,
-    color: '#7f8c8d',
     fontWeight: '500',
   },
   content: {
@@ -505,24 +505,19 @@ const styles = StyleSheet.create({
   stepTitle: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   stepSubtitle: {
     fontSize: 16,
-    color: '#7f8c8d',
     marginBottom: 32,
     lineHeight: 22,
   },
   input: {
-    backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#2c3e50',
   },
   textArea: {
     height: 100,
@@ -530,7 +525,6 @@ const styles = StyleSheet.create({
   },
   wordCount: {
     fontSize: 12,
-    color: '#7f8c8d',
     textAlign: 'right',
     marginTop: 4,
   },
@@ -541,9 +535,7 @@ const styles = StyleSheet.create({
   },
   yearButton: {
     width: '30%',
-    backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#e1e8ed',
     borderRadius: 8,
     paddingVertical: 16,
     paddingHorizontal: 12,
@@ -556,7 +548,6 @@ const styles = StyleSheet.create({
   },
   yearButtonText: {
     fontSize: 16,
-    color: '#2c3e50',
     fontWeight: '500',
   },
   yearButtonTextSelected: {
@@ -577,7 +568,6 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#e1e8ed',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
@@ -585,7 +575,6 @@ const styles = StyleSheet.create({
   },
   profileImagePlaceholderText: {
     fontSize: 14,
-    color: '#7f8c8d',
     marginTop: 8,
     textAlign: 'center',
   },
@@ -595,17 +584,13 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
     marginBottom: 8,
   },
   footer: {
     padding: 20,
-    backgroundColor: 'white',
     borderTopWidth: 1,
-    borderTopColor: '#e1e8ed',
   },
   nextButton: {
-    backgroundColor: '#3498db',
     paddingVertical: 16,
     borderRadius: 8,
     alignItems: 'center',
@@ -614,7 +599,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#bdc3c7',
   },
   nextButtonText: {
-    color: 'white',
     fontSize: 18,
     fontWeight: '600',
   },

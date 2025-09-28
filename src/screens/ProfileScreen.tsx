@@ -11,9 +11,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { useTheme } from '../context/ThemeContext'
 
 export default function ProfileScreen() {
   const navigation = useNavigation()
+  const { theme } = useTheme()
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
@@ -76,6 +78,12 @@ export default function ProfileScreen() {
     Alert.alert('Help & Support', 'Need help? Contact us at support@utdhangouts.com')
   }
 
+  const handleSettings = () => {
+    navigation.navigate('Settings' as never)
+  }
+
+  const styles = createStyles(theme)
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -88,10 +96,6 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Profile</Text>
-      </View>
-
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Compact Profile Card - Horizontal Layout */}
         <View style={styles.profileCard}>
@@ -163,6 +167,11 @@ export default function ProfileScreen() {
             <Text style={styles.menuItemArrow}>›</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.menuItem} onPress={handleSettings}>
+            <Text style={styles.menuItemText}>Settings</Text>
+            <Text style={styles.menuItemArrow}>›</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.menuItem} onPress={handleHelpSupport}>
             <Text style={styles.menuItemText}>Help & Support</Text>
             <Text style={styles.menuItemArrow}>›</Text>
@@ -181,10 +190,10 @@ export default function ProfileScreen() {
   )
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: theme.background,
   },
   loadingContainer: {
     flex: 1,
@@ -193,31 +202,19 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#7f8c8d',
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2c3e50',
+    color: theme.textSecondary,
   },
   content: {
     flex: 1,
   },
   profileCard: {
-    backgroundColor: 'white',
+    backgroundColor: theme.card,
     margin: 16,
     padding: 20,
     borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'flex-start',
-    shadowColor: '#000',
+    shadowColor: theme.shadow,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -240,11 +237,11 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#3498db',
+    backgroundColor: theme.primary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#3498db',
+    borderColor: theme.primary,
   },
   avatarText: {
     fontSize: 32,
@@ -254,12 +251,12 @@ const styles = StyleSheet.create({
   userName: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
+    color: theme.text,
     marginBottom: 4,
   },
   userEmail: {
     fontSize: 14,
-    color: '#7f8c8d',
+    color: theme.textSecondary,
     marginBottom: 8,
   },
   userInfo: {
@@ -267,17 +264,17 @@ const styles = StyleSheet.create({
   },
   userInfoText: {
     fontSize: 13,
-    color: '#3498db',
+    color: theme.primary,
     fontWeight: '500',
     marginBottom: 2,
   },
   bioSection: {
-    backgroundColor: 'white',
+    backgroundColor: theme.card,
     margin: 16,
     marginTop: 0,
     padding: 16,
     borderRadius: 12,
-    shadowColor: '#000',
+    shadowColor: theme.shadow,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -289,19 +286,19 @@ const styles = StyleSheet.create({
   bioTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
+    color: theme.text,
     marginBottom: 8,
   },
   bioText: {
     fontSize: 14,
-    color: '#5a6c7d',
+    color: theme.textSecondary,
     lineHeight: 20,
   },
   menuContainer: {
-    backgroundColor: 'white',
+    backgroundColor: theme.card,
     margin: 16,
     borderRadius: 12,
-    shadowColor: '#000',
+    shadowColor: theme.shadow,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -317,25 +314,25 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#f8f9fa',
+    borderBottomColor: theme.divider,
   },
   menuItemText: {
     fontSize: 16,
-    color: '#2c3e50',
+    color: theme.text,
     fontWeight: '500',
   },
   menuItemArrow: {
     fontSize: 18,
-    color: '#bdc3c7',
+    color: theme.textTertiary,
     fontWeight: 'bold',
   },
   signOutButton: {
-    backgroundColor: '#e74c3c',
+    backgroundColor: theme.error,
     margin: 16,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
-    shadowColor: '#000',
+    shadowColor: theme.shadow,
     shadowOffset: {
       width: 0,
       height: 2,
@@ -355,6 +352,6 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 12,
-    color: '#bdc3c7',
+    color: theme.textTertiary,
   },
 })

@@ -14,8 +14,10 @@ import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
+import { useTheme } from '../context/ThemeContext'
 
 export default function MyEventsScreen() {
+  const { theme } = useTheme()
   const navigation = useNavigation()
   const [events, setEvents] = useState<EventWithAttendees[]>([])
   const [loading, setLoading] = useState(true)
@@ -130,7 +132,7 @@ export default function MyEventsScreen() {
     
     return (
       <TouchableOpacity
-        style={styles.eventCard}
+        style={[styles.eventCard, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}
         onPress={() => handleEventPress(item)}
       >
         {item.image_url && (
@@ -139,45 +141,45 @@ export default function MyEventsScreen() {
         
         <View style={styles.eventContent}>
           <View style={styles.eventHeader}>
-            <Text style={styles.eventTitle}>{item.title}</Text>
+            <Text style={[styles.eventTitle, { color: theme.text }]}>{item.title}</Text>
             <View style={styles.eventActions}>
               <TouchableOpacity
-                style={styles.actionButton}
+                style={[styles.actionButton, { backgroundColor: theme.surface }]}
                 onPress={() => handleEditEvent(item)}
               >
-                <Ionicons name="create-outline" size={20} color="#3498db" />
+                <Ionicons name="create-outline" size={20} color={theme.primary} />
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.actionButton}
+                style={[styles.actionButton, { backgroundColor: theme.surface }]}
                 onPress={() => handleDeleteEvent(item.id)}
               >
-                <Ionicons name="trash-outline" size={20} color="#e74c3c" />
+                <Ionicons name="trash-outline" size={20} color={theme.error} />
               </TouchableOpacity>
             </View>
           </View>
           
           {item.description && (
-            <Text style={styles.eventDescription} numberOfLines={2}>
+            <Text style={[styles.eventDescription, { color: theme.textSecondary }]} numberOfLines={2}>
               {item.description}
             </Text>
           )}
           
           <View style={styles.eventDetails}>
             <View style={styles.detailRow}>
-              <Ionicons name="location-outline" size={16} color="#e74c3c" />
-              <Text style={styles.detailText}>{item.location}</Text>
+              <Ionicons name="location-outline" size={16} color={theme.error} />
+              <Text style={[styles.detailText, { color: theme.text }]}>{item.location}</Text>
             </View>
             
             <View style={styles.detailRow}>
-              <Ionicons name="calendar-outline" size={16} color="#3498db" />
-              <Text style={styles.detailText}>
+              <Ionicons name="calendar-outline" size={16} color={theme.primary} />
+              <Text style={[styles.detailText, { color: theme.text }]}>
                 {formatDate(item.event_date)} at {formatTime(item.start_time)}
               </Text>
             </View>
             
             <View style={styles.detailRow}>
-              <Ionicons name="people-outline" size={16} color="#7f8c8d" />
-              <Text style={styles.detailText}>
+              <Ionicons name="people-outline" size={16} color={theme.textSecondary} />
+              <Text style={[styles.detailText, { color: theme.text }]}>
                 {attendeeCount} {attendeeCount === 1 ? 'person' : 'people'} going
                 {item.max_attendees && ` out of ${item.max_attendees} max`}
               </Text>
@@ -190,16 +192,16 @@ export default function MyEventsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading your events...</Text>
+          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading your events...</Text>
         </View>
       </View>
     )
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <FlatList
         data={events}
         keyExtractor={(item) => item.id}
@@ -210,15 +212,15 @@ export default function MyEventsScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={['#3498db']}
-            tintColor="#3498db"
+            colors={[theme.primary]}
+            tintColor={theme.primary}
           />
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Ionicons name="calendar-outline" size={64} color="#bdc3c7" />
-            <Text style={styles.emptyTitle}>No Events Yet</Text>
-            <Text style={styles.emptyText}>
+            <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
+            <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events Yet</Text>
+            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
               You haven't created any events yet. Tap the + button to create your first event!
             </Text>
           </View>
@@ -231,7 +233,6 @@ export default function MyEventsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   loadingContainer: {
     flex: 1,
@@ -240,16 +241,13 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#7f8c8d',
   },
   eventsList: {
     padding: 16,
   },
   eventCard: {
-    backgroundColor: 'white',
     borderRadius: 12,
     marginBottom: 16,
-    shadowColor: '#000',
     shadowOffset: {
       width: 0,
       height: 2,
@@ -276,7 +274,6 @@ const styles = StyleSheet.create({
   eventTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#2c3e50',
     flex: 1,
     marginRight: 8,
   },
@@ -287,11 +284,9 @@ const styles = StyleSheet.create({
   actionButton: {
     padding: 8,
     borderRadius: 6,
-    backgroundColor: '#f8f9fa',
   },
   eventDescription: {
     fontSize: 14,
-    color: '#7f8c8d',
     lineHeight: 20,
     marginBottom: 12,
   },
@@ -304,7 +299,6 @@ const styles = StyleSheet.create({
   },
   detailText: {
     fontSize: 14,
-    color: '#2c3e50',
     marginLeft: 8,
     flex: 1,
   },
@@ -317,13 +311,11 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#2c3e50',
     marginTop: 16,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 16,
-    color: '#7f8c8d',
     textAlign: 'center',
     lineHeight: 24,
     paddingHorizontal: 32,
