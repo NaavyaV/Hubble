@@ -12,6 +12,7 @@ import Modal from 'react-native-modal'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
+import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
 
 interface ProfileModalProps {
   isVisible: boolean
@@ -31,18 +32,35 @@ interface ProfileModalProps {
       logo_url?: string
     }
   } | null
+  isHostingEvent?: boolean
 }
 
-export default function ProfileModal({ isVisible, onClose, user }: ProfileModalProps) {
+export default function ProfileModal({ isVisible, onClose, user, isHostingEvent = false }: ProfileModalProps) {
   const { theme } = useTheme()
   const [friendshipStatus, setFriendshipStatus] = useState<'none' | 'pending' | 'accepted' | 'blocked'>('none')
   const [loading, setLoading] = useState(false)
+  const [showPhoneNumber, setShowPhoneNumber] = useState(false)
 
   useEffect(() => {
     if (user && isVisible) {
       checkFriendshipStatus()
+      checkPhoneVisibility()
     }
   }, [user, isVisible])
+
+  const checkPhoneVisibility = async () => {
+    if (!user) return
+    try {
+      const { data: { user: me } } = await supabase.auth.getUser()
+      if (!me) return
+
+      const shouldShow = await shouldShowPhoneNumber(user.id, me.id, isHostingEvent)
+      setShowPhoneNumber(shouldShow)
+    } catch (error) {
+      console.error('Error checking phone visibility:', error)
+      setShowPhoneNumber(false)
+    }
+  }
 
   const checkFriendshipStatus = async () => {
     if (!user) return
@@ -197,7 +215,7 @@ export default function ProfileModal({ isVisible, onClose, user }: ProfileModalP
               </View>
             )}
 
-            {user.phone_number && (
+            {user.phone_number && showPhoneNumber && (
               <View style={[styles.bioSection, { marginTop: 12, backgroundColor: theme.surface }] }>
                 <Text style={[styles.bioLabel, { color: theme.text }]}>Contact</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>

@@ -15,6 +15,7 @@ import { supabase } from '../services/supabase'
 import ProfileModal from '../components/ProfileModal'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
+import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
 
 interface EventAttendee {
   id: string
@@ -22,11 +23,13 @@ interface EventAttendee {
   user_id: string
   status: 'going' | 'maybe' | 'not_going'
   user?: {
-    id: string
+    id?: string
     full_name?: string
     avatar_url?: string
     bio?: string
     phone_number?: string
+    phone_visibility?: 'public' | 'friends_only' | 'private'
+    phone_visible_when_hosting?: boolean
   }
 }
 
@@ -60,6 +63,7 @@ export default function EventDetailScreen() {
   const [college, setCollege] = useState<any>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
+  const [showHostPhone, setShowHostPhone] = useState(false)
 
   useEffect(() => {
     if (event && event.id) {
@@ -69,6 +73,12 @@ export default function EventDetailScreen() {
       fetchCollege()
     }
   }, [event?.id])
+
+  useEffect(() => {
+    if (hostProfile && currentUserId) {
+      checkHostPhoneVisibility()
+    }
+  }, [hostProfile, currentUserId])
 
   const fetchCurrentUser = async () => {
     try {
@@ -187,11 +197,11 @@ export default function EventDetailScreen() {
 
   const fetchCollege = async () => {
     try {
-      if (event.college_id) {
+      if ((event as any).college_id) {
         const { data: collegeData, error } = await supabase
           .from('colleges')
           .select('*')
-          .eq('id', event.college_id)
+          .eq('id', (event as any).college_id)
           .single()
 
         if (error) throw error
@@ -199,6 +209,18 @@ export default function EventDetailScreen() {
       }
     } catch (error) {
       console.error('Error fetching college:', error)
+    }
+  }
+
+  const checkHostPhoneVisibility = async () => {
+    if (!hostProfile || !currentUserId) return
+    
+    try {
+      const shouldShow = await shouldShowPhoneNumber(hostProfile.id, currentUserId, true) // true because host is hosting this event
+      setShowHostPhone(shouldShow)
+    } catch (error) {
+      console.error('Error checking host phone visibility:', error)
+      setShowHostPhone(false)
     }
   }
 
@@ -452,7 +474,7 @@ export default function EventDetailScreen() {
             <View style={styles.attendanceSection}>
               <Text style={styles.sectionTitle}>Your Attendance</Text>
               {isEventFull() ? (
-                <View style={[styles.eventFullContainer, { backgroundColor: theme.errorLight, borderColor: theme.error }]}>
+                <View style={[styles.eventFullContainer, { backgroundColor: theme.error + '20', borderColor: theme.error }]}>
                   <View style={styles.eventFullHeader}>
                     <Ionicons name="people" size={24} color={theme.error} />
                     <Text style={[styles.eventFullTitle, { color: theme.error }]}>Event is Full</Text>
@@ -460,7 +482,7 @@ export default function EventDetailScreen() {
                   <Text style={[styles.eventFullMessage, { color: theme.text }]}>
                     This event has reached its maximum capacity. Contact the host if you'd like to join:
                   </Text>
-                  {hostProfile?.phone_number && (
+                  {hostProfile?.phone_number && showHostPhone && (
                     <TouchableOpacity style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
                       <Ionicons name="call" size={16} color={theme.primary} />
                       <Text style={[styles.contactHostText, { color: theme.primary }]}>
@@ -468,7 +490,7 @@ export default function EventDetailScreen() {
                       </Text>
                     </TouchableOpacity>
                   )}
-                  {!hostProfile?.phone_number && (
+                  {(!hostProfile?.phone_number || !showHostPhone) && (
                     <Text style={[styles.noContactText, { color: theme.textSecondary }]}>
                       Host contact information not available
                     </Text>
@@ -548,7 +570,7 @@ export default function EventDetailScreen() {
 
           {/* Host Status */}
           {isHost && (
-            <View style={[styles.hostStatusContainer, { backgroundColor: theme.warningLight, borderColor: theme.warning }]}>
+            <View style={[styles.hostStatusContainer, { backgroundColor: theme.warning + '20', borderColor: theme.warning }]}>
               <View style={styles.hostStatusHeader}>
                 <Ionicons name="star" size={20} color={theme.warning} />
                 <Text style={[styles.hostStatusTitle, { color: theme.warning }]}>You are the host</Text>
@@ -603,6 +625,7 @@ export default function EventDetailScreen() {
           setSelectedUser(null)
         }}
         user={selectedUser}
+        isHostingEvent={isHost}
       />
     </View>
   )

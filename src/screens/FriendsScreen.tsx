@@ -206,7 +206,20 @@ export default function FriendsScreen() {
 
       if (error) throw error
 
+      // Update local state immediately
+      const newFriendship: FriendshipRow = {
+        id: `temp-${Date.now()}`, // Temporary ID until we refetch
+        user_id: me,
+        friend_id: friendId,
+        status: 'pending'
+      }
+      
+      setFriendships(prev => [...prev, newFriendship])
+      setOutgoing(prev => [...prev, newFriendship])
+
       Alert.alert('Success', 'Friend request sent!')
+      
+      // Refetch to get the real ID from database
       await fetchFriendships(me)
     } catch (error) {
       console.error('Error sending friend request:', error)
@@ -223,7 +236,11 @@ export default function FriendsScreen() {
 
       if (error) throw error
 
-      Alert.alert('Success', 'Friend request accepted!')
+      // Update local state immediately
+      setFriendships(prev => prev.map(f => 
+        f.id === friendshipId ? { ...f, status: 'accepted' as const } : f
+      ))
+      setIncoming(prev => prev.filter(f => f.id !== friendshipId))
       setRecentlyAccepted(prev => new Set([...prev, userId]))
       
       // Auto-remove from recently accepted after 5 seconds
@@ -235,6 +252,9 @@ export default function FriendsScreen() {
         })
       }, 5000)
 
+      Alert.alert('Success', 'Friend request accepted!')
+      
+      // Refetch to ensure consistency
       if (me) await fetchFriendships(me)
     } catch (error) {
       console.error('Error accepting friend request:', error)
@@ -286,7 +306,13 @@ export default function FriendsScreen() {
 
               if (error) throw error
 
+              // Update local state immediately
+              setFriendships(prev => prev.filter(f => f.id !== friendshipId))
+              setIncoming(prev => prev.filter(f => f.id !== friendshipId))
+
               Alert.alert('Success', 'Friend request ignored')
+              
+              // Refetch to ensure consistency
               if (me) await fetchFriendships(me)
             } catch (error) {
               console.error('Error ignoring friend request:', error)
@@ -311,7 +337,15 @@ export default function FriendsScreen() {
 
       if (error) throw error
 
+      // Update local state immediately
+      setFriendships(prev => prev.filter(f => 
+        !(f.user_id === me && f.friend_id === friendId && f.status === 'pending')
+      ))
+      setOutgoing(prev => prev.filter(f => f.friend_id !== friendId))
+
       Alert.alert('Success', 'Friend request cancelled')
+      
+      // Refetch to ensure consistency
       await fetchFriendships(me)
     } catch (error) {
       console.error('Error cancelling friend request:', error)
@@ -339,7 +373,14 @@ export default function FriendsScreen() {
 
               if (error) throw error
 
+              // Update local state immediately
+              setFriendships(prev => prev.filter(f => 
+                !((f.user_id === me && f.friend_id === friendId) || (f.user_id === friendId && f.friend_id === me))
+              ))
+
               Alert.alert('Success', 'Unfriended')
+              
+              // Refetch to ensure consistency
               await fetchFriendships(me)
             } catch (error) {
               console.error('Error unfriending:', error)

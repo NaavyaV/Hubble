@@ -6,6 +6,8 @@ export interface User {
   major?: string
   graduating_year?: string
   phone_number?: string
+  phone_visibility?: 'public' | 'friends_only' | 'private'
+  phone_visible_when_hosting?: boolean
 }
 
 export interface Event {
@@ -40,6 +42,8 @@ export interface EventAttendee {
     avatar_url?: string
     bio?: string
     phone_number?: string
+    phone_visibility?: 'public' | 'friends_only' | 'private'
+    phone_visible_when_hosting?: boolean
   }
 }
 

@@ -17,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
+import * as Notifications from 'expo-notifications'
 
 interface OnboardingData {
   fullName: string
@@ -29,6 +30,9 @@ interface OnboardingData {
   email: string
   password: string
   confirmPassword: string
+  phoneVisibility: 'public' | 'friends_only' | 'private'
+  phoneVisibleWhenHosting: boolean
+  notificationsEnabled: boolean
 }
 
 export default function OnboardingScreen({ navigation }: any) {
@@ -45,6 +49,9 @@ export default function OnboardingScreen({ navigation }: any) {
     email: '',
     password: '',
     confirmPassword: '',
+    phoneVisibility: 'private',
+    phoneVisibleWhenHosting: false,
+    notificationsEnabled: true,
   })
   const [loading, setLoading] = useState(false)
   const [colleges, setColleges] = useState<any[]>([])
@@ -89,6 +96,8 @@ export default function OnboardingScreen({ navigation }: any) {
     'bio',
     'profilePicture',
     'phoneNumber',
+    'phonePrivacy',
+    'notifications',
     'credentials',
   ]
 
@@ -106,7 +115,7 @@ export default function OnboardingScreen({ navigation }: any) {
     }
   }
 
-  const updateData = (field: keyof OnboardingData, value: string) => {
+  const updateData = (field: keyof OnboardingData, value: string | boolean) => {
     setData(prev => ({ ...prev, [field]: value }))
   }
 
@@ -143,6 +152,32 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const getWordCount = (text: string) => {
     return text.trim().split(/\s+/).filter(word => word.length > 0).length
+  }
+
+  const requestNotificationPermissions = async () => {
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync()
+      let finalStatus = existingStatus
+
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync()
+        finalStatus = status
+      }
+
+      if (finalStatus !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'To receive notifications about events and friend requests, please enable notifications in your device settings.',
+          [{ text: 'OK' }]
+        )
+        return false
+      }
+
+      return true
+    } catch (error) {
+      console.error('Error requesting notification permissions:', error)
+      return false
+    }
   }
 
   const handleCreateAccount = async () => {
@@ -229,9 +264,12 @@ export default function OnboardingScreen({ navigation }: any) {
             contentType,
           })
 
-          // Update user metadata with avatar URL
+          // Update user metadata with avatar URL and notification settings
           const { error: updateError } = await supabase.auth.updateUser({
-            data: { avatar_url: avatarUrl }
+            data: { 
+              avatar_url: avatarUrl,
+              notifications_enabled: data.notificationsEnabled
+            }
           })
           
           if (updateError) {
@@ -240,6 +278,17 @@ export default function OnboardingScreen({ navigation }: any) {
         } catch (error) {
           console.warn('Profile image upload failed:', error)
           // Don't throw here - image upload failure shouldn't block account creation
+        }
+      } else {
+        // No profile image, but still update notification settings
+        const { error: updateError } = await supabase.auth.updateUser({
+          data: { 
+            notifications_enabled: data.notificationsEnabled
+          }
+        })
+        
+        if (updateError) {
+          console.warn('Failed to update user metadata with notification settings:', updateError)
         }
       }
 
@@ -263,6 +312,8 @@ export default function OnboardingScreen({ navigation }: any) {
           bio: data.bio.trim() || null,
           avatar_url: avatarUrl,
           phone_number: data.phoneNumber || null,
+          phone_visibility: data.phoneVisibility,
+          phone_visible_when_hosting: data.phoneVisibleWhenHosting,
         }
         
         console.log('Creating profile with data:', profileData)
@@ -295,20 +346,8 @@ export default function OnboardingScreen({ navigation }: any) {
         }
       }
 
-      // Check if email confirmation is required
-      if (authData.user && !authData.session) {
-        Alert.alert(
-          'Account Created!',
-          'Please check your email to verify your account before signing in.',
-          [{ text: 'OK', onPress: () => navigation.navigate('Main' as never) }]
-        )
-      } else {
-        Alert.alert(
-          'Account Created!',
-          'Welcome! Your account has been created successfully.',
-          [{ text: 'OK', onPress: () => navigation.navigate('Main' as never) }]
-        )
-      }
+      // Navigate to main screen after successful account creation
+      navigation.navigate('Main' as never)
     } catch (error: any) {
       console.error('Account creation error:', error)
       Alert.alert('Error', error.message || 'Failed to create account. Please try again.')
@@ -450,6 +489,7 @@ export default function OnboardingScreen({ navigation }: any) {
         multiline
         numberOfLines={4}
         textAlignVertical="top"
+        textAlign="left"
         maxLength={250}
         autoCorrect={false}
         spellCheck={false}
@@ -482,7 +522,7 @@ export default function OnboardingScreen({ navigation }: any) {
       <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Optional - helps friends find you</Text>
       <TextInput
         style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-        placeholder="Enter your phone number"
+        placeholder="(123) 456-7890"
         placeholderTextColor={theme.inputPlaceholder}
         value={data.phoneNumber}
         onChangeText={(value) => updateData('phoneNumber', formatUSPhone(value))}
@@ -491,13 +531,195 @@ export default function OnboardingScreen({ navigation }: any) {
         autoFocus
         autoCorrect={false}
         spellCheck={false}
-        textAlign="center"
+        textAlign="left"
       />
       <Text style={[styles.privacyNote, { color: theme.textSecondary }]}>
         You can change your phone number privacy settings later in your profile
       </Text>
     </View>
   )
+
+  const renderPhonePrivacyStep = () => {
+    const phoneVisibilityOptions = [
+      { 
+        value: 'public' as const, 
+        label: 'Phone number 100% public', 
+        description: 'Anyone can see your phone number',
+        icon: 'globe-outline'
+      },
+      { 
+        value: 'friends_only' as const, 
+        label: 'Phone number shown only to friends', 
+        description: 'Only friends can see your phone number',
+        icon: 'people-outline'
+      },
+      { 
+        value: 'private' as const, 
+        label: 'Phone number completely private', 
+        description: 'No one can see your phone number',
+        icon: 'lock-closed-outline'
+      },
+    ]
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={[styles.stepTitle, { color: theme.text }]}>Phone Number Privacy</Text>
+        <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Who can see your phone number?</Text>
+        
+        <View style={styles.privacyOptions}>
+          {phoneVisibilityOptions.map((option) => (
+            <TouchableOpacity
+              key={option.value}
+              style={[
+                styles.visibilityOption,
+                { backgroundColor: theme.surface, borderColor: theme.border },
+                data.phoneVisibility === option.value && { 
+                  backgroundColor: theme.primary + '10',
+                  borderColor: theme.primary,
+                  borderWidth: 2
+                }
+              ]}
+              onPress={() => updateData('phoneVisibility', option.value)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.visibilityOptionLeft}>
+                <Ionicons
+                  name={option.icon as any}
+                  size={24}
+                  color={data.phoneVisibility === option.value ? theme.primary : theme.textSecondary}
+                />
+                <View style={styles.visibilityOptionText}>
+                  <Text style={[
+                    styles.visibilityOptionTitle,
+                    { color: data.phoneVisibility === option.value ? theme.primary : theme.text }
+                  ]}>
+                    {option.label}
+                  </Text>
+                  <Text style={[
+                    styles.visibilityOptionDescription,
+                    { color: data.phoneVisibility === option.value ? theme.primary + 'CC' : theme.textSecondary }
+                  ]}>
+                    {option.description}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {(data.phoneVisibility === 'friends_only' || data.phoneVisibility === 'private') && (
+          <TouchableOpacity 
+            style={[styles.hostingToggleContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}
+            onPress={() => updateData('phoneVisibleWhenHosting', !data.phoneVisibleWhenHosting)}
+          >
+            <View style={styles.hostingToggleLeft}>
+              <Ionicons name="calendar" size={24} color={theme.textSecondary} />
+              <View style={styles.hostingToggleText}>
+                <Text style={[styles.hostingToggleTitle, { color: theme.text }]}>
+                  Phone number shown only when hosting events
+                </Text>
+                <Text style={[styles.hostingToggleDescription, { color: theme.textSecondary }]}>
+                  Show your phone number for contact when you host events
+                </Text>
+              </View>
+            </View>
+            <View style={[
+              styles.iosToggle,
+              { backgroundColor: data.phoneVisibleWhenHosting ? theme.primary : theme.border }
+            ]}>
+              <View style={[
+                styles.iosToggleThumb,
+                { backgroundColor: theme.surface },
+                data.phoneVisibleWhenHosting && styles.iosToggleThumbActive
+              ]} />
+            </View>
+          </TouchableOpacity>
+        )}
+      </View>
+    )
+  }
+
+  const renderNotificationsStep = () => {
+    const handleNotificationToggle = async () => {
+      if (!data.notificationsEnabled) {
+        // User is enabling notifications, request permissions
+        const hasPermission = await requestNotificationPermissions()
+        if (hasPermission) {
+          updateData('notificationsEnabled', true)
+        }
+      } else {
+        // User is disabling notifications
+        updateData('notificationsEnabled', false)
+      }
+    }
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={[styles.stepTitle, { color: theme.text }]}>Notifications</Text>
+        <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Stay updated on events and friend requests</Text>
+        
+        <View style={[styles.notificationSection, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <TouchableOpacity 
+            style={styles.notificationItem}
+            onPress={handleNotificationToggle}
+            activeOpacity={0.7}
+          >
+            <View style={styles.notificationItemLeft}>
+              <Ionicons 
+                name="notifications-outline" 
+                size={24} 
+                color={data.notificationsEnabled ? theme.primary : theme.textSecondary} 
+              />
+              <View style={styles.notificationItemText}>
+                <Text style={[styles.notificationItemTitle, { color: theme.text }]}>
+                  Allow Notifications
+                </Text>
+                <Text style={[styles.notificationItemDescription, { color: theme.textSecondary }]}>
+                  Get notified about event updates, friend requests, and messages
+                </Text>
+              </View>
+            </View>
+            <View style={[
+              styles.iosToggle,
+              { backgroundColor: data.notificationsEnabled ? theme.primary : theme.border }
+            ]}>
+              <View style={[
+                styles.iosToggleThumb,
+                { backgroundColor: theme.surface },
+                data.notificationsEnabled && styles.iosToggleThumbActive
+              ]} />
+            </View>
+          </TouchableOpacity>
+
+          <View style={[styles.notificationDetails, { borderTopColor: theme.border }]}>
+            <View style={styles.notificationDetailItem}>
+              <Ionicons name="calendar-outline" size={16} color={theme.textSecondary} />
+              <Text style={[styles.notificationDetailText, { color: theme.textSecondary }]}>
+                Event reminders and updates
+              </Text>
+            </View>
+            <View style={styles.notificationDetailItem}>
+              <Ionicons name="people-outline" size={16} color={theme.textSecondary} />
+              <Text style={[styles.notificationDetailText, { color: theme.textSecondary }]}>
+                Friend requests and messages
+              </Text>
+            </View>
+            <View style={styles.notificationDetailItem}>
+              <Ionicons name="checkmark-circle-outline" size={16} color={theme.textSecondary} />
+              <Text style={[styles.notificationDetailText, { color: theme.textSecondary }]}>
+                Event confirmations and changes
+              </Text>
+            </View>
+          </View>
+        </View>
+
+
+        <Text style={[styles.helpText, { color: theme.textTertiary }]}>
+          You can change these settings anytime in your device settings or in the app
+        </Text>
+      </View>
+    )
+  }
 
   const renderCredentialsStep = () => (
     <View style={styles.stepContainer}>
@@ -572,6 +794,10 @@ export default function OnboardingScreen({ navigation }: any) {
         return renderProfilePictureStep()
       case 'phoneNumber':
         return renderPhoneNumberStep()
+      case 'phonePrivacy':
+        return renderPhonePrivacyStep()
+      case 'notifications':
+        return renderNotificationsStep()
       case 'credentials':
         return renderCredentialsStep()
       default:
@@ -595,6 +821,10 @@ export default function OnboardingScreen({ navigation }: any) {
         return true // Optional
       case 'phoneNumber':
         return true // Optional
+      case 'phonePrivacy':
+        return true // Settings step
+      case 'notifications':
+        return true // Settings step
       case 'credentials':
         return data.email.trim().length > 0 && 
                data.password.length > 0 && 
@@ -669,13 +899,14 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     flexGrow: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
   },
   stepContainer: {
-    paddingVertical: 40,
+    paddingVertical: 20,
+    paddingHorizontal: 20,
     alignItems: 'center',
     width: '100%',
+    minHeight: 400,
   },
   stepTitle: {
     fontSize: 28,
@@ -848,5 +1079,144 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 8,
     fontStyle: 'italic',
+  },
+  // Privacy settings styles
+  privacyOptions: {
+    marginTop: 20,
+    width: '100%',
+    maxWidth: 400,
+  },
+  visibilityOption: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    marginBottom: 12,
+    borderWidth: 2,
+    minHeight: 80,
+  },
+  visibilityOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    flex: 1,
+    paddingTop: 4,
+  },
+  visibilityOptionText: {
+    marginLeft: 16,
+    flex: 1,
+    flexShrink: 1,
+  },
+  visibilityOptionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+    flexWrap: 'nowrap',
+  },
+  visibilityOptionDescription: {
+    fontSize: 12,
+    lineHeight: 16,
+    flexWrap: 'nowrap',
+  },
+  hostingToggleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    marginTop: 8,
+    marginBottom: 24,
+    borderWidth: 1,
+  },
+  hostingToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  hostingToggleText: {
+    marginLeft: 16,
+    flex: 1,
+  },
+  hostingToggleTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  hostingToggleDescription: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  // Notification settings styles - iOS style
+  notificationSection: {
+    marginTop: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+    width: '100%',
+    maxWidth: 400,
+  },
+  notificationItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+  },
+  notificationItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  notificationItemText: {
+    marginLeft: 16,
+    flex: 1,
+  },
+  notificationItemTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  notificationItemDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  notificationDetails: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    borderTopWidth: 1,
+  },
+  notificationDetailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  notificationDetailText: {
+    fontSize: 14,
+    marginLeft: 12,
+  },
+  // iOS-style toggle
+  iosToggle: {
+    width: 51,
+    height: 31,
+    borderRadius: 15.5,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  iosToggleThumb: {
+    width: 27,
+    height: 27,
+    borderRadius: 13.5,
+    alignSelf: 'flex-start',
+  },
+  iosToggleThumbActive: {
+    alignSelf: 'flex-end',
+  },
+  helpText: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 20,
+    lineHeight: 20,
   },
 })

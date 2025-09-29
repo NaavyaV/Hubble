@@ -65,15 +65,10 @@ export default function AuthScreen({ navigation }: any) {
           style={styles.keyboardView}
         >
           <ScrollView contentContainerStyle={styles.scrollContent}>
-            <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+            <View style={styles.content}>
               <TouchableOpacity style={styles.backButton} onPress={handleBack}>
                 <Ionicons name="arrow-back" size={24} color={theme.text} />
               </TouchableOpacity>
-              <Text style={[styles.headerTitle, { color: theme.text }]}>Sign In</Text>
-              <View style={styles.placeholder} />
-            </View>
-
-            <View style={styles.content}>
               <View style={styles.logoContainer}>
                 <Ionicons name="calendar" size={64} color={theme.primary} />
                 <Text style={[styles.logoText, { color: theme.text }]}>Hubble</Text>
@@ -167,23 +162,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-  },
   backButton: {
     padding: 8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  placeholder: {
-    width: 40,
+    alignSelf: 'flex-start',
+    marginBottom: 20,
   },
   welcomeContainer: {
     flex: 1,
@@ -243,7 +225,7 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 20,
-    paddingTop: 40,
+    paddingTop: 20,
   },
   form: {
     marginTop: 40,

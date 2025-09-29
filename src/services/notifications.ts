@@ -10,11 +10,13 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 })
 
 export interface NotificationData {
-  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_deleted' | 'event_invitation'
+  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation'
   eventId?: string
   userId?: string
   title: string
@@ -123,20 +125,26 @@ class NotificationService {
   async scheduleEventReminder(eventId: string, eventTitle: string, eventDate: Date): Promise<void> {
     try {
       const reminderTime = new Date(eventDate.getTime() - 15 * 60 * 1000) // 15 minutes before
+      const now = new Date()
       
-      if (reminderTime <= new Date()) {
+      if (reminderTime <= now) {
         console.log('Event is too soon to schedule reminder')
         return
       }
 
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Event Starting Soon!',
-          body: `${eventTitle} starts in 15 minutes`,
-          data: { eventId, type: 'event_reminder' }
-        },
-        trigger: reminderTime
-      })
+      // Use setTimeout for now as a workaround for the trigger type issue
+      const delay = reminderTime.getTime() - now.getTime()
+      
+      setTimeout(async () => {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Event Starting Soon!',
+            body: `${eventTitle} starts in 15 minutes`,
+            data: { eventId, type: 'event_reminder' }
+          },
+          trigger: null // Send immediately when timeout fires
+        })
+      }, delay)
 
       console.log(`Scheduled reminder for event ${eventId} at ${reminderTime}`)
     } catch (error) {
@@ -183,6 +191,58 @@ class NotificationService {
   // Get notification token
   getToken(): string | null {
     return this.notificationToken
+  }
+
+  // Send event edit/delete notification to all attendees except host
+  async sendEventEditDeleteNotification(
+    eventId: string, 
+    eventTitle: string, 
+    hostId: string, 
+    action: 'edited' | 'deleted'
+  ): Promise<void> {
+    try {
+      // Get all attendees for this event except the host
+      const { data: attendees, error } = await supabase
+        .from('event_attendees')
+        .select(`
+          user_id,
+          profiles!inner(full_name)
+        `)
+        .eq('event_id', eventId)
+        .neq('user_id', hostId)
+
+      if (error) {
+        console.error('Error fetching attendees:', error)
+        return
+      }
+
+      if (!attendees || attendees.length === 0) {
+        console.log('No attendees to notify for event edit/delete')
+        return
+      }
+
+      // Send notification to each attendee
+      for (const attendee of attendees) {
+        const actionText = action === 'edited' ? 'edited' : 'deleted'
+        const emoji = action === 'edited' ? '✏️' : '🗑️'
+        
+        await this.sendNotification({
+          type: 'event_edited_deleted',
+          eventId: eventId,
+          userId: attendee.user_id,
+          title: `${emoji} Event ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
+          body: `"${eventTitle}" has been ${actionText} by the host`,
+          data: {
+            action: action,
+            eventTitle: eventTitle
+          }
+        })
+      }
+
+      console.log(`Sent ${action} notifications to ${attendees.length} attendees for event ${eventId}`)
+    } catch (error) {
+      console.error(`Error sending event ${action} notifications:`, error)
+    }
   }
 
   // Clear all notifications

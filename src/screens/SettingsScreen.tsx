@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Switch,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -24,6 +23,10 @@ export default function SettingsScreen() {
 
   const handleThemeChange = (mode: 'light' | 'dark' | 'system') => {
     setThemeMode(mode)
+  }
+
+  const handlePhoneVisibilityPress = () => {
+    navigation.navigate('PhoneVisibility' as never)
   }
 
   const styles = createStyles(theme)
@@ -101,23 +104,12 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Privacy</Text>
           
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity style={styles.settingItem} onPress={handlePhoneVisibilityPress}>
             <View style={styles.settingLeft}>
-              <Ionicons name="eye" size={20} color={theme.textSecondary} />
+              <Ionicons name="call" size={20} color={theme.textSecondary} />
               <View style={styles.settingText}>
-                <Text style={styles.settingTitle}>Profile Visibility</Text>
-                <Text style={styles.settingDescription}>Control who can see your profile</Text>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={theme.textTertiary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.settingItem}>
-            <View style={styles.settingLeft}>
-              <Ionicons name="location" size={20} color={theme.textSecondary} />
-              <View style={styles.settingText}>
-                <Text style={styles.settingTitle}>Location Services</Text>
-                <Text style={styles.settingDescription}>Manage location permissions</Text>
+                <Text style={styles.settingTitle}>Phone Number Visibility</Text>
+                <Text style={styles.settingDescription}>Control who can see your phone number</Text>
               </View>
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.textTertiary} />

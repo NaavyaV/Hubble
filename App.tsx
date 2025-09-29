@@ -25,6 +25,7 @@ import FriendsScreen from './src/screens/FriendsScreen'
 import EventInviteScreen from './src/screens/EventInviteScreen'
 import SettingsScreen from './src/screens/SettingsScreen'
 import NotificationSettingsScreen from './src/screens/NotificationSettingsScreen'
+import PhoneVisibilityScreen from './src/screens/PhoneVisibilityScreen'
 
 type RootStackParamList = {
   Auth: undefined
@@ -38,6 +39,7 @@ type RootStackParamList = {
   EventInvite: { invitedUsers: string[] }
   Settings: undefined
   NotificationSettings: undefined
+  PhoneVisibility: undefined
 }
 
 type MainTabParamList = {
@@ -381,6 +383,13 @@ function AppContent() {
               <Stack.Screen
                 name="NotificationSettings"
                 component={NotificationSettingsScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="PhoneVisibility"
+                component={PhoneVisibilityScreen}
                 options={{
                   headerShown: false,
                 }}

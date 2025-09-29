@@ -15,6 +15,7 @@ import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
+import notificationService from '../services/notifications'
 
 export default function MyEventsScreen() {
   const { theme } = useTheme()
@@ -81,6 +82,10 @@ export default function MyEventsScreen() {
   }
 
   const handleDeleteEvent = async (eventId: string) => {
+    // Find the event to get its title and host_id
+    const eventToDelete = events.find(event => event.id === eventId)
+    if (!eventToDelete) return
+
     Alert.alert(
       'Delete Event',
       'Are you sure you want to delete this event? This action cannot be undone.',
@@ -91,6 +96,14 @@ export default function MyEventsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Send notifications to all attendees except host before deleting
+              await notificationService.sendEventEditDeleteNotification(
+                eventId,
+                eventToDelete.title,
+                eventToDelete.host_id,
+                'deleted'
+              )
+
               const { error } = await supabase
                 .from('events')
                 .delete()

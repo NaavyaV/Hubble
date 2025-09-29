@@ -20,6 +20,7 @@ import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
+import notificationService from '../services/notifications'
 
 interface EditEventScreenProps {
   route: { params: { event: any } }
@@ -40,7 +41,7 @@ const predefinedTags = [
 ]
 
 export default function EditEventScreen({ route, navigation }: EditEventScreenProps) {
-  const { theme } = useTheme()
+  const { theme, isDark } = useTheme()
   const { event } = route.params
   const [title, setTitle] = useState(event.title || '')
   const [description, setDescription] = useState(event.description || '')
@@ -241,6 +242,14 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
         .eq('host_id', user.id)
 
       if (error) throw error
+
+      // Send notifications to all attendees except host
+      await notificationService.sendEventEditDeleteNotification(
+        event.id,
+        title.trim(),
+        user.id,
+        'edited'
+      )
 
       Alert.alert('Success', 'Event updated successfully!')
       navigation.goBack()
@@ -484,7 +493,7 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                   onChange={handleDateChange}
                   minimumDate={new Date()}
                   textColor={theme.text}
-                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                  themeVariant={isDark ? 'dark' : 'light'}
                 />
               )}
             </View>
@@ -506,7 +515,7 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   onChange={handleStartTimeChange}
                   textColor={theme.text}
-                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                  themeVariant={isDark ? 'dark' : 'light'}
                 />
               )}
             </View>
@@ -538,7 +547,7 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                       display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                       onChange={handleEndTimeChange}
                       textColor={theme.text}
-                      themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                      themeVariant={isDark ? 'dark' : 'light'}
                     />
                   )}
                 </>
