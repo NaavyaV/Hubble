@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import { useTheme } from '../context/ThemeContext'
 interface OnboardingData {
   fullName: string
   major: string
+  collegeId: string
   graduatingYear: string
   bio: string
   profileImageUri: string | null
@@ -36,6 +37,7 @@ export default function OnboardingScreen({ navigation }: any) {
   const [data, setData] = useState<OnboardingData>({
     fullName: '',
     major: '',
+    collegeId: '',
     graduatingYear: '',
     bio: '',
     profileImageUri: null,
@@ -45,6 +47,28 @@ export default function OnboardingScreen({ navigation }: any) {
     confirmPassword: '',
   })
   const [loading, setLoading] = useState(false)
+  const [colleges, setColleges] = useState<any[]>([])
+
+  useEffect(() => {
+    fetchColleges()
+  }, [])
+
+  const fetchColleges = async () => {
+    try {
+      const { data: collegesData, error } = await supabase
+        .from('colleges')
+        .select('*')
+        .order('name')
+      
+      if (error) {
+        console.error('Error fetching colleges:', error)
+      } else {
+        setColleges(collegesData || [])
+      }
+    } catch (error) {
+      console.error('Error fetching colleges:', error)
+    }
+  }
 
   const currentYear = new Date().getFullYear()
   const graduatingYearOptions = [
@@ -60,6 +84,7 @@ export default function OnboardingScreen({ navigation }: any) {
   const steps = [
     'name',
     'major',
+    'college',
     'graduatingYear',
     'bio',
     'profilePicture',
@@ -138,22 +163,55 @@ export default function OnboardingScreen({ navigation }: any) {
 
     setLoading(true)
     try {
-      // Create account
+      console.log('Starting account creation process...')
+      console.log('Creating account with email:', data.email.trim())
+      
+      // Create account - try without metadata first to isolate the issue
+      console.log('Attempting to create account without metadata...')
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: data.email.trim(),
         password: data.password,
-        options: {
-          data: {
-            full_name: data.fullName.trim(),
-            major: data.major.trim() || null,
-            graduating_year: data.graduatingYear || null,
-            bio: data.bio.trim() || null,
-            phone_number: data.phoneNumber || null,
-          }
-        }
+        // Temporarily remove options.data to avoid trigger conflicts
+      })
+      
+      console.log('Auth response:', {
+        user: authData.user ? 'User created' : 'No user',
+        session: authData.session ? 'Session created' : 'No session',
+        error: authError ? 'Error occurred' : 'No error'
       })
 
-      if (authError) throw authError
+      if (authError) {
+        console.error('Auth error details:', {
+          message: authError.message,
+          status: authError.status,
+          details: authError
+        })
+        
+        // If it's a 500 error, it might be a database trigger issue
+        if (authError.status === 500) {
+          console.log('500 error detected - this is likely a database trigger issue')
+          console.log('The handle_new_user() trigger is probably failing')
+          console.log('Check your Supabase dashboard → Database → Functions for handle_new_user')
+          
+          // Try to provide a more helpful error message
+          if (authError.message.includes('database error saving new user')) {
+            throw new Error('Database trigger error. Please check your Supabase dashboard for the handle_new_user function.')
+          }
+        }
+        
+        throw new Error(`Failed to create account: ${authError.message}`)
+      }
+      
+      if (authData.user) {
+        console.log('Auth account created successfully:', authData.user.id)
+        console.log('User email confirmed:', authData.user.email_confirmed_at ? 'Yes' : 'No')
+        
+        if (!authData.session) {
+          console.log('No session created - email confirmation may be required')
+        }
+      } else {
+        console.log('No user created in auth response')
+      }
 
       // Upload profile image if selected
       let avatarUrl = null
@@ -172,36 +230,88 @@ export default function OnboardingScreen({ navigation }: any) {
           })
 
           // Update user metadata with avatar URL
-          await supabase.auth.updateUser({
+          const { error: updateError } = await supabase.auth.updateUser({
             data: { avatar_url: avatarUrl }
           })
+          
+          if (updateError) {
+            console.warn('Failed to update user metadata with avatar:', updateError)
+          }
         } catch (error) {
           console.warn('Profile image upload failed:', error)
+          // Don't throw here - image upload failure shouldn't block account creation
         }
       }
 
       // Create profile in public profiles table
       if (authData.user) {
-        await supabase
+        // Check if profile already exists (from trigger)
+        const { data: existingProfile } = await supabase
           .from('profiles')
-          .upsert({
-            id: authData.user.id,
-            full_name: data.fullName.trim(),
-            major: data.major.trim() || null,
-            graduating_year: data.graduatingYear || null,
-            bio: data.bio.trim() || null,
-            avatar_url: avatarUrl,
-            phone_number: data.phoneNumber || null,
-          })
+          .select('*')
+          .eq('id', authData.user.id)
+          .single()
+        
+        console.log('Existing profile check:', existingProfile)
+        
+        const profileData = {
+          id: authData.user.id,
+          full_name: data.fullName.trim(),
+          major: data.major.trim() || null,
+          college_id: data.collegeId || null,
+          graduating_year: data.graduatingYear || null,
+          bio: data.bio.trim() || null,
+          avatar_url: avatarUrl,
+          phone_number: data.phoneNumber || null,
+        }
+        
+        console.log('Creating profile with data:', profileData)
+        console.log('Full onboarding data:', data)
+        
+        const { data: insertedProfile, error: profileError } = await supabase
+          .from('profiles')
+          .upsert(profileData)
+          .select()
+        
+        if (profileError) {
+          console.error('Profile creation error:', profileError)
+          console.error('Profile data that failed:', profileData)
+          throw new Error(`Failed to create profile: ${profileError.message}`)
+        }
+        
+        console.log('Profile created successfully:', insertedProfile)
+        
+        // Verify the profile was actually saved
+        const { data: verifyProfile, error: verifyError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authData.user.id)
+          .single()
+        
+        if (verifyError) {
+          console.error('Failed to verify profile creation:', verifyError)
+        } else {
+          console.log('Profile verification successful:', verifyProfile)
+        }
       }
 
-      Alert.alert(
-        'Account Created!',
-        'Please check your email to verify your account.',
-        [{ text: 'OK' }]
-      )
+      // Check if email confirmation is required
+      if (authData.user && !authData.session) {
+        Alert.alert(
+          'Account Created!',
+          'Please check your email to verify your account before signing in.',
+          [{ text: 'OK', onPress: () => navigation.navigate('Main' as never) }]
+        )
+      } else {
+        Alert.alert(
+          'Account Created!',
+          'Welcome! Your account has been created successfully.',
+          [{ text: 'OK', onPress: () => navigation.navigate('Main' as never) }]
+        )
+      }
     } catch (error: any) {
-      Alert.alert('Error', error.message)
+      console.error('Account creation error:', error)
+      Alert.alert('Error', error.message || 'Failed to create account. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -218,21 +328,84 @@ export default function OnboardingScreen({ navigation }: any) {
         value={data.fullName}
         onChangeText={(value) => updateData('fullName', value)}
         autoFocus
+        autoCorrect={false}
+        autoCapitalize="words"
+        spellCheck={false}
       />
     </View>
   )
 
   const renderMajorStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>What's your major?</Text>
-      <Text style={styles.stepSubtitle}>Help others find you with similar interests</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>What's your major?</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Help others find you with similar interests</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
         placeholder="e.g., Computer Science, Business, etc."
+        placeholderTextColor={theme.inputPlaceholder}
         value={data.major}
         onChangeText={(value) => updateData('major', value)}
         autoFocus
+        autoCorrect={false}
+        autoCapitalize="words"
+        spellCheck={false}
       />
+    </View>
+  )
+
+  const renderCollegeStep = () => (
+    <View style={styles.stepContainer}>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>Which college do you attend?</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Connect with students from your school</Text>
+      
+      <View style={styles.collegeList}>
+        {colleges.map((college) => (
+          <TouchableOpacity
+            key={college.id}
+            style={[
+              styles.collegeOption,
+              { 
+                backgroundColor: data.collegeId === college.id ? theme.primary : theme.surface,
+                borderColor: data.collegeId === college.id ? theme.primary : theme.border
+              }
+            ]}
+            onPress={() => updateData('collegeId', college.id)}
+          >
+            {college.logo_url && (
+              <Image 
+                source={{ uri: college.logo_url }} 
+                style={styles.collegeLogo}
+                resizeMode="contain"
+              />
+            )}
+            <View style={styles.collegeInfo}>
+              <Text style={[
+                styles.collegeName,
+                { color: data.collegeId === college.id ? theme.buttonText : theme.text }
+              ]}>
+                {college.name}
+              </Text>
+              <Text style={[
+                styles.collegeShortName,
+                { color: data.collegeId === college.id ? theme.buttonText : theme.textSecondary }
+              ]}>
+                {college.short_name}
+              </Text>
+            </View>
+            {data.collegeId === college.id && (
+              <Ionicons name="checkmark-circle" size={24} color={theme.buttonText} />
+            )}
+          </TouchableOpacity>
+        ))}
+        
+        {/* Coming Soon Message */}
+        <View style={[styles.comingSoonContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Ionicons name="time-outline" size={20} color={theme.textSecondary} />
+          <Text style={[styles.comingSoonText, { color: theme.textSecondary }]}>
+            More colleges to be added soon!
+          </Text>
+        </View>
+      </View>
     </View>
   )
 
@@ -266,19 +439,22 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const renderBioStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>Tell us about yourself</Text>
-      <Text style={styles.stepSubtitle}>Write a short bio (optional, max 50 words)</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>Tell us about yourself</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Write a short bio (optional, max 50 words)</Text>
       <TextInput
-        style={[styles.input, styles.textArea]}
+        style={[styles.input, styles.textArea, styles.bioTextArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
         placeholder="Share something about yourself..."
+        placeholderTextColor={theme.inputPlaceholder}
         value={data.bio}
         onChangeText={(value) => updateData('bio', value)}
         multiline
         numberOfLines={4}
         textAlignVertical="top"
         maxLength={250}
+        autoCorrect={false}
+        spellCheck={false}
       />
-      <Text style={styles.wordCount}>
+      <Text style={[styles.wordCount, { color: theme.textSecondary }]}>
         {getWordCount(data.bio)}/50 words
       </Text>
     </View>
@@ -286,15 +462,14 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const renderProfilePictureStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>Add a profile picture</Text>
-      <Text style={styles.stepSubtitle}>Optional - you can always add this later</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>Add a profile picture</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Optional - you can always add this later</Text>
       <TouchableOpacity style={styles.profileImageButton} onPress={pickProfileImage}>
         {data.profileImageUri ? (
           <Image source={{ uri: data.profileImageUri }} style={styles.profileImage} />
         ) : (
-          <View style={styles.profileImagePlaceholder}>
-            <Ionicons name="camera" size={32} color="#7f8c8d" />
-            <Text style={styles.profileImagePlaceholderText}>Tap to add photo</Text>
+          <View style={[styles.profileImagePlaceholder, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
+            <Ionicons name="camera" size={32} color={theme.textSecondary} />
           </View>
         )}
       </TouchableOpacity>
@@ -303,62 +478,80 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const renderPhoneNumberStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>What's your phone number?</Text>
-      <Text style={styles.stepSubtitle}>Optional - helps friends find you</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>What's your phone number?</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Optional - helps friends find you</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
         placeholder="Enter your phone number"
+        placeholderTextColor={theme.inputPlaceholder}
         value={data.phoneNumber}
         onChangeText={(value) => updateData('phoneNumber', formatUSPhone(value))}
         keyboardType="phone-pad"
         maxLength={14}
         autoFocus
+        autoCorrect={false}
+        spellCheck={false}
+        textAlign="center"
       />
+      <Text style={[styles.privacyNote, { color: theme.textSecondary }]}>
+        You can change your phone number privacy settings later in your profile
+      </Text>
     </View>
   )
 
   const renderCredentialsStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>Create your account</Text>
-      <Text style={styles.stepSubtitle}>Enter your email and password to finish</Text>
+      <Text style={[styles.stepTitle, { color: theme.text }]}>Create your account</Text>
+      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Enter your email and password to finish</Text>
       
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Email *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter your email"
-          value={data.email}
-          onChangeText={(value) => updateData('email', value)}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
+      <View style={styles.credentialsContainer}>
+        <View style={styles.inputGroup}>
+          <Text style={[styles.credentialLabel, { color: theme.text }]}>Email</Text>
+          <TextInput
+            style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+            placeholder="Enter your email"
+            placeholderTextColor={theme.inputPlaceholder}
+            value={data.email}
+            onChangeText={(value) => updateData('email', value)}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            textContentType="emailAddress"
+          />
+        </View>
 
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Password *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Create a password"
-          value={data.password}
-          onChangeText={(value) => updateData('password', value)}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
+        <View style={styles.inputGroup}>
+          <Text style={[styles.credentialLabel, { color: theme.text }]}>Password</Text>
+          <TextInput
+            style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+            placeholder="Create a password"
+            placeholderTextColor={theme.inputPlaceholder}
+            value={data.password}
+            onChangeText={(value) => updateData('password', value)}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            textContentType="newPassword"
+          />
+        </View>
 
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Confirm Password *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Confirm your password"
-          value={data.confirmPassword}
-          onChangeText={(value) => updateData('confirmPassword', value)}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        <View style={styles.inputGroup}>
+          <Text style={[styles.credentialLabel, { color: theme.text }]}>Confirm Password</Text>
+          <TextInput
+            style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+            placeholder="Confirm your password"
+            placeholderTextColor={theme.inputPlaceholder}
+            value={data.confirmPassword}
+            onChangeText={(value) => updateData('confirmPassword', value)}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            textContentType="newPassword"
+          />
+        </View>
       </View>
     </View>
   )
@@ -369,6 +562,8 @@ export default function OnboardingScreen({ navigation }: any) {
         return renderNameStep()
       case 'major':
         return renderMajorStep()
+      case 'college':
+        return renderCollegeStep()
       case 'graduatingYear':
         return renderGraduatingYearStep()
       case 'bio':
@@ -390,6 +585,8 @@ export default function OnboardingScreen({ navigation }: any) {
         return data.fullName.trim().length > 0
       case 'major':
         return true // Optional
+      case 'college':
+        return data.collegeId.length > 0
       case 'graduatingYear':
         return data.graduatingYear.length > 0
       case 'bio':
@@ -413,32 +610,24 @@ export default function OnboardingScreen({ navigation }: any) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
-          {currentStep > 0 && (
-            <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-              <Ionicons name="arrow-back" size={24} color={theme.text} />
-            </TouchableOpacity>
-          )}
-          <View style={styles.progressContainer}>
-            <View style={[styles.progressBar, { backgroundColor: theme.border }]}>
-              <View 
-                style={[
-                  styles.progressFill, 
-                  { width: `${((currentStep + 1) / steps.length) * 100}%`, backgroundColor: theme.primary }
-                ]} 
-              />
-            </View>
-            <Text style={[styles.progressText, { color: theme.textSecondary }]}>
-              {currentStep + 1} of {steps.length}
-            </Text>
-          </View>
+        <View style={[styles.topBar, { backgroundColor: theme.background }]}>
+          <TouchableOpacity 
+            style={styles.backButton} 
+            onPress={currentStep === 0 ? () => navigation.goBack() : handleBack}
+          >
+            <Ionicons name="arrow-back" size={24} color={theme.text} />
+          </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          style={styles.content} 
+          contentContainerStyle={styles.contentContainer}
+          showsVerticalScrollIndicator={false}
+        >
           {renderCurrentStep()}
         </ScrollView>
 
-        <View style={[styles.footer, { backgroundColor: theme.surface, borderTopColor: theme.border }]}>
+        <View style={styles.footer}>
           <TouchableOpacity
             style={[
               styles.nextButton,
@@ -466,51 +655,39 @@ const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
   },
-  header: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: 1,
   },
   backButton: {
-    marginRight: 16,
-  },
-  progressContainer: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  progressBar: {
-    width: '100%',
-    height: 4,
-    borderRadius: 2,
-    marginBottom: 8,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  progressText: {
-    fontSize: 12,
-    fontWeight: '500',
+    padding: 4,
   },
   content: {
     flex: 1,
+  },
+  contentContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
     paddingHorizontal: 20,
   },
   stepContainer: {
-    paddingTop: 40,
-    paddingBottom: 20,
+    paddingVertical: 40,
+    alignItems: 'center',
+    width: '100%',
   },
   stepTitle: {
     fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 8,
+    textAlign: 'center',
   },
   stepSubtitle: {
     fontSize: 16,
     marginBottom: 32,
     lineHeight: 22,
+    textAlign: 'center',
   },
   input: {
     borderWidth: 1,
@@ -518,20 +695,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
+    width: '50%', // 1/3 of screen width
+    minWidth: '50%',
+    maxWidth: '50%', // Expandable to 1/2 of screen width
+    textAlign: 'center', // Center aligned when typing
   },
   textArea: {
     height: 100,
     textAlignVertical: 'top',
   },
+  bioTextArea: {
+    width: '75%', // 3/4 of screen width
+    minWidth: '75%',
+    maxWidth: '75%',
+  },
+  privacyNote: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 12,
+    lineHeight: 16,
+    paddingHorizontal: 20,
+  },
   wordCount: {
     fontSize: 12,
-    textAlign: 'right',
-    marginTop: 4,
+    textAlign: 'center',
+    marginTop: 8,
   },
   yearGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    marginTop: 20,
+    gap: 10,
   },
   yearButton: {
     width: '30%',
@@ -542,16 +737,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     alignItems: 'center',
   },
-  yearButtonSelected: {
-    backgroundColor: '#3498db',
-    borderColor: '#3498db',
-  },
   yearButtonText: {
     fontSize: 16,
     fontWeight: '500',
-  },
-  yearButtonTextSelected: {
-    color: 'white',
   },
   profileImageButton: {
     alignSelf: 'center',
@@ -562,7 +750,6 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 60,
     borderWidth: 3,
-    borderColor: '#3498db',
   },
   profileImagePlaceholder: {
     width: 120,
@@ -571,35 +758,95 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#3498db',
-  },
-  profileImagePlaceholderText: {
-    fontSize: 14,
-    marginTop: 8,
-    textAlign: 'center',
   },
   inputGroup: {
     marginBottom: 20,
+    alignItems: 'center',
+    width: '100%',
   },
   label: {
     fontSize: 16,
     fontWeight: '600',
     marginBottom: 8,
   },
+  credentialsContainer: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  credentialLabel: {
+    fontSize: 17,
+    fontWeight: '500',
+    marginBottom: 8,
+    textAlign: 'left',
+    alignSelf: 'flex-start',
+    width: '100%',
+  },
+  credentialInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    fontSize: 17,
+    width: '100%',
+    minHeight: 50,
+  },
   footer: {
     padding: 20,
-    borderTopWidth: 1,
+    alignItems: 'center',
   },
   nextButton: {
     paddingVertical: 16,
+    paddingHorizontal: 40,
     borderRadius: 8,
     alignItems: 'center',
-  },
-  nextButtonDisabled: {
-    backgroundColor: '#bdc3c7',
+    minWidth: 120,
   },
   nextButtonText: {
     fontSize: 18,
     fontWeight: '600',
+  },
+  collegeList: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  collegeOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    marginBottom: 12,
+  },
+  collegeLogo: {
+    width: 40,
+    height: 40,
+    marginRight: 12,
+  },
+  collegeInfo: {
+    flex: 1,
+  },
+  collegeName: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  collegeShortName: {
+    fontSize: 14,
+  },
+  comingSoonContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  comingSoonText: {
+    fontSize: 14,
+    marginLeft: 8,
+    fontStyle: 'italic',
   },
 })

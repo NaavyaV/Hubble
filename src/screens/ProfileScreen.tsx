@@ -17,25 +17,46 @@ export default function ProfileScreen() {
   const navigation = useNavigation()
   const { theme } = useTheme()
   const [user, setUser] = useState<any>(null)
+  const [profile, setProfile] = useState<any>(null)
+  const [college, setCollege] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchUser()
+    fetchUserData()
   }, [])
 
   // Refresh when screen comes into focus (e.g., returning from EditProfile)
   useFocusEffect(
     React.useCallback(() => {
-      fetchUser()
+      fetchUserData()
     }, [])
   )
 
-  const fetchUser = async () => {
+  const fetchUserData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      setUser(user)
+      if (user) {
+        setUser(user)
+        
+        // Fetch profile data with college information
+        const { data: profileData, error } = await supabase
+          .from('profiles')
+          .select(`
+            *,
+            college:colleges(*)
+          `)
+          .eq('id', user.id)
+          .single()
+        
+        if (error) {
+          console.error('Error fetching profile:', error)
+        } else {
+          setProfile(profileData)
+          setCollege(profileData.college)
+        }
+      }
     } catch (error) {
-      console.error('Error fetching user:', error)
+      console.error('Error fetching user data:', error)
     } finally {
       setLoading(false)
     }
@@ -71,11 +92,7 @@ export default function ProfileScreen() {
   }
 
   const handleNotifications = () => {
-    Alert.alert('Notifications', 'Notification settings coming soon!')
-  }
-
-  const handleHelpSupport = () => {
-    Alert.alert('Help & Support', 'Need help? Contact us at support@utdhangouts.com')
+    navigation.navigate('NotificationSettings' as never)
   }
 
   const handleSettings = () => {
@@ -101,15 +118,15 @@ export default function ProfileScreen() {
         <View style={styles.profileCard}>
           <View style={styles.profileLeft}>
             <View style={styles.avatarContainer}>
-              {user?.user_metadata?.avatar_url ? (
+              {profile?.avatar_url ? (
                 <Image 
-                  source={{ uri: user.user_metadata.avatar_url }} 
+                  source={{ uri: profile.avatar_url }} 
                   style={styles.avatar} 
                 />
               ) : (
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>
-                    {user?.user_metadata?.full_name?.charAt(0).toUpperCase() || user?.user_metadata?.phone_number?.slice(-1) || 'U'}
+                    {profile?.full_name?.charAt(0).toUpperCase() || profile?.phone_number?.slice(-1) || 'U'}
                   </Text>
                 </View>
               )}
@@ -118,22 +135,27 @@ export default function ProfileScreen() {
           
           <View style={styles.profileRight}>
             <Text style={styles.userName}>
-              {user?.user_metadata?.full_name || 'User'}
+              {profile?.full_name || 'User'}
             </Text>
-            {user?.user_metadata?.phone_number && (
-              <Text style={styles.userEmail}>{user.user_metadata.phone_number}</Text>
+            {profile?.phone_number && (
+              <Text style={styles.userEmail}>{profile.phone_number}</Text>
             )}
             
-            {(user?.user_metadata?.major || user?.user_metadata?.graduating_year) && (
+            {(profile?.major || profile?.graduating_year || college) && (
               <View style={styles.userInfo}>
-                {user?.user_metadata?.major && (
+                {college && (
                   <Text style={styles.userInfoText}>
-                    {user.user_metadata.major}
+                    {college.name}
                   </Text>
                 )}
-                {user?.user_metadata?.graduating_year && (
+                {profile?.major && (
                   <Text style={styles.userInfoText}>
-                    Class of {user.user_metadata.graduating_year}
+                    {profile.major}
+                  </Text>
+                )}
+                {profile?.graduating_year && (
+                  <Text style={styles.userInfoText}>
+                    Class of {profile.graduating_year}
                   </Text>
                 )}
               </View>
@@ -142,11 +164,11 @@ export default function ProfileScreen() {
         </View>
 
         {/* Bio Section - Separate */}
-        {user?.user_metadata?.bio && (
+        {profile?.bio && (
           <View style={styles.bioSection}>
             <Text style={styles.bioTitle}>About</Text>
             <Text style={styles.bioText} numberOfLines={4}>
-              {user.user_metadata.bio}
+              {profile.bio}
             </Text>
           </View>
         )}
@@ -171,11 +193,6 @@ export default function ProfileScreen() {
             <Text style={styles.menuItemText}>Settings</Text>
             <Text style={styles.menuItemArrow}>›</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity style={styles.menuItem} onPress={handleHelpSupport}>
-            <Text style={styles.menuItemText}>Help & Support</Text>
-            <Text style={styles.menuItemArrow}>›</Text>
-          </TouchableOpacity>
         </View>
 
         <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
@@ -183,7 +200,7 @@ export default function ProfileScreen() {
         </TouchableOpacity>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>UTD Hangouts v1.0.0</Text>
+          <Text style={styles.footerText}>Hubble v1.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

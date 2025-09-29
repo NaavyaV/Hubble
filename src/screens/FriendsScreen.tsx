@@ -64,7 +64,10 @@ export default function FriendsScreen() {
       console.log('Fetching all users...')
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
+        .select(`
+          id, full_name, avatar_url, phone_number, major, graduating_year, bio,
+          college:colleges(*)
+        `)
         .order('full_name')
 
       if (error) {

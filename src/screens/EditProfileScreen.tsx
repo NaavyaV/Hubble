@@ -22,6 +22,8 @@ export default function EditProfileScreen({ navigation }: any) {
   const { theme } = useTheme()
   const [fullName, setFullName] = useState('')
   const [major, setMajor] = useState('')
+  const [collegeId, setCollegeId] = useState('')
+  const [colleges, setColleges] = useState<any[]>([])
   const [graduatingYear, setGraduatingYear] = useState('')
   const [bio, setBio] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
@@ -42,18 +44,48 @@ export default function EditProfileScreen({ navigation }: any) {
 
   useEffect(() => {
     fetchUserProfile()
+    fetchColleges()
   }, [])
+
+  const fetchColleges = async () => {
+    try {
+      const { data: collegesData, error } = await supabase
+        .from('colleges')
+        .select('*')
+        .order('name')
+      
+      if (error) {
+        console.error('Error fetching colleges:', error)
+      } else {
+        setColleges(collegesData || [])
+      }
+    } catch (error) {
+      console.error('Error fetching colleges:', error)
+    }
+  }
 
   const fetchUserProfile = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        setFullName(user.user_metadata?.full_name || '')
-        setMajor(user.user_metadata?.major || '')
-        setGraduatingYear(user.user_metadata?.graduating_year || '')
-        setBio(user.user_metadata?.bio || '')
-        setPhoneNumber(user.user_metadata?.phone_number || '')
-        setProfileImageUri(user.user_metadata?.avatar_url || null)
+        // Fetch profile data from profiles table
+        const { data: profileData, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+        
+        if (error) {
+          console.error('Error fetching profile:', error)
+        } else if (profileData) {
+          setFullName(profileData.full_name || '')
+          setMajor(profileData.major || '')
+          setCollegeId(profileData.college_id || '')
+          setGraduatingYear(profileData.graduating_year || '')
+          setBio(profileData.bio || '')
+          setPhoneNumber(profileData.phone_number || '')
+          setProfileImageUri(profileData.avatar_url || null)
+        }
       }
     } catch (error) {
       console.error('Error fetching user profile:', error)
@@ -130,20 +162,7 @@ export default function EditProfileScreen({ navigation }: any) {
         avatarUrl = profileImageUri
       }
 
-      const { error } = await supabase.auth.updateUser({
-        data: {
-          full_name: fullName,
-          major: major,
-          graduating_year: graduatingYear,
-          bio: bio,
-          avatar_url: avatarUrl,
-          phone_number: phoneNumber,
-        }
-      })
-
-      if (error) throw error
-
-      // Mirror to public profiles table for cross-user visibility
+      // Save to profiles table
       if (user) {
         const { error: profileError } = await supabase
           .from('profiles')
@@ -151,6 +170,7 @@ export default function EditProfileScreen({ navigation }: any) {
             id: user.id,
             full_name: fullName,
             major: major || null,
+            college_id: collegeId || null,
             graduating_year: graduatingYear || null,
             bio: bio || null,
             avatar_url: avatarUrl || null,
@@ -212,8 +232,53 @@ export default function EditProfileScreen({ navigation }: any) {
                 value={major}
                 onChangeText={setMajor}
                 autoCorrect={false}
-                autoCapitalize="none"
+                autoCapitalize="words"
+                spellCheck={false}
               />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>College *</Text>
+              <View style={styles.collegeList}>
+                {colleges.map((college) => (
+                  <TouchableOpacity
+                    key={college.id}
+                    style={[
+                      styles.collegeOption,
+                      { 
+                        backgroundColor: collegeId === college.id ? theme.primary : theme.surface,
+                        borderColor: collegeId === college.id ? theme.primary : theme.border
+                      }
+                    ]}
+                    onPress={() => setCollegeId(college.id)}
+                  >
+                    {college.logo_url && (
+                      <Image 
+                        source={{ uri: college.logo_url }} 
+                        style={styles.collegeLogo}
+                        resizeMode="contain"
+                      />
+                    )}
+                    <View style={styles.collegeInfo}>
+                      <Text style={[
+                        styles.collegeName,
+                        { color: collegeId === college.id ? theme.buttonText : theme.text }
+                      ]}>
+                        {college.name}
+                      </Text>
+                      <Text style={[
+                        styles.collegeShortName,
+                        { color: collegeId === college.id ? theme.buttonText : theme.textSecondary }
+                      ]}>
+                        {college.short_name}
+                      </Text>
+                    </View>
+                    {collegeId === college.id && (
+                      <Ionicons name="checkmark-circle" size={24} color={theme.buttonText} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
 
             <View style={styles.inputGroup}>
@@ -380,5 +445,32 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 18,
     fontWeight: '600',
+  },
+  collegeList: {
+    marginTop: 8,
+  },
+  collegeOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    marginBottom: 12,
+  },
+  collegeLogo: {
+    width: 40,
+    height: 40,
+    marginRight: 12,
+  },
+  collegeInfo: {
+    flex: 1,
+  },
+  collegeName: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  collegeShortName: {
+    fontSize: 14,
   },
 })

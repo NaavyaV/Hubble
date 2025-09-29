@@ -152,11 +152,19 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
         }
       }
 
+      // Get user's college_id from profile
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('college_id')
+        .eq('id', user.id)
+        .single()
+
       // Create event
       const { data: event, error: eventError } = await supabase
         .from('events')
         .insert({
           host_id: user.id,
+          college_id: profileData?.college_id || null,
           title: title.trim(),
           description: description.trim() || null,
           event_date: eventDate.toISOString().split('T')[0],
@@ -246,6 +254,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                 placeholderTextColor={theme.inputPlaceholder}
                 value={title}
                 onChangeText={setTitle}
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
@@ -259,6 +269,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                 onChangeText={setDescription}
                 multiline
                 numberOfLines={4}
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
@@ -270,6 +282,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                 placeholderTextColor={theme.inputPlaceholder}
                 value={location}
                 onChangeText={setLocation}
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
@@ -311,6 +325,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                   value={maxAttendees}
                   onChangeText={setMaxAttendees}
                   keyboardType="numeric"
+                  autoCorrect={false}
+                  spellCheck={false}
                 />
               </View>
             </View>

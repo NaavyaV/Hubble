@@ -1,7 +1,7 @@
-# UTD Hangouts - Mobile App Context
+# Hubble - Mobile App Context
 
 ## Overview
-**UTD Hangouts** is a React Native mobile application designed to connect students at the University of Texas at Dallas through social events and hangouts. The app serves as a mini social media platform specifically tailored for college students to discover, create, and participate in local events and activities.
+**Hubble** is a React Native mobile application designed to connect students at the University of Texas at Dallas through social events and hangouts. The app serves as a mini social media platform specifically tailored for college students to discover, create, and participate in local events and activities.
 
 ## Core Mission
 To facilitate meaningful connections among UTD students by providing a simple, intuitive platform for organizing and discovering social events, hangouts, and activities within the campus community.

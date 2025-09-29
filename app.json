@@ -17,7 +17,7 @@
       "icon": "./assets/icon.png",
       "color": "#3498db",
       "androidMode": "default",
-      "androidCollapsedTitle": "UTD Hangouts"
+      "androidCollapsedTitle": "Hubble"
     },
     "ios": {
       "supportsTablet": true,

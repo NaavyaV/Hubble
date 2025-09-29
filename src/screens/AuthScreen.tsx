@@ -76,7 +76,7 @@ export default function AuthScreen({ navigation }: any) {
             <View style={styles.content}>
               <View style={styles.logoContainer}>
                 <Ionicons name="calendar" size={64} color={theme.primary} />
-                <Text style={[styles.logoText, { color: theme.text }]}>UTD Hangouts</Text>
+                <Text style={[styles.logoText, { color: theme.text }]}>Hubble</Text>
                 <Text style={[styles.logoSubtext, { color: theme.textSecondary }]}>Connect with fellow students</Text>
               </View>
 
@@ -92,6 +92,7 @@ export default function AuthScreen({ navigation }: any) {
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
+                    spellCheck={false}
                   />
                 </View>
 
@@ -106,6 +107,7 @@ export default function AuthScreen({ navigation }: any) {
                     secureTextEntry
                     autoCapitalize="none"
                     autoCorrect={false}
+                    spellCheck={false}
                   />
                 </View>
 
@@ -135,7 +137,7 @@ export default function AuthScreen({ navigation }: any) {
       <View style={styles.welcomeContainer}>
         <View style={styles.logoContainer}>
           <Ionicons name="calendar" size={80} color={theme.primary} />
-          <Text style={[styles.welcomeTitle, { color: theme.text }]}>Welcome to UTD Hangouts</Text>
+          <Text style={[styles.welcomeTitle, { color: theme.text }]}>Welcome to Hubble</Text>
           <Text style={[styles.welcomeSubtext, { color: theme.textSecondary }]}>
             Connect with fellow students, discover events, and make lasting friendships on campus.
           </Text>

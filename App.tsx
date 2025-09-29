@@ -24,6 +24,7 @@ import EditEventScreen from './src/screens/EditEventScreen'
 import FriendsScreen from './src/screens/FriendsScreen'
 import EventInviteScreen from './src/screens/EventInviteScreen'
 import SettingsScreen from './src/screens/SettingsScreen'
+import NotificationSettingsScreen from './src/screens/NotificationSettingsScreen'
 
 type RootStackParamList = {
   Auth: undefined
@@ -36,6 +37,7 @@ type RootStackParamList = {
   EditEvent: { event: any }
   EventInvite: { invitedUsers: string[] }
   Settings: undefined
+  NotificationSettings: undefined
 }
 
 type MainTabParamList = {
@@ -372,6 +374,13 @@ function AppContent() {
               <Stack.Screen
                 name="Settings"
                 component={SettingsScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="NotificationSettings"
+                component={NotificationSettingsScreen}
                 options={{
                   headerShown: false,
                 }}

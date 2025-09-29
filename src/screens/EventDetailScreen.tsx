@@ -57,6 +57,7 @@ export default function EventDetailScreen() {
   const [selectedUser, setSelectedUser] = useState<any>(null)
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [hostProfile, setHostProfile] = useState<any>(null)
+  const [college, setCollege] = useState<any>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
 
@@ -65,6 +66,7 @@ export default function EventDetailScreen() {
       fetchCurrentUser()
       fetchAttendeesWithProfiles()
       fetchHostProfile()
+      fetchCollege()
     }
   }, [event?.id])
 
@@ -180,6 +182,23 @@ export default function EventDetailScreen() {
       setHostProfile(profile)
     } catch (error) {
       console.error('Error fetching host profile:', error)
+    }
+  }
+
+  const fetchCollege = async () => {
+    try {
+      if (event.college_id) {
+        const { data: collegeData, error } = await supabase
+          .from('colleges')
+          .select('*')
+          .eq('id', event.college_id)
+          .single()
+
+        if (error) throw error
+        setCollege(collegeData)
+      }
+    } catch (error) {
+      console.error('Error fetching college:', error)
     }
   }
 
@@ -325,6 +344,22 @@ export default function EventDetailScreen() {
 
         {/* Event Content */}
         <View style={styles.content}>
+          {/* College and Title */}
+          {college && (
+            <View style={styles.collegeRow}>
+              {college.logo_url && (
+                <Image 
+                  source={{ uri: college.logo_url }} 
+                  style={styles.collegeLogo}
+                  resizeMode="contain"
+                />
+              )}
+              <Text style={[styles.collegeName, { color: theme.textSecondary }]}>
+                {college.name}
+              </Text>
+            </View>
+          )}
+
           {/* Title and Privacy */}
           <View style={styles.titleRow}>
             <Text style={[styles.eventTitle, { color: theme.text }]}>{event.title}</Text>
@@ -608,6 +643,20 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     flex: 1,
+  },
+  collegeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  collegeLogo: {
+    width: 24,
+    height: 24,
+    marginRight: 8,
+  },
+  collegeName: {
+    fontSize: 16,
+    fontWeight: '500',
   },
   privacyBadge: {
     flexDirection: 'row',

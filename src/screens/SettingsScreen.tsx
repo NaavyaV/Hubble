@@ -97,42 +97,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Other Settings Sections */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Notifications</Text>
-          
-          <View style={styles.settingItem}>
-            <View style={styles.settingLeft}>
-              <Ionicons name="notifications" size={20} color={theme.textSecondary} />
-              <View style={styles.settingText}>
-                <Text style={styles.settingTitle}>Push Notifications</Text>
-                <Text style={styles.settingDescription}>Receive event updates and messages</Text>
-              </View>
-            </View>
-            <Switch
-              value={true}
-              onValueChange={() => {}}
-              trackColor={{ false: theme.border, true: theme.primary }}
-              thumbColor={theme.surface}
-            />
-          </View>
-
-          <View style={styles.settingItem}>
-            <View style={styles.settingLeft}>
-              <Ionicons name="mail" size={20} color={theme.textSecondary} />
-              <View style={styles.settingText}>
-                <Text style={styles.settingTitle}>Email Notifications</Text>
-                <Text style={styles.settingDescription}>Get updates via email</Text>
-              </View>
-            </View>
-            <Switch
-              value={false}
-              onValueChange={() => {}}
-              trackColor={{ false: theme.border, true: theme.primary }}
-              thumbColor={theme.surface}
-            />
-          </View>
-        </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Privacy</Text>

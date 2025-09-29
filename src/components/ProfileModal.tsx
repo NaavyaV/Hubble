@@ -24,6 +24,12 @@ interface ProfileModalProps {
     bio?: string
     avatar_url?: string
     phone_number?: string
+    college?: {
+      id: string
+      name: string
+      short_name: string
+      logo_url?: string
+    }
   } | null
 }
 
@@ -156,6 +162,21 @@ export default function ProfileModal({ isVisible, onClose, user }: ProfileModalP
               {user.full_name || 'User'}
             </Text>
 
+            {user.college && (
+              <View style={styles.collegeInfo}>
+                {user.college.logo_url && (
+                  <Image 
+                    source={{ uri: user.college.logo_url }} 
+                    style={styles.collegeLogo}
+                    resizeMode="contain"
+                  />
+                )}
+                <Text style={[styles.collegeName, { color: theme.textSecondary }]}>
+                  {user.college.name}
+                </Text>
+              </View>
+            )}
+
             {(user.major || user.graduating_year) && (
               <View style={styles.userInfo}>
                 {user.major && (
@@ -269,6 +290,21 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 8,
     textAlign: 'center',
+  },
+  collegeInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  collegeLogo: {
+    width: 20,
+    height: 20,
+    marginRight: 8,
+  },
+  collegeName: {
+    fontSize: 16,
+    fontWeight: '500',
   },
   userInfo: {
     alignItems: 'center',

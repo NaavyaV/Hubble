@@ -259,20 +259,34 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
     return event.privacy === 'friends_only'
   }
 
+  const canSavePrivacyChange = () => {
+    // Allow saving if privacy hasn't changed
+    if (privacy === event.privacy) return true
+    
+    // Allow saving if changing from public to friends_only (can always make private)
+    if (event.privacy === 'public' && privacy === 'friends_only') return true
+    
+    // Allow saving if changing from friends_only to public (can always make public)
+    if (event.privacy === 'friends_only' && privacy === 'public') return true
+    
+    return false
+  }
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={24} color={theme.text} />
+        </TouchableOpacity>
+        <Text style={[styles.title, { color: theme.text }]}>Edit Event</Text>
+        <View style={styles.placeholder} />
+      </View>
+      
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingView}
       >
         <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-          <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
-            <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-              <Ionicons name="arrow-back" size={24} color={theme.text} />
-            </TouchableOpacity>
-            <Text style={[styles.title, { color: theme.text }]}>Edit Event</Text>
-            <View style={styles.placeholder} />
-          </View>
 
           <View style={styles.form}>
             {/* Event Image */}
@@ -292,26 +306,25 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
 
             {/* Privacy Settings */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Event Privacy</Text>
-              <View style={styles.privacyContainer}>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Event Privacy</Text>
+              <View style={[styles.privacyContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                 <TouchableOpacity
                   style={[
                     styles.privacyOption,
-                    privacy === 'public' && styles.privacyOptionSelected,
-                    !canChangeToPublic() && styles.privacyOptionDisabled
+                    { backgroundColor: theme.surface, borderBottomColor: theme.border },
+                    privacy === 'public' && { backgroundColor: theme.primaryLight }
                   ]}
-                  onPress={() => canChangeToPublic() && setPrivacy('public')}
-                  disabled={!canChangeToPublic()}
+                  onPress={() => setPrivacy('public')}
                 >
                   <Ionicons
                     name={privacy === 'public' ? 'radio-button-on' : 'radio-button-off'}
                     size={20}
-                    color={privacy === 'public' ? '#3498db' : '#7f8c8d'}
+                    color={privacy === 'public' ? theme.primary : theme.textSecondary}
                   />
                   <Text style={[
                     styles.privacyText,
-                    privacy === 'public' && styles.privacyTextSelected,
-                    !canChangeToPublic() && styles.privacyTextDisabled
+                    { color: theme.text },
+                    privacy === 'public' && { color: theme.primaryDark }
                   ]}>
                     Public
                   </Text>
@@ -320,34 +333,28 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                 <TouchableOpacity
                   style={[
                     styles.privacyOption,
-                    privacy === 'friends_only' && styles.privacyOptionSelected,
-                    !canChangeToPrivate() && styles.privacyOptionDisabled
+                    { backgroundColor: theme.surface },
+                    privacy === 'friends_only' && { backgroundColor: theme.primaryLight }
                   ]}
-                  onPress={() => canChangeToPrivate() && setPrivacy('friends_only')}
-                  disabled={!canChangeToPrivate()}
+                  onPress={() => setPrivacy('friends_only')}
                 >
                   <Ionicons
                     name={privacy === 'friends_only' ? 'radio-button-on' : 'radio-button-off'}
                     size={20}
-                    color={privacy === 'friends_only' ? '#3498db' : '#7f8c8d'}
+                    color={privacy === 'friends_only' ? theme.primary : theme.textSecondary}
                   />
                   <Text style={[
                     styles.privacyText,
-                    privacy === 'friends_only' && styles.privacyTextSelected,
-                    !canChangeToPrivate() && styles.privacyTextDisabled
+                    { color: theme.text },
+                    privacy === 'friends_only' && { color: theme.primaryDark }
                   ]}>
                     Friends Only
                   </Text>
                 </TouchableOpacity>
               </View>
-              {!canChangeToPublic() && (
-                <Text style={styles.disabledNote}>
-                  Cannot change from private to public after event creation
-                </Text>
-              )}
-              {!canChangeToPrivate() && (
-                <Text style={styles.disabledNote}>
-                  Cannot change from public to private after event creation
+              {!canSavePrivacyChange() && privacy !== event.privacy && (
+                <Text style={[styles.disabledNote, { color: theme.error }]}>
+                  Privacy changes are not allowed for this event
                 </Text>
               )}
             </View>
@@ -355,18 +362,18 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
             {/* Invite People (only for friends only events) */}
             {privacy === 'friends_only' && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Invite People</Text>
-                <TouchableOpacity style={styles.inviteButton} onPress={handleInviteUsers}>
-                  <Ionicons name="people" size={20} color="#3498db" />
-                  <Text style={styles.inviteButtonText}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Invite People</Text>
+                <TouchableOpacity style={[styles.inviteButton, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={handleInviteUsers}>
+                  <Ionicons name="people" size={20} color={theme.primary} />
+                  <Text style={[styles.inviteButtonText, { color: theme.text }]}>
                     {invitedUsers.length > 0 
                       ? `${invitedUsers.length} people invited` 
                       : 'Select people to invite'
                     }
                   </Text>
-                  <Ionicons name="chevron-forward" size={20} color="#7f8c8d" />
+                  <Ionicons name="chevron-forward" size={20} color={theme.textSecondary} />
                 </TouchableOpacity>
-                <Text style={styles.inviteNote}>
+                <Text style={[styles.inviteNote, { color: theme.textSecondary }]}>
                   You can add more people but cannot remove those already invited
                 </Text>
               </View>
@@ -381,6 +388,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                 onChangeText={setTitle}
                 placeholder="Enter event title"
                 placeholderTextColor={theme.inputPlaceholder}
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
@@ -396,6 +405,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
@@ -408,6 +419,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                 onChangeText={setLocation}
                 placeholder="Where is the event?"
                 placeholderTextColor={theme.inputPlaceholder}
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
@@ -421,26 +434,30 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                 placeholder="Leave empty for unlimited"
                 placeholderTextColor={theme.inputPlaceholder}
                 keyboardType="numeric"
+                autoCorrect={false}
+                spellCheck={false}
               />
             </View>
 
             {/* Tags */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Tags</Text>
-              <Text style={styles.tagsDescription}>Select relevant tags for your event</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Tags</Text>
+              <Text style={[styles.tagsDescription, { color: theme.textSecondary }]}>Select relevant tags for your event</Text>
               <View style={styles.tagsContainer}>
                 {predefinedTags.map((tag) => (
                   <TouchableOpacity
                     key={tag}
                     style={[
                       styles.tagButton,
-                      selectedTags.includes(tag) && styles.tagButtonSelected
+                      { backgroundColor: theme.surface, borderColor: theme.border },
+                      selectedTags.includes(tag) && { backgroundColor: theme.primary, borderColor: theme.primary }
                     ]}
                     onPress={() => toggleTag(tag)}
                   >
                     <Text style={[
                       styles.tagText,
-                      selectedTags.includes(tag) && styles.tagTextSelected
+                      { color: theme.textSecondary },
+                      selectedTags.includes(tag) && { color: theme.buttonText }
                     ]}>
                       {tag}
                     </Text>
@@ -451,13 +468,13 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
 
             {/* Event Date */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Date</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Date</Text>
               <TouchableOpacity
-                style={styles.dateTimeButton}
+                style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
                 onPress={toggleDatePicker}
               >
-                <Ionicons name="calendar" size={20} color="#3498db" />
-                <Text style={styles.dateTimeText}>{formatDate(eventDate)}</Text>
+                <Ionicons name="calendar" size={20} color={theme.primary} />
+                <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatDate(eventDate)}</Text>
               </TouchableOpacity>
               {showDatePicker && (
                 <DateTimePicker
@@ -466,19 +483,21 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   onChange={handleDateChange}
                   minimumDate={new Date()}
+                  textColor={theme.text}
+                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
                 />
               )}
             </View>
 
             {/* Start Time */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Start Time</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Start Time</Text>
               <TouchableOpacity
-                style={styles.dateTimeButton}
+                style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
                 onPress={toggleStartTimePicker}
               >
-                <Ionicons name="time" size={20} color="#3498db" />
-                <Text style={styles.dateTimeText}>{formatTime(startTime)}</Text>
+                <Ionicons name="time" size={20} color={theme.primary} />
+                <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(startTime)}</Text>
               </TouchableOpacity>
               {showStartTimePicker && (
                 <DateTimePicker
@@ -486,6 +505,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                   mode="time"
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   onChange={handleStartTimeChange}
+                  textColor={theme.text}
+                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
                 />
               )}
             </View>
@@ -493,22 +514,22 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
             {/* End Time */}
             <View style={styles.section}>
               <View style={styles.endTimeHeader}>
-                <Text style={styles.sectionTitle}>End Time</Text>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>End Time</Text>
                 <Switch
                   value={hasEndTime}
                   onValueChange={setHasEndTime}
-                  trackColor={{ false: '#e1e8ed', true: '#3498db' }}
-                  thumbColor={hasEndTime ? '#ffffff' : '#f4f3f4'}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                  thumbColor={hasEndTime ? theme.buttonText : theme.textSecondary}
                 />
               </View>
               {hasEndTime && (
                 <>
                   <TouchableOpacity
-                    style={styles.dateTimeButton}
+                    style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
                     onPress={toggleEndTimePicker}
                   >
-                    <Ionicons name="time" size={20} color="#3498db" />
-                    <Text style={styles.dateTimeText}>{formatTime(endTime)}</Text>
+                    <Ionicons name="time" size={20} color={theme.primary} />
+                    <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(endTime)}</Text>
                   </TouchableOpacity>
                   {showEndTimePicker && (
                     <DateTimePicker
@@ -516,6 +537,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                       mode="time"
                       display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                       onChange={handleEndTimeChange}
+                      textColor={theme.text}
+                      themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
                     />
                   )}
                 </>
@@ -527,10 +550,10 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
               style={[
                 styles.submitButton,
                 { backgroundColor: theme.buttonPrimary },
-                loading && { backgroundColor: theme.textTertiary }
+                (loading || !canSavePrivacyChange()) && { backgroundColor: theme.textTertiary }
               ]}
               onPress={handleUpdateEvent}
-              disabled={loading}
+              disabled={loading || !canSavePrivacyChange()}
             >
               <Text style={[styles.submitButtonText, { color: theme.buttonText }]}>
                 {loading ? 'Updating Event...' : 'Update Event'}
@@ -559,6 +582,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 20,
     borderBottomWidth: 1,
+    zIndex: 1000,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   backButton: {
     padding: 4,
@@ -625,10 +657,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   privacyOptionSelected: {
-    backgroundColor: '#e3f2fd',
+    // Colors applied inline with theme
   },
   privacyOptionDisabled: {
-    opacity: 0.6,
+    // Colors applied inline with theme
   },
   privacyText: {
     fontSize: 16,
@@ -636,14 +668,13 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   privacyTextSelected: {
-    color: '#3498db',
+    // Colors applied inline with theme
   },
   privacyTextDisabled: {
-    color: '#7f8c8d',
+    // Colors applied inline with theme
   },
   disabledNote: {
     fontSize: 12,
-    color: '#e74c3c',
     marginTop: 8,
     fontStyle: 'italic',
   },
@@ -681,15 +712,14 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   tagButtonSelected: {
-    backgroundColor: '#3498db',
-    borderColor: '#3498db',
+    // Colors applied inline with theme
   },
   tagText: {
     fontSize: 14,
     fontWeight: '500',
   },
   tagTextSelected: {
-    color: 'white',
+    // Colors applied inline with theme
   },
   dateTimeButton: {
     flexDirection: 'row',
