@@ -224,6 +224,10 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      {/* Slim Sticky Header */}
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>Create Event</Text>
+      </View>
 
       <KeyboardAvoidingView
         style={styles.keyboardView}
@@ -446,6 +450,27 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  header: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    letterSpacing: -0.5,
   },
   keyboardView: {
     flex: 1,

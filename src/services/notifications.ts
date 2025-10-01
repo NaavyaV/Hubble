@@ -16,7 +16,7 @@ Notifications.setNotificationHandler({
 })
 
 export interface NotificationData {
-  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation'
+  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation' | 'maybe_spot_removed' | 'maybe_event_reminder'
   eventId?: string
   userId?: string
   title: string
@@ -121,7 +121,7 @@ class NotificationService {
     }
   }
 
-  // Schedule event reminder notification
+  // Schedule event reminder notification for all going attendees
   async scheduleEventReminder(eventId: string, eventTitle: string, eventDate: Date): Promise<void> {
     try {
       const reminderTime = new Date(eventDate.getTime() - 15 * 60 * 1000) // 15 minutes before
@@ -132,23 +132,69 @@ class NotificationService {
         return
       }
 
-      // Use setTimeout for now as a workaround for the trigger type issue
-      const delay = reminderTime.getTime() - now.getTime()
+      // Schedule reminder for all going attendees
+      await this.scheduleReminderForAttendees(eventId, eventTitle, reminderTime, 'going', 'Event Starting Soon!', 'starts in 15 minutes')
       
-      setTimeout(async () => {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Event Starting Soon!',
-            body: `${eventTitle} starts in 15 minutes`,
-            data: { eventId, type: 'event_reminder' }
-          },
-          trigger: null // Send immediately when timeout fires
-        })
-      }, delay)
+      // Schedule reminder for all maybe attendees
+      await this.scheduleReminderForAttendees(eventId, eventTitle, reminderTime, 'maybe', 'Event Starting Soon - Maybe Status', 'starts in 15 minutes. You\'re marked as "maybe" - decide if you can attend!')
 
-      console.log(`Scheduled reminder for event ${eventId} at ${reminderTime}`)
+      console.log(`Scheduled reminders for event ${eventId} at ${reminderTime}`)
     } catch (error) {
       console.error('Error scheduling event reminder:', error)
+    }
+  }
+
+  // Schedule reminder notifications for specific attendee types
+  private async scheduleReminderForAttendees(
+    eventId: string, 
+    eventTitle: string, 
+    reminderTime: Date, 
+    attendeeStatus: 'going' | 'maybe',
+    title: string,
+    bodySuffix: string
+  ): Promise<void> {
+    try {
+      const now = new Date()
+      const delay = reminderTime.getTime() - now.getTime()
+      
+      if (delay <= 0) {
+        console.log('Event is too soon to schedule reminder')
+        return
+      }
+
+      // Get all attendees with the specified status
+      const { data: attendees } = await supabase
+        .from('event_attendees')
+        .select('user_id')
+        .eq('event_id', eventId)
+        .eq('status', attendeeStatus)
+
+      if (!attendees || attendees.length === 0) {
+        console.log(`No ${attendeeStatus} attendees to schedule reminders for`)
+        return
+      }
+
+      // Schedule notification for each attendee
+      setTimeout(async () => {
+        for (const attendee of attendees) {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: title,
+              body: `${eventTitle} ${bodySuffix}`,
+              data: { 
+                eventId, 
+                type: attendeeStatus === 'maybe' ? 'maybe_event_reminder' : 'event_reminder',
+                userId: attendee.user_id
+              }
+            },
+            trigger: null // Send immediately when timeout fires
+          })
+        }
+      }, delay)
+
+      console.log(`Scheduled ${attendeeStatus} reminders for ${attendees.length} attendees for event ${eventId}`)
+    } catch (error) {
+      console.error(`Error scheduling ${attendeeStatus} reminders:`, error)
     }
   }
 
@@ -242,6 +288,31 @@ class NotificationService {
       console.log(`Sent ${action} notifications to ${attendees.length} attendees for event ${eventId}`)
     } catch (error) {
       console.error(`Error sending event ${action} notifications:`, error)
+    }
+  }
+
+  // Send maybe spot removal notification
+  async sendMaybeSpotRemovedNotification(
+    eventId: string,
+    eventTitle: string,
+    userId: string
+  ): Promise<void> {
+    try {
+      await this.sendNotification({
+        type: 'maybe_spot_removed',
+        eventId: eventId,
+        userId: userId,
+        title: 'Spot Removed from Event',
+        body: `Someone confirmed they're going to "${eventTitle}", so your maybe spot was removed.`,
+        data: {
+          event_title: eventTitle,
+          event_id: eventId
+        }
+      })
+
+      console.log(`Sent maybe spot removed notification to user ${userId} for event ${eventId}`)
+    } catch (error) {
+      console.error('Error sending maybe spot removed notification:', error)
     }
   }
 

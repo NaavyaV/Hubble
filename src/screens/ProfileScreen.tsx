@@ -226,7 +226,8 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   profileCard: {
     backgroundColor: theme.card,
-    margin: 16,
+    margin: 20,
+    marginBottom: 12,
     padding: 20,
     borderRadius: 12,
     flexDirection: 'row',
@@ -287,8 +288,8 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   bioSection: {
     backgroundColor: theme.card,
-    margin: 16,
-    marginTop: 0,
+    marginHorizontal: 20,
+    marginBottom: 12,
     padding: 16,
     borderRadius: 12,
     shadowColor: theme.shadow,
@@ -313,7 +314,8 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   menuContainer: {
     backgroundColor: theme.card,
-    margin: 16,
+    marginHorizontal: 20,
+    marginBottom: 12,
     borderRadius: 12,
     shadowColor: theme.shadow,
     shadowOffset: {
@@ -345,7 +347,8 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   signOutButton: {
     backgroundColor: theme.error,
-    margin: 16,
+    marginHorizontal: 20,
+    marginBottom: 12,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',

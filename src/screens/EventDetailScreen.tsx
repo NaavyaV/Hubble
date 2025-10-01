@@ -16,6 +16,7 @@ import ProfileModal from '../components/ProfileModal'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
+import notificationService from '../services/notifications'
 
 interface EventAttendee {
   id: string
@@ -229,6 +230,44 @@ export default function EventDetailScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
+      // Check if event is full and user is trying to go
+      if (status === 'going' && isEventFull() && userAttendance !== 'going') {
+        // Check if there are any maybe attendees that can be converted
+        const maybeAttendees = attendees.filter(a => a.status === 'maybe')
+        
+        if (maybeAttendees.length > 0) {
+          // Show alert about taking a maybe's spot
+          Alert.alert(
+            'Taking Someone\'s Spot',
+            'This event is full, but someone marked as "maybe" will lose their spot if you confirm "going". Only choose "going" if you\'re sure you can attend.',
+            [
+              {
+                text: 'Cancel',
+                style: 'cancel'
+              },
+              {
+                text: 'Confirm Going',
+                style: 'default',
+                onPress: () => performAttendanceChange(status)
+              }
+            ]
+          )
+          return
+        }
+      }
+
+      await performAttendanceChange(status)
+    } catch (error) {
+      console.error('Error updating attendance:', error)
+      Alert.alert('Error', 'Failed to update attendance')
+    }
+  }
+
+  const performAttendanceChange = async (status: 'going' | 'maybe' | 'not_going') => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
       // Remove existing attendance record
       await supabase
         .from('event_attendees')
@@ -247,6 +286,11 @@ export default function EventDetailScreen() {
 
       if (error) throw error
 
+      // If someone is going and event is full, remove one maybe attendee
+      if (status === 'going' && isEventFull()) {
+        await convertMaybeToNotGoing()
+      }
+
       setUserAttendance(status)
       
       // Refresh attendees list
@@ -256,6 +300,37 @@ export default function EventDetailScreen() {
     } catch (error) {
       console.error('Error updating attendance:', error)
       Alert.alert('Error', 'Failed to update attendance')
+    }
+  }
+
+  const convertMaybeToNotGoing = async () => {
+    try {
+      // Get all maybe attendees
+      const { data: maybeAttendees } = await supabase
+        .from('event_attendees')
+        .select('*')
+        .eq('event_id', event.id)
+        .eq('status', 'maybe')
+        .order('created_at', { ascending: true }) // Remove oldest maybe first
+
+      if (maybeAttendees && maybeAttendees.length > 0) {
+        // Convert the oldest maybe to not_going
+        const oldestMaybe = maybeAttendees[0]
+        
+        await supabase
+          .from('event_attendees')
+          .update({ status: 'not_going' })
+          .eq('id', oldestMaybe.id)
+
+        // Send notification to the person who lost their spot
+        await notificationService.sendMaybeSpotRemovedNotification(
+          event.id,
+          event.title,
+          oldestMaybe.user_id
+        )
+      }
+    } catch (error) {
+      console.error('Error converting maybe to not going:', error)
     }
   }
 
@@ -473,27 +548,72 @@ export default function EventDetailScreen() {
           {!isHost && (
             <View style={styles.attendanceSection}>
               <Text style={styles.sectionTitle}>Your Attendance</Text>
-              {isEventFull() ? (
+              {isEventFull() && !userAttendance ? (
                 <View style={[styles.eventFullContainer, { backgroundColor: theme.error + '20', borderColor: theme.error }]}>
                   <View style={styles.eventFullHeader}>
                     <Ionicons name="people" size={24} color={theme.error} />
                     <Text style={[styles.eventFullTitle, { color: theme.error }]}>Event is Full</Text>
                   </View>
                   <Text style={[styles.eventFullMessage, { color: theme.text }]}>
-                    This event has reached its maximum capacity. Contact the host if you'd like to join:
+                    This event has reached its maximum capacity. You can still join as "maybe" and will be notified if spots open up.
                   </Text>
-                  {hostProfile?.phone_number && showHostPhone && (
-                    <TouchableOpacity style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
-                      <Ionicons name="call" size={16} color={theme.primary} />
-                      <Text style={[styles.contactHostText, { color: theme.primary }]}>
-                        {hostProfile.phone_number}
+                  <View style={styles.attendanceButtons}>
+                    <TouchableOpacity
+                      style={[
+                        styles.attendanceButton,
+                        { backgroundColor: theme.surface, borderColor: theme.border },
+                        userAttendance === 'maybe' && { backgroundColor: theme.primary, borderColor: theme.primary }
+                      ]}
+                      onPress={() => handleAttendanceChange('maybe')}
+                    >
+                      <Ionicons 
+                        name="help-circle" 
+                        size={20} 
+                        color={userAttendance === 'maybe' ? theme.buttonText : theme.warning} 
+                      />
+                      <Text style={[
+                        styles.attendanceButtonText,
+                        { color: theme.text },
+                        userAttendance === 'maybe' && { color: theme.buttonText }
+                      ]}>
+                        Maybe
                       </Text>
                     </TouchableOpacity>
-                  )}
-                  {(!hostProfile?.phone_number || !showHostPhone) && (
-                    <Text style={[styles.noContactText, { color: theme.textSecondary }]}>
-                      Host contact information not available
-                    </Text>
+                    
+                    <TouchableOpacity
+                      style={[
+                        styles.attendanceButton,
+                        { backgroundColor: theme.surface, borderColor: theme.border },
+                        userAttendance === 'not_going' && { backgroundColor: theme.primary, borderColor: theme.primary }
+                      ]}
+                      onPress={() => handleAttendanceChange('not_going')}
+                    >
+                      <Ionicons 
+                        name="close-circle" 
+                        size={20} 
+                        color={userAttendance === 'not_going' ? theme.buttonText : theme.error} 
+                      />
+                      <Text style={[
+                        styles.attendanceButtonText,
+                        { color: theme.text },
+                        userAttendance === 'not_going' && { color: theme.buttonText }
+                      ]}>
+                        Not Going
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  {hostProfile?.phone_number && showHostPhone && (
+                    <View style={styles.contactHostSection}>
+                      <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
+                        Or contact the host directly:
+                      </Text>
+                      <TouchableOpacity style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
+                        <Ionicons name="call" size={16} color={theme.primary} />
+                        <Text style={[styles.contactHostText, { color: theme.primary }]}>
+                          {hostProfile.phone_number}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
                 </View>
               ) : (
@@ -817,6 +937,16 @@ const styles = StyleSheet.create({
     color: '#2c3e50',
     lineHeight: 20,
     marginBottom: 12,
+  },
+  contactHostSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  contactHostLabel: {
+    fontSize: 14,
+    marginBottom: 8,
   },
   contactHostButton: {
     flexDirection: 'row',

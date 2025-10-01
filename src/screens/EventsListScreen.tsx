@@ -21,8 +21,9 @@ import { useTheme } from '../context/ThemeContext'
 
 type EventListItem = EventWithAttendees & { goingCount: number; maybeCount: number; tags?: string[] }
 
-type FilterType = 'going' | 'today' | 'week' | 'month' | 'all'
+type FilterType = 'my_events' | 'today' | 'week' | 'month' | 'all'
 type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
+type TimeFilterType = 'current' | 'past' | 'photo_gallery'
 
 interface AdvancedFilters {
   friendsOnly: boolean
@@ -54,6 +55,7 @@ export default function EventsListScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [activeFilter, setActiveFilter] = useState<FilterType>('all')
+  const [timeFilter, setTimeFilter] = useState<TimeFilterType>('current')
   const [hostProfiles, setHostProfiles] = useState<Record<string, any>>({})
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userAttendances, setUserAttendances] = useState<Record<string, string>>({})
@@ -83,7 +85,7 @@ export default function EventsListScreen() {
 
   useEffect(() => {
     filterEvents(events, activeFilter)
-  }, [activeFilter, events, userAttendances, advancedFilters, sortBy])
+  }, [activeFilter, timeFilter, events, userAttendances, advancedFilters, sortBy])
 
   const onRefresh = () => {
     setRefreshing(true)
@@ -302,6 +304,35 @@ export default function EventsListScreen() {
     const filterEvents = (eventsList: EventListItem[], filter: FilterType) => {
     let filtered = [...eventsList]
 
+    // Apply time filter first (current vs past)
+    const now = new Date()
+    if (timeFilter === 'current') {
+      filtered = filtered.filter(event => {
+        const eventStart = new Date(event.event_date + ' ' + event.start_time)
+        const eventEnd = event.end_time 
+          ? new Date(event.event_date + ' ' + event.end_time)
+          : new Date(eventStart.getTime() + 12 * 60 * 60 * 1000) // 12 hours after start if no end time
+        
+        return eventEnd >= now
+      })
+    } else if (timeFilter === 'past') {
+      // Calculate 30 days ago
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+      
+      filtered = filtered.filter(event => {
+        const eventStart = new Date(event.event_date + ' ' + event.start_time)
+        const eventEnd = event.end_time 
+          ? new Date(event.event_date + ' ' + event.end_time)
+          : new Date(eventStart.getTime() + 12 * 60 * 60 * 1000) // 12 hours after start if no end time
+        
+        // Event must have ended and be within the last 30 days
+        return eventEnd < now && eventStart >= thirtyDaysAgo
+      })
+      
+      // For past events, only show events where user was going
+      filtered = filtered.filter(event => userAttendances[event.id] === 'going')
+    }
+
     // Apply advanced filters
     if (advancedFilters.friendsOnly) {
       filtered = filtered.filter(event => 
@@ -333,8 +364,16 @@ export default function EventsListScreen() {
 
     // Apply main filter
     switch (filter) {
-      case 'going':
-        filtered = filtered.filter(event => userAttendances[event.id] === 'going')
+      case 'my_events':
+        if (timeFilter === 'past') {
+          // In past events, only show events where user was going
+          filtered = filtered.filter(event => userAttendances[event.id] === 'going')
+        } else {
+          // In current events, show both going and maybe
+          filtered = filtered.filter(event => 
+            userAttendances[event.id] === 'going' || userAttendances[event.id] === 'maybe'
+          )
+        }
         break
       case 'today':
         const today = new Date().toISOString().split('T')[0]
@@ -471,7 +510,7 @@ export default function EventsListScreen() {
             )}
           </View>
 
-          {/* Show attendance status if user is going */}
+          {/* Show attendance status if user is going or maybe */}
           {userAttendance === 'going' && (
             <View style={styles.attendanceStatus}>
               <Ionicons name="checkmark-circle" size={16} color="#27ae60" />
@@ -493,13 +532,15 @@ export default function EventsListScreen() {
     <TouchableOpacity
       style={[
         styles.filterButton,
-        activeFilter === filter && styles.filterButtonActive
+        activeFilter === filter && styles.filterButtonActive,
+        filter === 'my_events' && activeFilter === filter && styles.myEventsButtonActive
       ]}
       onPress={() => setActiveFilter(filter)}
     >
       <Text style={[
         styles.filterButtonText,
-        activeFilter === filter && styles.filterButtonTextActive
+        activeFilter === filter && styles.filterButtonTextActive,
+        filter === 'my_events' && activeFilter === filter && styles.myEventsTextActive
       ]}>
         {label}
       </Text>
@@ -520,55 +561,143 @@ export default function EventsListScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Filter container with integrated filter button */}
-      <View style={styles.filterContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterContent}
-          scrollEnabled={true}
-          bounces={false}
+      {/* Time Filter Bar */}
+      <View style={styles.timeFilterContainer}>
+        <TouchableOpacity
+          style={[
+            styles.timeFilterButton,
+            timeFilter === 'current' && styles.timeFilterButtonActive
+          ]}
+          onPress={() => {
+            setTimeFilter('current')
+            setActiveFilter('all') // Reset to default filter for current events
+          }}
         >
-          {renderFilterButton('all', 'All')}
-          {renderFilterButton('going', 'Going')}
-          {renderFilterButton('today', 'Today')}
-          {renderFilterButton('week', 'This Week')}
-          {renderFilterButton('month', 'This Month')}
-        </ScrollView>
-        
-        {/* Filter button with fade effect */}
-        <View style={styles.filterButtonContainer}>
-          <LinearGradient
-            colors={[`${theme.headerBackground}00`, theme.headerBackground]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.fadeOverlay}
-          />
-          <TouchableOpacity
-            style={styles.filterIcon}
-            onPress={() => setShowFilterModal(true)}
+          <Text 
+            style={[
+              styles.timeFilterText,
+              timeFilter === 'current' && styles.timeFilterTextActive
+            ]}
+            numberOfLines={1}
           >
-            <Ionicons name="options" size={20} color={theme.textSecondary} />
-          </TouchableOpacity>
-        </View>
+            Coming Events
+          </Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity
+          style={[
+            styles.timeFilterButton,
+            timeFilter === 'past' && styles.timeFilterButtonActive
+          ]}
+          onPress={() => {
+            setTimeFilter('past')
+            setActiveFilter('all') // Reset to default filter for past events
+          }}
+        >
+          <Text 
+            style={[
+              styles.timeFilterText,
+              timeFilter === 'past' && styles.timeFilterTextActive
+            ]}
+            numberOfLines={1}
+          >
+            Past Events
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.photoGalleryIcon}
+          onPress={() => {
+            setTimeFilter('photo_gallery')
+          }}
+        >
+          <Ionicons 
+            name="images-outline" 
+            size={24} 
+            color={timeFilter === 'photo_gallery' ? theme.primary : theme.textSecondary} 
+          />
+        </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={filteredEvents}
-        renderItem={renderEventCard}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.eventsList}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[theme.primary]}
-            tintColor={theme.primary}
-          />
-        }
-        showsVerticalScrollIndicator={false}
-        style={styles.eventsFlatList}
-      />
+      {/* Filter container with integrated filter button - only for coming events */}
+      {timeFilter === 'current' && (
+        <View style={styles.filterContainer}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filterContent}
+            scrollEnabled={true}
+            bounces={false}
+          >
+            {renderFilterButton('my_events', 'My Events')}
+            {renderFilterButton('all', 'All')}
+            {renderFilterButton('today', 'Today')}
+            {renderFilterButton('week', 'This Week')}
+            {renderFilterButton('month', 'This Month')}
+          </ScrollView>
+        
+          {/* Filter button with fade effect */}
+          <View style={styles.filterButtonContainer}>
+            <LinearGradient
+              colors={[`${theme.headerBackground}00`, theme.headerBackground]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.fadeOverlay}
+            />
+            <TouchableOpacity
+              style={styles.filterIcon}
+              onPress={() => setShowFilterModal(true)}
+            >
+              <Ionicons name="options" size={20} color={theme.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {timeFilter === 'photo_gallery' ? (
+        // Photo Gallery Content
+        <View style={styles.photoGalleryContainer}>
+          <View style={styles.photoGalleryContent}>
+            <Ionicons name="images-outline" size={64} color={theme.textSecondary} />
+            <Text style={styles.photoGalleryTitle}>Photo Gallery</Text>
+            <Text style={styles.photoGallerySubtitle}>
+              Photos from your events will appear here
+            </Text>
+          </View>
+        </View>
+      ) : (
+        // Events List
+        <FlatList
+          data={filteredEvents}
+          renderItem={renderEventCard}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={[
+            styles.eventsList,
+            filteredEvents.length === 0 && timeFilter === 'past' && styles.emptyStateContainer
+          ]}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+          style={styles.eventsFlatList}
+          ListEmptyComponent={
+            timeFilter === 'past' ? (
+              <View style={styles.pastEventsEmptyState}>
+                <Ionicons name="calendar-outline" size={48} color={theme.textSecondary} />
+                <Text style={styles.pastEventsEmptyTitle}>No Recent Events</Text>
+                <Text style={styles.pastEventsEmptyMessage}>
+                  You haven't attended any events in the past 30 days
+                </Text>
+              </View>
+            ) : null
+          }
+        />
+      )}
 
       
       
@@ -766,6 +895,47 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 16,
     color: theme.textSecondary,
   },
+  timeFilterContainer: {
+    backgroundColor: theme.headerBackground,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.headerBorder,
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  timeFilterButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginHorizontal: 4,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  photoGalleryIcon: {
+    padding: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  timeFilterButtonActive: {
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
+  },
+  timeFilterText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: theme.textSecondary,
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+  timeFilterTextActive: {
+    color: 'white',
+  },
   filterContainer: {
     backgroundColor: theme.headerBackground,
     borderBottomWidth: 1,
@@ -830,6 +1000,60 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   filterButtonTextActive: {
     color: 'white',
+  },
+  myEventsButtonActive: {
+    backgroundColor: '#4CAF50', // Subtle green
+    borderColor: '#4CAF50',
+  },
+  myEventsTextActive: {
+    color: 'white',
+  },
+  photoGalleryContainer: {
+    flex: 1,
+    backgroundColor: theme.background,
+  },
+  photoGalleryContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  photoGalleryTitle: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: theme.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  photoGallerySubtitle: {
+    fontSize: 16,
+    color: theme.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  emptyStateContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  pastEventsEmptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingVertical: 60,
+  },
+  pastEventsEmptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: theme.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  pastEventsEmptyMessage: {
+    fontSize: 16,
+    color: theme.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
   },
   eventsList: {
     padding: 20,
@@ -1131,6 +1355,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginBottom: 12,
+    gap: 6,
   },
   eventTag: {
     backgroundColor: theme.primary + '20',
