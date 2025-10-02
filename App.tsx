@@ -26,6 +26,9 @@ import EventInviteScreen from './src/screens/EventInviteScreen'
 import SettingsScreen from './src/screens/SettingsScreen'
 import NotificationSettingsScreen from './src/screens/NotificationSettingsScreen'
 import PhoneVisibilityScreen from './src/screens/PhoneVisibilityScreen'
+import EventPhotoGalleryScreen from './src/screens/EventPhotoGalleryScreen'
+import PhotoViewerScreen from './src/screens/PhotoViewerScreen'
+import GeneralPhotoGalleryScreen from './src/screens/GeneralPhotoGalleryScreen'
 
 type RootStackParamList = {
   Auth: undefined
@@ -40,6 +43,9 @@ type RootStackParamList = {
   Settings: undefined
   NotificationSettings: undefined
   PhoneVisibility: undefined
+  EventPhotoGallery: { event: any, eventImages: string[] }
+  PhotoViewer: { photo: any, event: any, hostProfile: any }
+  GeneralPhotoGallery: undefined
 }
 
 type MainTabParamList = {
@@ -390,6 +396,27 @@ function AppContent() {
               <Stack.Screen
                 name="PhoneVisibility"
                 component={PhoneVisibilityScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="EventPhotoGallery"
+                component={EventPhotoGalleryScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="PhotoViewer"
+                component={PhotoViewerScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="GeneralPhotoGallery"
+                component={GeneralPhotoGalleryScreen}
                 options={{
                   headerShown: false,
                 }}

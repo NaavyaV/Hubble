@@ -10,7 +10,9 @@ import {
   Modal,
   ScrollView,
   Dimensions,
+  Alert,
 } from 'react-native'
+import * as ImagePicker from 'expo-image-picker'
 import { LinearGradient } from 'expo-linear-gradient'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -62,6 +64,7 @@ export default function EventsListScreen() {
   const [userInvitations, setUserInvitations] = useState<Set<string>>(new Set())
   const [friends, setFriends] = useState<Set<string>>(new Set())
   const [showFilterModal, setShowFilterModal] = useState(false)
+  const [pastEventStates, setPastEventStates] = useState<{[eventId: string]: {showAttendees: boolean, eventImages: string[]}}>({})
     const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
     friendsOnly: false,
     peopleGoing: false,
@@ -181,20 +184,24 @@ export default function EventsListScreen() {
         maybeCount: event.attendees?.filter((a: any) => a.status === 'maybe').length || 0,
       }))
 
+      // Set events immediately for faster UI response
       setEvents(eventsWithCounts)
+      setLoading(false) // Show events as soon as basic data is loaded
 
-      // Fetch host profiles
-      await fetchHostProfiles(eventsWithCounts)
-
-      // Fetch user's attendance status
-      await fetchUserAttendances(eventsWithCounts)
-
-      // Fetch user's invitations
-      await fetchUserInvitations(eventsWithCounts)
+      // Fetch additional data in parallel without blocking UI
+      Promise.all([
+        fetchHostProfiles(eventsWithCounts),
+        fetchAttendeeProfiles(eventsWithCounts),
+        fetchEventPhotos(eventsWithCounts),
+        fetchUserAttendances(eventsWithCounts),
+        fetchUserInvitations(eventsWithCounts)
+      ]).catch(error => {
+        console.error('Error fetching additional data:', error)
+      })
     } catch (error) {
       console.error('Error fetching events:', error)
-    } finally {
       setLoading(false)
+    } finally {
       setRefreshing(false)
     }
   }
@@ -249,6 +256,92 @@ export default function EventsListScreen() {
       }
     } catch (error) {
       console.error('Error fetching host profiles:', error)
+    }
+  }
+
+  const fetchEventPhotos = async (eventsList: EventWithAttendees[]) => {
+    try {
+      // Get all event IDs
+      const eventIds = eventsList.map(event => event.id)
+      
+      if (eventIds.length === 0) return
+
+      // Fetch photos for all events
+      const { data: photos, error } = await supabase
+        .from('event_photos')
+        .select('id, event_id, image_url, created_at')
+        .in('event_id', eventIds)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching event photos:', error)
+        return
+      }
+
+      // Group photos by event ID
+      const photosByEvent = photos?.reduce((acc: any, photo: any) => {
+        if (!acc[photo.event_id]) {
+          acc[photo.event_id] = []
+        }
+        acc[photo.event_id].push(photo.image_url)
+        return acc
+      }, {}) || {}
+
+      // Update past event states with fetched photos
+      setPastEventStates(prev => {
+        const updated = { ...prev }
+        Object.keys(photosByEvent).forEach(eventId => {
+          updated[eventId] = {
+            ...updated[eventId],
+            eventImages: photosByEvent[eventId]
+          }
+        })
+        return updated
+      })
+    } catch (error) {
+      console.error('Error in fetchEventPhotos:', error)
+    }
+  }
+
+  const fetchAttendeeProfiles = async (eventsList: EventWithAttendees[]) => {
+    try {
+      // Get all unique user IDs from attendees
+      const attendeeUserIds = new Set<string>()
+      eventsList.forEach(event => {
+        if (event.attendees) {
+          event.attendees.forEach((attendee: any) => {
+            attendeeUserIds.add(attendee.user_id)
+          })
+        }
+      })
+
+      if (attendeeUserIds.size === 0) return
+
+      // Fetch profiles for all attendee user IDs
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id, full_name, username, avatar_url')
+        .in('id', Array.from(attendeeUserIds))
+
+      if (profiles) {
+        const profilesMap = profiles.reduce((acc, profile) => {
+          acc[profile.id] = profile
+          return acc
+        }, {} as Record<string, any>)
+
+        // Update events with attendee profile information
+        setEvents(prevEvents => 
+          prevEvents.map(event => ({
+            ...event,
+            attendees: event.attendees?.map((attendee: any) => ({
+              ...attendee,
+              user: profilesMap[attendee.user_id] || null
+            })) || []
+          }))
+        )
+      }
+    } catch (error) {
+      console.error('Error fetching attendee profiles:', error)
     }
   }
 
@@ -311,7 +404,7 @@ export default function EventsListScreen() {
         const eventStart = new Date(event.event_date + ' ' + event.start_time)
         const eventEnd = event.end_time 
           ? new Date(event.event_date + ' ' + event.end_time)
-          : new Date(eventStart.getTime() + 12 * 60 * 60 * 1000) // 12 hours after start if no end time
+          : new Date(eventStart.getTime() + 6 * 60 * 60 * 1000) // 6 hours after start if no end time
         
         return eventEnd >= now
       })
@@ -323,14 +416,11 @@ export default function EventsListScreen() {
         const eventStart = new Date(event.event_date + ' ' + event.start_time)
         const eventEnd = event.end_time 
           ? new Date(event.event_date + ' ' + event.end_time)
-          : new Date(eventStart.getTime() + 12 * 60 * 60 * 1000) // 12 hours after start if no end time
+          : new Date(eventStart.getTime() + 6 * 60 * 60 * 1000) // 6 hours after start if no end time
         
         // Event must have ended and be within the last 30 days
         return eventEnd < now && eventStart >= thirtyDaysAgo
       })
-      
-      // For past events, only show events where user was going
-      filtered = filtered.filter(event => userAttendances[event.id] === 'going')
     }
 
     // Apply advanced filters
@@ -413,11 +503,128 @@ export default function EventsListScreen() {
     setFilteredEvents(filtered as EventListItem[])
   }
 
+  const renderPastEventCard = ({ item, hostProfile, userAttendance, isHost }: { 
+    item: EventListItem, 
+    hostProfile: any, 
+    userAttendance: string | null, 
+    isHost: boolean 
+  }) => {
+    const eventState = pastEventStates[item.id] || { showAttendees: false, eventImages: [] }
+    const showAttendees = eventState.showAttendees
+    const eventImages = eventState.eventImages
+
+    const attendedCount = item.goingCount // People who actually went
+    const attendedAttendees = item.attendees?.filter((a: any) => a.status === 'going' && a.user) || []
+
+    const toggleShowAttendees = () => {
+      setPastEventStates(prev => ({
+        ...prev,
+        [item.id]: {
+          ...prev[item.id],
+          showAttendees: !showAttendees,
+          eventImages: prev[item.id]?.eventImages || []
+        }
+      }))
+    }
+
+
+    return (
+      <View style={styles.pastEventCard}>
+        {/* Past Event Header */}
+        <View style={styles.pastEventHeader}>
+          <View style={styles.pastEventInfo}>
+            <Text style={styles.pastEventTitle}>{item.title}</Text>
+            <Text style={styles.pastEventHost}>
+              Hosted by {hostProfile?.full_name || hostProfile?.username || 'Unknown'}
+            </Text>
+            <Text style={styles.pastEventDate}>
+              {formatDate(item.event_date)} • {formatTime(item.start_time)}
+            </Text>
+          </View>
+          <View style={styles.pastEventBadge}>
+            <Ionicons name="checkmark-circle" size={16} color="#27ae60" />
+            <Text style={styles.pastEventBadgeText}>Completed</Text>
+          </View>
+        </View>
+
+        {/* Attendance Summary */}
+        <View style={styles.pastEventStats}>
+          <TouchableOpacity 
+            style={styles.attendedButton}
+            onPress={toggleShowAttendees}
+          >
+            <Ionicons name="people" size={16} color="#27ae60" />
+            <Text style={styles.attendedText}>{attendedCount} attended</Text>
+            <Ionicons 
+              name={showAttendees ? "chevron-up" : "chevron-down"} 
+              size={16} 
+              color="#7f8c8d" 
+            />
+          </TouchableOpacity>
+
+          {/* Photo Gallery Button */}
+          <TouchableOpacity 
+            style={styles.photoGalleryButton} 
+            onPress={() => (navigation as any).navigate('EventPhotoGallery', { 
+              event: item,
+              eventImages: eventImages
+            })}
+          >
+            <Ionicons name="images" size={16} color="#3498db" />
+            <Text style={styles.photoGalleryText}>Photos ({eventImages.length})</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Attendees List */}
+        {showAttendees && attendedAttendees.length > 0 && (
+          <View style={styles.attendeesList}>
+            <Text style={styles.attendeesTitle}>Who attended:</Text>
+            <View style={styles.attendeesGrid}>
+              {attendedAttendees.slice(0, 6).map((attendee: any, index: number) => (
+                <View key={index} style={styles.attendeeItem}>
+                  {attendee.user?.avatar_url ? (
+                    <Image 
+                      source={{ uri: attendee.user.avatar_url }} 
+                      style={styles.attendeeAvatar} 
+                    />
+                  ) : (
+                    <View style={styles.attendeeAvatarPlaceholder}>
+                      <Text style={styles.attendeeAvatarText}>
+                        {attendee.user?.full_name?.charAt(0) || '?'}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.attendeeName} numberOfLines={1}>
+                    {attendee.user?.full_name || 'Unknown'}
+                  </Text>
+                </View>
+              ))}
+              {attendedAttendees.length > 6 && (
+                <View style={styles.attendeeItem}>
+                  <View style={styles.attendeeAvatarPlaceholder}>
+                    <Text style={styles.attendeeAvatarText}>+{attendedAttendees.length - 6}</Text>
+                  </View>
+                  <Text style={styles.attendeeName}>More</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
+      </View>
+    )
+  }
+
     const renderEventCard = ({ item }: { item: EventListItem }) => {
     const hostProfile = hostProfiles[item.host_id]
     const userAttendance = userAttendances[item.id]
     const isInvited = userInvitations.has(item.id)
     const isHost = item.host_id === currentUserId
+
+    // Render specialized past event card
+    if (timeFilter === 'past') {
+      return renderPastEventCard({ item, hostProfile, userAttendance, isHost })
+    }
 
     return (
       <TouchableOpacity
@@ -609,6 +816,8 @@ export default function EventsListScreen() {
           style={styles.photoGalleryIcon}
           onPress={() => {
             setTimeFilter('photo_gallery')
+            // Navigate to general photo gallery
+            ;(navigation as any).navigate('GeneralPhotoGallery')
           }}
         >
           <Ionicons 
@@ -654,18 +863,7 @@ export default function EventsListScreen() {
         </View>
       )}
 
-      {timeFilter === 'photo_gallery' ? (
-        // Photo Gallery Content
-        <View style={styles.photoGalleryContainer}>
-          <View style={styles.photoGalleryContent}>
-            <Ionicons name="images-outline" size={64} color={theme.textSecondary} />
-            <Text style={styles.photoGalleryTitle}>Photo Gallery</Text>
-            <Text style={styles.photoGallerySubtitle}>
-              Photos from your events will appear here
-            </Text>
-          </View>
-        </View>
-      ) : (
+      {timeFilter !== 'photo_gallery' && (
         // Events List
         <FlatList
           data={filteredEvents}
@@ -692,6 +890,14 @@ export default function EventsListScreen() {
                 <Text style={styles.pastEventsEmptyTitle}>No Recent Events</Text>
                 <Text style={styles.pastEventsEmptyMessage}>
                   You haven't attended any events in the past 30 days
+                </Text>
+              </View>
+            ) : activeFilter === 'my_events' && timeFilter === 'current' ? (
+              <View style={styles.myEventsEmptyState}>
+                <Ionicons name="calendar-outline" size={48} color={theme.textSecondary} />
+                <Text style={styles.myEventsEmptyTitle}>No Events Yet</Text>
+                <Text style={styles.myEventsEmptyMessage}>
+                  You haven't signed up for any events yet!
                 </Text>
               </View>
             ) : null
@@ -1055,6 +1261,26 @@ const createStyles = (theme: any) => StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
+  myEventsEmptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingVertical: 60,
+  },
+  myEventsEmptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: theme.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  myEventsEmptyMessage: {
+    fontSize: 16,
+    color: theme.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
   eventsList: {
     padding: 20,
   },
@@ -1396,5 +1622,145 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   tagFilterTextSelected: {
     color: 'white',
+  },
+  // Past Event Card Styles
+  pastEventCard: {
+    backgroundColor: theme.card,
+    borderRadius: 8,
+    marginHorizontal: 4,
+    marginBottom: 6,
+    padding: 10,
+    shadowColor: theme.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 3,
+    borderLeftWidth: 3,
+    borderLeftColor: '#27ae60',
+  },
+  pastEventHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  pastEventInfo: {
+    flex: 1,
+  },
+  pastEventTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: theme.text,
+    marginBottom: 2,
+  },
+  pastEventHost: {
+    fontSize: 12,
+    color: theme.textSecondary,
+    marginBottom: 2,
+  },
+  pastEventDate: {
+    fontSize: 11,
+    color: theme.textSecondary,
+    fontWeight: '500',
+  },
+  pastEventBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27ae60' + '20',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  pastEventBadgeText: {
+    fontSize: 12,
+    color: '#27ae60',
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  pastEventStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  attendedButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27ae60' + '15',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    flex: 1,
+    marginRight: 12,
+  },
+  attendedText: {
+    fontSize: 14,
+    color: '#27ae60',
+    fontWeight: '600',
+    marginLeft: 6,
+    marginRight: 6,
+  },
+  photoGalleryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3498db' + '15',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  photoGalleryText: {
+    fontSize: 14,
+    color: '#3498db',
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  attendeesList: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: theme.divider,
+  },
+  attendeesTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.text,
+    marginBottom: 12,
+  },
+  attendeesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  attendeeItem: {
+    alignItems: 'center',
+    width: 60,
+  },
+  attendeeAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginBottom: 6,
+  },
+  attendeeAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  attendeeAvatarText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
+  },
+  attendeeName: {
+    fontSize: 11,
+    color: theme.text,
+    textAlign: 'center',
+    fontWeight: '500',
   },
 })
