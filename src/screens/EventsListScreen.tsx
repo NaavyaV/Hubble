@@ -20,6 +20,7 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
+import { getEventEndDate, isEventEnded, isEventInFuture } from '../utils/eventTimeUtils'
 
 type EventListItem = EventWithAttendees & { goingCount: number; maybeCount: number; tags?: string[] }
 
@@ -401,12 +402,8 @@ export default function EventsListScreen() {
     const now = new Date()
     if (timeFilter === 'current') {
       filtered = filtered.filter(event => {
-        const eventStart = new Date(event.event_date + ' ' + event.start_time)
-        const eventEnd = event.end_time 
-          ? new Date(event.event_date + ' ' + event.end_time)
-          : new Date(eventStart.getTime() + 6 * 60 * 60 * 1000) // 6 hours after start if no end time
-        
-        return eventEnd >= now
+        // Event is current if it hasn't ended yet
+        return !isEventEnded(event.event_date, event.start_time, event.end_time)
       })
     } else if (timeFilter === 'past') {
       // Calculate 30 days ago
@@ -414,9 +411,7 @@ export default function EventsListScreen() {
       
       filtered = filtered.filter(event => {
         const eventStart = new Date(event.event_date + ' ' + event.start_time)
-        const eventEnd = event.end_time 
-          ? new Date(event.event_date + ' ' + event.end_time)
-          : new Date(eventStart.getTime() + 6 * 60 * 60 * 1000) // 6 hours after start if no end time
+        const eventEnd = getEventEndDate(event.event_date, event.start_time, event.end_time)
         
         // Event must have ended and be within the last 30 days
         return eventEnd < now && eventStart >= thirtyDaysAgo

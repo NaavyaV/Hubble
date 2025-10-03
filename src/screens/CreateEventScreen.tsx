@@ -19,6 +19,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
 
 interface CreateEventScreenProps {
   onBack: () => void
@@ -102,6 +103,26 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
     })
   }
 
+  const getTimeDisplayText = () => {
+    if (!hasEndTime) {
+      return formatTime(startTime)
+    }
+    
+    const startTimeStr = startTime.toTimeString().split(' ')[0].substring(0, 5)
+    const endTimeStr = endTime.toTimeString().split(' ')[0].substring(0, 5)
+    
+    return formatEventTimeDisplay(startTimeStr, endTimeStr)
+  }
+
+  const isCurrentlyMidnightSpanning = () => {
+    if (!hasEndTime) return false
+    
+    const startTimeStr = startTime.toTimeString().split(' ')[0].substring(0, 5)
+    const endTimeStr = endTime.toTimeString().split(' ')[0].substring(0, 5)
+    
+    return isMidnightSpanningEvent(startTimeStr, endTimeStr)
+  }
+
   const toggleDatePicker = () => {
     setShowDatePicker(!showDatePicker)
   }
@@ -118,6 +139,18 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
     if (!title.trim() || !location.trim()) {
       Alert.alert('Error', 'Please fill in all required fields')
       return
+    }
+
+    // Validate event times if end time is provided
+    if (hasEndTime) {
+      const startTimeStr = startTime.toTimeString().split(' ')[0].substring(0, 5)
+      const endTimeStr = endTime.toTimeString().split(' ')[0].substring(0, 5)
+      
+      const validation = validateEventTimes(startTimeStr, endTimeStr)
+      if (!validation.isValid) {
+        Alert.alert('Invalid Times', validation.errorMessage || 'Please check your event times')
+        return
+      }
     }
 
     setLoading(true)
@@ -397,6 +430,15 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                       themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
                     />
                   )}
+                  {/* Midnight spanning indicator */}
+                  {isCurrentlyMidnightSpanning() && (
+                    <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
+                      <Ionicons name="moon" size={16} color={theme.primary} />
+                      <Text style={[styles.midnightText, { color: theme.primary }]}>
+                        Event spans to next day
+                      </Text>
+                    </View>
+                  )}
                 </>
               )}
             </View>
@@ -572,5 +614,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  midnightIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  midnightText: {
+    fontSize: 14,
+    marginLeft: 6,
+    fontWeight: '500',
   },
 })

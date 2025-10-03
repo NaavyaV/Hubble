@@ -29,6 +29,8 @@ import PhoneVisibilityScreen from './src/screens/PhoneVisibilityScreen'
 import EventPhotoGalleryScreen from './src/screens/EventPhotoGalleryScreen'
 import PhotoViewerScreen from './src/screens/PhotoViewerScreen'
 import GeneralPhotoGalleryScreen from './src/screens/GeneralPhotoGalleryScreen'
+import LeaderboardScreen from './src/screens/LeaderboardScreen'
+import CustomTabBar from './src/components/CustomTabBar'
 
 type RootStackParamList = {
   Auth: undefined
@@ -50,6 +52,7 @@ type RootStackParamList = {
 
 type MainTabParamList = {
   Events: undefined
+  Leaderboard: undefined
   Host: undefined
   Friends: undefined
   Profile: undefined
@@ -116,78 +119,24 @@ function MainTabNavigator() {
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ focused, color, size }) => {
-          let iconName: keyof typeof Ionicons.glyphMap
-
-          if (route.name === 'Events') {
-            iconName = focused ? 'calendar' : 'calendar-outline'
-          } else if (route.name === 'Host') {
-            iconName = focused ? 'add-circle' : 'add-circle-outline'
-          } else if (route.name === 'Friends') {
-            iconName = focused ? 'people' : 'people-outline'
-            return (
-              <View style={{ position: 'relative' }}>
-                <Ionicons name={iconName} size={size} color={color} />
-                {pendingCount > 0 && (
-                  <View
-                    style={{
-                      position: 'absolute',
-                      top: -8,
-                      right: -8,
-                      backgroundColor: '#e74c3c',
-                      borderRadius: 10,
-                      minWidth: 20,
-                      height: 20,
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>
-                      {pendingCount > 9 ? '9+' : pendingCount}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )
-          } else if (route.name === 'Profile') {
-            iconName = focused ? 'person' : 'person-outline'
-          } else {
-            // Default fallback icon
-            iconName = 'help-outline'
-          }
-
-          return <Ionicons name={iconName} size={size} color={color} />
-        },
-        tabBarActiveTintColor: theme.tabBarActive,
-        tabBarInactiveTintColor: theme.tabBarInactive,
-        tabBarStyle: {
-          backgroundColor: theme.tabBarBackground,
-          borderTopWidth: 1,
-          borderTopColor: theme.tabBarBorder,
-          paddingBottom: insets.bottom,
-          height: 60 + insets.bottom,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '500',
-        },
-      })}
+      tabBar={(props) => <CustomTabBar {...props} pendingCount={pendingCount} />}
+      screenOptions={{
+        headerShown: false,
+      }}
     >
       <Tab.Screen
         name="Events"
         component={EventsListScreen}
-        options={{
-          title: 'Events',
-          headerShown: false,
-        }}
+        options={{ title: 'Events' }}
+      />
+      <Tab.Screen
+        name="Leaderboard"
+        component={LeaderboardScreen}
+        options={{ title: 'Leaders' }}
       />
       <Tab.Screen
         name="Host"
-        options={{
-          title: 'Create',
-          headerShown: false,
-        }}
+        options={{ title: 'Create' }}
       >
         {({ navigation }) => (
           <CreateEventScreen
@@ -199,18 +148,12 @@ function MainTabNavigator() {
       <Tab.Screen
         name="Friends"
         component={FriendsScreen}
-        options={{
-          title: 'Friends',
-          headerShown: false,
-        }}
+        options={{ title: 'Friends' }}
       />
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}
-        options={{
-          title: 'Profile',
-          headerShown: false,
-        }}
+        options={{ title: 'Profile' }}
       />
     </Tab.Navigator>
   )

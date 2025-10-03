@@ -16,6 +16,7 @@ import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
+import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
 
 export default function MyEventsScreen() {
   const { theme } = useTheme()
@@ -186,8 +187,16 @@ export default function MyEventsScreen() {
             <View style={styles.detailRow}>
               <Ionicons name="calendar-outline" size={16} color={theme.primary} />
               <Text style={[styles.detailText, { color: theme.text }]}>
-                {formatDate(item.event_date)} at {formatTime(item.start_time)}
+                {formatDate(item.event_date)} at {formatEventTimeDisplay(item.start_time, item.end_time)}
               </Text>
+              {item.end_time && isMidnightSpanningEvent(item.start_time, item.end_time) && (
+                <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
+                  <Ionicons name="moon" size={12} color={theme.primary} />
+                  <Text style={[styles.midnightText, { color: theme.primary }]}>
+                    Next day
+                  </Text>
+                </View>
+              )}
             </View>
             
             <View style={styles.detailRow}>
@@ -332,5 +341,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
     paddingHorizontal: 32,
+  },
+  midnightIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  midnightText: {
+    fontSize: 11,
+    marginLeft: 3,
+    fontWeight: '500',
   },
 })

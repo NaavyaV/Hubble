@@ -17,6 +17,7 @@ import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
 import notificationService from '../services/notifications'
+import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
 
 interface EventAttendee {
   id: string
@@ -511,9 +512,16 @@ export default function EventDetailScreen() {
             <View style={styles.detailRow}>
               <Ionicons name="time-outline" size={20} color={theme.warning} />
               <Text style={[styles.detailText, { color: theme.text }]}>
-                {formatTime(event.start_time)}
-                {event.end_time && ` - ${formatTime(event.end_time)}`}
+                {formatEventTimeDisplay(event.start_time, event.end_time)}
               </Text>
+              {event.end_time && isMidnightSpanningEvent(event.start_time, event.end_time) && (
+                <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
+                  <Ionicons name="moon" size={12} color={theme.primary} />
+                  <Text style={[styles.midnightText, { color: theme.primary }]}>
+                    Next day
+                  </Text>
+                </View>
+              )}
             </View>
             
             <View style={styles.detailRow}>
@@ -1106,6 +1114,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#1976d2',
     fontWeight: '600',
+  },
+  midnightIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  midnightText: {
+    fontSize: 12,
+    marginLeft: 4,
+    fontWeight: '500',
   },
 
 })

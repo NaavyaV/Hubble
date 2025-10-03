@@ -21,6 +21,7 @@ import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
+import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
 
 interface EditEventScreenProps {
   route: { params: { event: any } }
@@ -169,6 +170,15 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
     })
   }
 
+  const isCurrentlyMidnightSpanning = () => {
+    if (!hasEndTime) return false
+    
+    const startTimeStr = startTime.toTimeString().slice(0, 5)
+    const endTimeStr = endTime.toTimeString().slice(0, 5)
+    
+    return isMidnightSpanningEvent(startTimeStr, endTimeStr)
+  }
+
   const handleInviteUsers = () => {
     navigation.navigate('EventInvite', {
       invitedUsers: invitedUsers,
@@ -186,6 +196,18 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
     if (privacy === 'friends_only' && invitedUsers.length === 0) {
       Alert.alert('Error', 'Please invite at least one person for friends-only events')
       return
+    }
+
+    // Validate event times if end time is provided
+    if (hasEndTime) {
+      const startTimeStr = startTime.toTimeString().slice(0, 5)
+      const endTimeStr = endTime.toTimeString().slice(0, 5)
+      
+      const validation = validateEventTimes(startTimeStr, endTimeStr)
+      if (!validation.isValid) {
+        Alert.alert('Invalid Times', validation.errorMessage || 'Please check your event times')
+        return
+      }
     }
 
     setLoading(true)
@@ -550,6 +572,15 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                       themeVariant={isDark ? 'dark' : 'light'}
                     />
                   )}
+                  {/* Midnight spanning indicator */}
+                  {isCurrentlyMidnightSpanning() && (
+                    <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
+                      <Ionicons name="moon" size={16} color={theme.primary} />
+                      <Text style={[styles.midnightText, { color: theme.primary }]}>
+                        Event spans to next day
+                      </Text>
+                    </View>
+                  )}
                 </>
               )}
             </View>
@@ -748,6 +779,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 8,
+  },
+  midnightIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  midnightText: {
+    fontSize: 14,
+    marginLeft: 6,
+    fontWeight: '500',
   },
   submitButton: {
     borderRadius: 8,

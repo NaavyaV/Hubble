@@ -65,21 +65,32 @@ Each event contains the following information:
 
 ## Current Database Schema (Supabase)
 
-### Tables
+### Core Tables
 
 #### 1. **profiles** (User Profiles)
 - `id` (uuid, PK) - References auth.users(id)
-- `username` (text, nullable)
+- `username` (text, unique, nullable)
 - `full_name` (text, nullable)
 - `avatar_url` (text, nullable)
 - `bio` (text, nullable)
 - `major` (text, nullable)
 - `graduating_year` (text, nullable)
 - `phone_number` (text, nullable)
+- `college_id` (uuid, FK → colleges.id)
+- `phone_visibility` (text, default: 'private') - 'public', 'friends_only', 'private'
+- `phone_visible_when_hosting` (boolean, default: false)
 - `created_at` (timestamp with time zone, default: now())
 - `updated_at` (timestamp with time zone, default: now())
 
-#### 2. **events** (Event Information)
+#### 2. **colleges** (College/University Information)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `name` (text, NOT NULL)
+- `short_name` (text, NOT NULL)
+- `logo_url` (text, nullable)
+- `created_at` (timestamp with time zone, default: now())
+- `updated_at` (timestamp with time zone, default: now())
+
+#### 3. **events** (Event Information)
 - `id` (uuid, PK, default: gen_random_uuid())
 - `host_id` (uuid, FK → profiles.id)
 - `title` (text, NOT NULL)
@@ -90,31 +101,103 @@ Each event contains the following information:
 - `location` (text, NOT NULL)
 - `max_attendees` (integer, nullable)
 - `image_url` (text, nullable)
-- `privacy` (text, default: 'public')
+- `privacy` (text, default: 'public') - 'public', 'friends_only'
+- `tags` (text[], default: '{}')
+- `college_id` (uuid, FK → colleges.id)
 - `created_at` (timestamp with time zone, default: now())
 - `updated_at` (timestamp with time zone, default: now())
 
-#### 3. **event_attendees** (Attendance Tracking)
+#### 4. **event_attendees** (Attendance Tracking)
 - `id` (uuid, PK, default: gen_random_uuid())
 - `event_id` (uuid, FK → events.id)
 - `user_id` (uuid, FK → profiles.id)
 - `status` (text, NOT NULL) - 'going', 'maybe', 'not_going'
 - `created_at` (timestamp with time zone, default: now())
+- **Unique Constraint**: (event_id, user_id)
 
-#### 4. **event_invitations** (Private Event Invitations)
+#### 5. **event_invitations** (Private Event Invitations)
 - `id` (uuid, PK, default: gen_random_uuid())
 - `event_id` (uuid, FK → events.id)
 - `user_id` (uuid, FK → profiles.id)
 - `invited_by` (uuid, FK → profiles.id)
 - `created_at` (timestamp with time zone, default: now())
+- **Unique Constraint**: (event_id, user_id)
 
-#### 5. **friendships** (Friend Relationships)
+#### 6. **friendships** (Friend Relationships)
 - `id` (uuid, PK, default: gen_random_uuid())
 - `user_id` (uuid, FK → profiles.id)
 - `friend_id` (uuid, FK → profiles.id)
 - `status` (text, NOT NULL) - 'pending', 'accepted', 'blocked'
 - `created_at` (timestamp with time zone, default: now())
 - `updated_at` (timestamp with time zone, default: now())
+- **Unique Constraint**: (user_id, friend_id)
+
+### Photo Management Tables
+
+#### 7. **event_photos** (Event Photos)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `event_id` (uuid, FK → events.id)
+- `uploaded_by` (uuid, FK → profiles.id)
+- `image_url` (text, NOT NULL)
+- `thumbnail_url` (text, nullable)
+- `caption` (text, nullable)
+- `privacy_level` (text, NOT NULL, default: 'attendees_only') - 'public', 'attendees_only', 'friends_only'
+- `created_at` (timestamp with time zone, default: now())
+- `updated_at` (timestamp with time zone, default: now())
+
+#### 8. **photo_privacy_permissions** (Photo Access Permissions)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `photo_id` (uuid, FK → event_photos.id)
+- `user_id` (uuid, FK → profiles.id)
+- `permission_type` (text, NOT NULL) - 'friend', 'attendee', 'specific_user'
+- `granted_by` (uuid, FK → profiles.id)
+- `created_at` (timestamp with time zone, default: now())
+- **Unique Constraint**: (photo_id, user_id)
+
+### Notification System Tables
+
+#### 9. **notification_preferences** (User Notification Settings)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `user_id` (uuid, FK → profiles.id, unique)
+- `push_notifications` (boolean, default: true)
+- `event_reminders` (boolean, default: true)
+- `going_status_updates` (boolean, default: true)
+- `friend_requests` (boolean, default: true)
+- `event_invitations` (boolean, default: true)
+- `event_deletions` (boolean, default: true)
+- `created_at` (timestamp with time zone, default: now())
+- `updated_at` (timestamp with time zone, default: now())
+
+#### 10. **notification_tokens** (Push Notification Tokens)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `user_id` (uuid, FK → profiles.id)
+- `token` (text, NOT NULL)
+- `platform` (text, NOT NULL) - 'ios', 'android'
+- `created_at` (timestamp with time zone, default: now())
+- `updated_at` (timestamp with time zone, default: now())
+- **Unique Constraint**: (user_id, platform)
+
+#### 11. **notification_queue** (Pending Notifications)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `user_id` (uuid, FK → profiles.id)
+- `event_id` (uuid, FK → events.id, nullable)
+- `type` (text, NOT NULL)
+- `title` (text, NOT NULL)
+- `body` (text, NOT NULL)
+- `data` (jsonb, nullable)
+- `scheduled_for` (timestamp with time zone, NOT NULL)
+- `processed` (boolean, default: false)
+- `created_at` (timestamp with time zone, default: now())
+
+#### 12. **notification_log** (Sent Notifications)
+- `id` (uuid, PK, default: gen_random_uuid())
+- `user_id` (uuid, FK → profiles.id)
+- `event_id` (uuid, FK → events.id, nullable)
+- `type` (text, NOT NULL)
+- `title` (text, NOT NULL)
+- `body` (text, NOT NULL)
+- `data` (jsonb, nullable)
+- `sent_at` (timestamp with time zone, default: now())
 
 ### Views
 
@@ -130,84 +213,118 @@ Each event contains the following information:
 
 ### Storage Buckets
 
-#### 1. **event-images** (Event Photos)
-- Public bucket for event images
+#### 1. **photos** (Event and Profile Photos)
+- Public bucket for all images
 - No file size limit
 - No MIME type restrictions
-
-#### 2. **profile-images** (Profile Pictures)
-- Public bucket for user avatars
-- No file size limit
-- No MIME type restrictions
+- RLS policies for secure access
 
 ### Row Level Security (RLS) Policies
 
-#### **profiles** table:
-- **SELECT**: Users can view all profiles
-- **UPDATE**: Users can update their own profile
-- **INSERT**: Users can insert their own profile
-- **ALL**: Allow all operations (backup policy)
+#### **Core Tables**
+- **profiles**: Users can view all profiles, update their own
+- **colleges**: Public read access, admin write access
+- **events**: Public read access, authenticated users can create/update their own
+- **event_attendees**: Users can view all attendees, manage their own attendance
+- **event_invitations**: Users can view invitations for events they can see, hosts can manage
+- **friendships**: Users can view their own friendships, manage their own relationships
 
-#### **events** table:
-- **ALL**: Allow all operations (backup policy)
+#### **Photo Management**
+- **event_photos**: Complex privacy-based access (public, attendees_only, friends_only)
+- **photo_privacy_permissions**: Users can view their own permissions, photo uploaders can manage
 
-#### **event_attendees** table:
-- **SELECT**: Users can view all attendees
-- **ALL**: Users can manage their own attendance
-- **ALL**: Allow all operations (backup policy)
-
-#### **event_invitations** table:
-- **SELECT**: Users can view invitations for events they can see
-- **ALL**: Event hosts can manage invitations
-- **ALL**: Allow all operations (backup policy)
-
-#### **friendships** table:
-- **SELECT**: Users can view their own friendships
-- **INSERT**: Users can create friendships
-- **UPDATE**: Users can update their own friendships
-- **DELETE**: Users can delete their own friendships
-- **ALL**: Allow all operations (backup policy)
+#### **Notification System**
+- **notification_preferences**: Users can view/update their own preferences
+- **notification_tokens**: Users can manage their own tokens
+- **notification_queue**: System-managed, users can view their own queued notifications
+- **notification_log**: Users can view their own notification history
 
 ### Foreign Key Relationships
+- `profiles.college_id` → `colleges.id`
+- `events.host_id` → `profiles.id`
+- `events.college_id` → `colleges.id`
 - `event_attendees.event_id` → `events.id`
-- `friendships.user_id` → `profiles.id`
-- `friendships.friend_id` → `profiles.id`
+- `event_attendees.user_id` → `profiles.id`
 - `event_invitations.event_id` → `events.id`
 - `event_invitations.user_id` → `profiles.id`
 - `event_invitations.invited_by` → `profiles.id`
+- `friendships.user_id` → `profiles.id`
+- `friendships.friend_id` → `profiles.id`
+- `event_photos.event_id` → `events.id`
+- `event_photos.uploaded_by` → `profiles.id`
+- `photo_privacy_permissions.photo_id` → `event_photos.id`
+- `photo_privacy_permissions.user_id` → `profiles.id`
+- `photo_privacy_permissions.granted_by` → `profiles.id`
+- `notification_preferences.user_id` → `profiles.id`
+- `notification_tokens.user_id` → `profiles.id`
+- `notification_queue.user_id` → `profiles.id`
+- `notification_queue.event_id` → `events.id`
+- `notification_log.user_id` → `profiles.id`
+- `notification_log.event_id` → `events.id`
 
 ## Key Components
-1. **Event Creation Screen**
+
+### Core Screens (Implemented)
+1. **Event Creation Screen** ✅
    - Form inputs for all event details
    - Image upload to Supabase Storage
    - Date/time picker components
    - Location input/selection
    - Real-time validation
+   - Host auto-attendance on creation
 
-2. **Event Discovery Screen**
+2. **Event Discovery Screen** ✅
    - Event list/grid view with Supabase queries
    - Search and filter functionality
    - Event card components
    - Attendance status indicators
    - Real-time updates for new events
+   - Auto-refresh on tab focus
 
-3. **Event Detail Screen**
+3. **Event Detail Screen** ✅
    - Full event information display
    - Real-time attendee list and counts
    - Attendance action buttons with instant updates
    - Event management options (for hosts)
+   - Photo gallery integration
 
-4. **User Profile Screen**
+4. **User Profile Screen** ✅
    - User information display
    - Event history with Supabase queries
    - Settings and preferences
    - Avatar management with Supabase Storage
+   - Phone visibility settings
 
-5. **Authentication Screens**
+5. **Authentication Screens** ✅
    - Login/Register with Supabase Auth
    - Social login integration
    - Password reset functionality
    - Profile setup
+
+### Additional Screens (Implemented)
+6. **Photo Gallery Screens** ✅
+   - Event photo gallery with privacy controls
+   - General photo gallery
+   - Photo viewer with full-screen display
+   - Privacy-based photo access
+
+7. **Friends Management** ✅
+   - Friends list screen
+   - Friend request system
+   - User profile modals
+
+8. **Settings Screens** ✅
+   - Notification settings
+   - Phone visibility settings
+   - Profile editing
+
+### Notification System (Implemented)
+9. **Notification Processing** ✅
+   - Background notification processor
+   - Event reminder scheduling
+   - Host notification delays
+   - Push notification tokens
+   - Notification preferences
 
 ## Supabase Integration Features
 
@@ -324,25 +441,41 @@ Each event contains the following information:
 
 ## Development Phases
 
-### Phase 1: Core MVP
-- Supabase project setup and configuration
-- User authentication and profile management
-- Event creation and management with Supabase
-- Event discovery and browsing with real-time updates
-- Basic attendance tracking with live updates
-- Simple, clean UI implementation
+### Phase 1: Core MVP ✅ COMPLETED
+- ✅ Supabase project setup and configuration
+- ✅ User authentication and profile management
+- ✅ Event creation and management with Supabase
+- ✅ Event discovery and browsing with real-time updates
+- ✅ Basic attendance tracking with live updates
+- ✅ Simple, clean UI implementation
+- ✅ Photo upload and management
+- ✅ Host auto-attendance feature
+- ✅ Events auto-refresh feature
 
-### Phase 2: Social Features
-- Enhanced user profiles with Supabase Storage
-- Friend system implementation with database relationships
+### Phase 2: Social Features ✅ COMPLETED
+- ✅ Enhanced user profiles with Supabase Storage
+- ✅ Friend system implementation with database relationships
+- ✅ Photo gallery with privacy controls
+- ✅ User profile modals and management
+- ✅ Phone visibility settings
+- ✅ College/university integration
+
+### Phase 3: Notification System ✅ COMPLETED
+- ✅ Complete notification architecture (4 tables)
+- ✅ Event reminder scheduling (15 minutes before)
+- ✅ Host notifications with user names
+- ✅ Delayed notifications (2-minute delay)
+- ✅ Push notification token management
+- ✅ Notification preferences system
+- ✅ Background notification processing
+
+### Phase 4: Advanced Features (Future)
 - Real-time messaging capabilities
-- Enhanced social interactions
-
-### Phase 3: Advanced Features
-- Advanced real-time features
-- Push notifications via Supabase Edge Functions
 - Advanced filtering and search with PostgreSQL
+- Supabase Edge Functions for server-side processing
 - Performance optimizations and caching
+- Event categories and tags
+- Advanced analytics
 
 ## Supabase Configuration
 
@@ -366,23 +499,39 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 ## Database Analysis Results
 
 ### Current Database Status
-- **Total Tables**: 5 core tables + 1 view
-- **Total Columns**: 47
-- **Storage Buckets**: 2 (event-images, profile-images)
-- **RLS Policies**: 20 policies across all tables
-- **Foreign Keys**: 6 relationships
+- **Total Tables**: 12 core tables + 1 view
+- **Total Columns**: 89 columns across all tables
+- **Storage Buckets**: 1 unified bucket (photos)
+- **RLS Policies**: Comprehensive policies across all tables
+- **Foreign Keys**: 20 relationships
+- **Indexes**: 35+ indexes for optimal performance
 
 ### Database Health
-✅ **Well Structured**: All tables have proper relationships
-✅ **RLS Enabled**: Security policies are in place
-✅ **Storage Configured**: Both image buckets are set up
-✅ **No Redundancy**: No unnecessary tables or columns found
+✅ **Well Structured**: All tables have proper relationships and constraints
+✅ **RLS Enabled**: Security policies are in place for all tables
+✅ **Storage Configured**: Unified photos bucket with RLS policies
+✅ **Performance Optimized**: Comprehensive indexing strategy
+✅ **Notification System**: Complete 4-table notification architecture
+✅ **Photo Management**: Advanced privacy system with permissions
+
+### Current Data Usage
+- **profiles**: 5 users
+- **events**: 2 events
+- **event_attendees**: 4 attendance records
+- **event_photos**: 4 photos
+- **notification_queue**: 10 pending notifications
+- **notification_preferences**: 2 user preferences
+- **friendships**: 1 friendship
+- **colleges**: 1 college (UTD)
 
 ### Recommendations
-1. **Database is Clean**: No unnecessary tables or columns
-2. **RLS Policies**: Some duplicate policies exist (backup policies)
-3. **Storage**: Properly configured for both event and profile images
-4. **Relationships**: All foreign keys are properly set up
+1. **Database is Well-Designed**: Comprehensive schema with proper relationships
+2. **Notification System**: Complete implementation with queue and logging
+3. **Photo Privacy**: Advanced system but currently unused (0 records in photo_privacy_permissions)
+4. **Event Invitations**: Table exists but unused (0 records)
+5. **Consider Cleanup**: Remove unused tables or implement their functionality
+6. **Storage**: Unified bucket approach is efficient
+7. **Indexes**: Well-optimized for common queries
 
 ## Notes
 - Focus on UTD student community initially
@@ -418,15 +567,19 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 1. **Expo Notifications Setup**: Installed expo-notifications, expo-device, expo-constants
 2. **App Configuration**: Updated app.json with notification settings and permissions
 3. **Notification Service**: Created comprehensive notification service with scheduling
-4. **Database Schema**: Added notification_tokens, notification_queue, notification_log tables
+4. **Database Schema**: Added 4 notification tables (preferences, tokens, queue, log)
 5. **Database Triggers**: Implemented automatic triggers for all notification types
 6. **App Integration**: Updated App.tsx to initialize notifications on user login
 7. **Event Reminders**: Integrated event reminder scheduling in HostScreen
 8. **Notification Processing**: Created background processor for queued notifications
+9. **Host Auto-Attendance**: Hosts automatically marked as "going" when creating events
+10. **Events Auto-Refresh**: Events automatically refresh when tab is focused
+11. **Enhanced Notifications**: All notifications include user names and event titles
+12. **Delayed Host Notifications**: 2-minute delay to prevent misclick notifications
 
 ### 🔄 In Progress
 - Testing notifications in Expo Go environment
-- Implementing delayed host notifications (2-minute delay)
+- Implementing notification preferences UI
 
 ### 📋 Next Steps
 1. Test local notifications in Expo Go
@@ -442,6 +595,8 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 - **Background Processing**: ✅ 30-second interval processing
 - **Event Reminders**: ✅ 15-minute advance scheduling
 - **Delayed Notifications**: ✅ 2-minute host notification delay
+- **Auto-Attendance**: ✅ Hosts automatically marked as going
+- **Auto-Refresh**: ✅ Events refresh on tab focus
 
 ### 📱 Testing Strategy
 1. **Expo Go**: Test local notifications and basic functionality
