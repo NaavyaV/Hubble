@@ -30,12 +30,29 @@ export default function AuthScreen({ navigation }: any) {
 
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password: password,
       })
 
-      if (error) throw error
+      if (error) {
+        throw error
+      }
+
+      // Check if user has completed OTP verification
+      if (data.user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('otp_verified')
+          .eq('id', data.user.id)
+          .single()
+        
+        if (!profile?.otp_verified) {
+          // User needs to complete OTP verification
+          navigation.navigate('AccountVerification', { email: email.trim() })
+          return
+        }
+      }
     } catch (error: any) {
       Alert.alert('Error', error.message)
     } finally {
@@ -117,6 +134,15 @@ export default function AuthScreen({ navigation }: any) {
                 >
                   <Text style={[styles.signInButtonText, { color: theme.buttonText }]}>
                     {loading ? 'Signing In...' : 'Sign In'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.resetPasswordButton}
+                  onPress={() => navigation.navigate('ResetPassword')}
+                >
+                  <Text style={[styles.resetPasswordButtonText, { color: theme.primary }]}>
+                    Forgot Password?
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -257,5 +283,14 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     backgroundColor: '#bdc3c7',
+  },
+  resetPasswordButton: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  resetPasswordButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
 })

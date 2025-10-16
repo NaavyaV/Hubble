@@ -84,9 +84,9 @@ export default function PhoneVisibilityScreen() {
 
   const handlePhoneVisibilityChange = (visibility: 'public' | 'friends_only' | 'private') => {
     setPhoneVisibility(visibility)
-    // Reset hosting visibility if setting to public
+    // Automatically enable hosting visibility if setting to public
     if (visibility === 'public') {
-      setPhoneVisibleWhenHosting(false)
+      setPhoneVisibleWhenHosting(true)
     }
   }
 
@@ -105,7 +105,7 @@ export default function PhoneVisibilityScreen() {
         .from('profiles')
         .update({ 
           phone_visibility: phoneVisibility,
-          phone_visible_when_hosting: phoneVisibility === 'public' ? false : phoneVisibleWhenHosting
+          phone_visible_when_hosting: phoneVisibility === 'public' ? true : phoneVisibleWhenHosting
         })
         .eq('id', user.id)
 
@@ -113,7 +113,7 @@ export default function PhoneVisibilityScreen() {
 
       // Update original values to reflect saved state
       setOriginalPhoneVisibility(phoneVisibility)
-      setOriginalPhoneVisibleWhenHosting(phoneVisibility === 'public' ? false : phoneVisibleWhenHosting)
+      setOriginalPhoneVisibleWhenHosting(phoneVisibility === 'public' ? true : phoneVisibleWhenHosting)
 
       Alert.alert('Success', 'Phone visibility settings saved!', [
         { text: 'OK', onPress: () => navigation.goBack() }

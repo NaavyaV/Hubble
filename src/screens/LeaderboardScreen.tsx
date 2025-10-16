@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
+import ImageWithFallback from '../components/ImageWithFallback'
 
 const { width: screenWidth } = Dimensions.get('window')
 
@@ -146,7 +147,15 @@ export default function LeaderboardScreen() {
         <View style={styles.userInfo}>
           <View style={styles.avatarContainer}>
             {item.avatar_url ? (
-              <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
+              <ImageWithFallback 
+                source={{ uri: item.avatar_url }} 
+                style={styles.avatar}
+                fallbackIcon="person"
+                fallbackText=""
+                resizeMode="cover"
+                skipValidation={true}
+                priority="high"
+              />
             ) : (
               <View style={[styles.avatarPlaceholder, { backgroundColor: theme.primary }]}>
                 <Ionicons name="person" size={18} color="white" />

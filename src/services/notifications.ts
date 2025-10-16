@@ -16,7 +16,7 @@ Notifications.setNotificationHandler({
 })
 
 export interface NotificationData {
-  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation' | 'maybe_spot_removed' | 'maybe_event_reminder'
+  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation'
   eventId?: string
   userId?: string
   title: string
@@ -134,9 +134,6 @@ class NotificationService {
 
       // Schedule reminder for all going attendees
       await this.scheduleReminderForAttendees(eventId, eventTitle, reminderTime, 'going', 'Event Starting Soon!', 'starts in 15 minutes')
-      
-      // Schedule reminder for all maybe attendees
-      await this.scheduleReminderForAttendees(eventId, eventTitle, reminderTime, 'maybe', 'Event Starting Soon - Maybe Status', 'starts in 15 minutes. You\'re marked as "maybe" - decide if you can attend!')
 
       console.log(`Scheduled reminders for event ${eventId} at ${reminderTime}`)
     } catch (error) {
@@ -149,7 +146,7 @@ class NotificationService {
     eventId: string, 
     eventTitle: string, 
     reminderTime: Date, 
-    attendeeStatus: 'going' | 'maybe',
+    attendeeStatus: 'going',
     title: string,
     bodySuffix: string
   ): Promise<void> {
@@ -183,7 +180,7 @@ class NotificationService {
               body: `${eventTitle} ${bodySuffix}`,
               data: { 
                 eventId, 
-                type: attendeeStatus === 'maybe' ? 'maybe_event_reminder' : 'event_reminder',
+                type: 'event_reminder',
                 userId: attendee.user_id
               }
             },
@@ -291,30 +288,6 @@ class NotificationService {
     }
   }
 
-  // Send maybe spot removal notification
-  async sendMaybeSpotRemovedNotification(
-    eventId: string,
-    eventTitle: string,
-    userId: string
-  ): Promise<void> {
-    try {
-      await this.sendNotification({
-        type: 'maybe_spot_removed',
-        eventId: eventId,
-        userId: userId,
-        title: 'Spot Removed from Event',
-        body: `Someone confirmed they're going to "${eventTitle}", so your maybe spot was removed.`,
-        data: {
-          event_title: eventTitle,
-          event_id: eventId
-        }
-      })
-
-      console.log(`Sent maybe spot removed notification to user ${userId} for event ${eventId}`)
-    } catch (error) {
-      console.error('Error sending maybe spot removed notification:', error)
-    }
-  }
 
   // Clear all notifications
   async clearAllNotifications(): Promise<void> {

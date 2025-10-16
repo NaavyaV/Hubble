@@ -12,18 +12,18 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import NotificationService from '../services/notifications'
 import ProfileModal from '../components/ProfileModal'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
-import notificationService from '../services/notifications'
 import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
 
 interface EventAttendee {
   id: string
   event_id: string
   user_id: string
-  status: 'going' | 'maybe' | 'not_going'
+  status: 'going'
   user?: {
     id?: string
     full_name?: string
@@ -56,7 +56,7 @@ export default function EventDetailScreen() {
     return []
   })
   
-  const [userAttendance, setUserAttendance] = useState<'going' | 'maybe' | 'not_going' | null>(null)
+  const [userAttendance, setUserAttendance] = useState<'going' | null>(null)
   const [loading, setLoading] = useState(false)
   const [profilesLoaded, setProfilesLoaded] = useState(false)
   const [selectedUser, setSelectedUser] = useState<any>(null)
@@ -66,6 +66,10 @@ export default function EventDetailScreen() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
   const [showHostPhone, setShowHostPhone] = useState(false)
+  const [pendingNotification, setPendingNotification] = useState<{
+    timer: NodeJS.Timeout | null
+    lastState: 'going' | null
+  }>({ timer: null, lastState: null })
 
   useEffect(() => {
     if (event && event.id) {
@@ -81,6 +85,15 @@ export default function EventDetailScreen() {
       checkHostPhoneVisibility()
     }
   }, [hostProfile, currentUserId])
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (pendingNotification.timer) {
+        clearTimeout(pendingNotification.timer)
+      }
+    }
+  }, [pendingNotification.timer])
 
   const fetchCurrentUser = async () => {
     try {
@@ -136,7 +149,7 @@ export default function EventDetailScreen() {
     try {
       setLoading(true)
       
-      // First, get all attendees for this event
+      // Use separate queries since the join syntax is not working
       const { data: attendeesData, error: attendeesError } = await supabase
         .from('event_attendees')
         .select('*')
@@ -144,37 +157,37 @@ export default function EventDetailScreen() {
 
       if (attendeesError) throw attendeesError
 
-      // Then, get all user profiles for these attendees
+      // Get user profiles for the attendees
       const userIds = attendeesData?.map(a => a.user_id) || []
+      let profilesData: any[] = []
+      
       if (userIds.length > 0) {
-        const { data: profilesData, error: profilesError } = await supabase
+        const { data: profiles, error: profilesError } = await supabase
           .from('profiles')
           .select('id, full_name, avatar_url, bio, phone_number')
           .in('id', userIds)
-
+        
         if (profilesError) throw profilesError
+        profilesData = profiles || []
+      }
 
-        // Combine attendees with their profiles
-        const attendeesWithProfiles = attendeesData?.map(attendee => ({
-          ...attendee,
-          user: profilesData?.find(profile => profile.id === attendee.user_id)
-        })) || []
+      // Transform the data to match the expected structure
+      const attendeesWithProfiles = (attendeesData || []).map(attendee => ({
+        ...attendee,
+        user: profilesData.find(profile => profile.id === attendee.user_id)
+      }))
+      
+      setAttendees(attendeesWithProfiles)
+      setProfilesLoaded(true)
 
-        setAttendees(attendeesWithProfiles)
-        setProfilesLoaded(true)
-
-        // Find current user's attendance status (only if not host)
-        const { data: { user } } = await supabase.auth.getUser()
-        if (user && !isHost) {
-          const userAttendance = attendeesWithProfiles.find(a => a.user_id === user.id)
-          setUserAttendance(userAttendance?.status || null)
-        }
-      } else {
-        setAttendees([])
-        setProfilesLoaded(true)
+      // Find current user's attendance status (only if not host)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user && !isHost) {
+        const userAttendance = attendeesWithProfiles.find(a => a.user_id === user.id)
+        setUserAttendance(userAttendance?.status || null)
       }
     } catch (error) {
-      console.error('Error fetching attendees:', error)
+      console.error('Error fetching attendees with profiles:', error)
       setAttendees([])
       setProfilesLoaded(true)
     } finally {
@@ -226,114 +239,170 @@ export default function EventDetailScreen() {
     }
   }
 
-  const handleAttendanceChange = async (status: 'going' | 'maybe' | 'not_going') => {
+  const handleAttendanceToggle = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
       // Check if event is full and user is trying to go
-      if (status === 'going' && isEventFull() && userAttendance !== 'going') {
-        // Check if there are any maybe attendees that can be converted
-        const maybeAttendees = attendees.filter(a => a.status === 'maybe')
-        
-        if (maybeAttendees.length > 0) {
-          // Show alert about taking a maybe's spot
-          Alert.alert(
-            'Taking Someone\'s Spot',
-            'This event is full, but someone marked as "maybe" will lose their spot if you confirm "going". Only choose "going" if you\'re sure you can attend.',
-            [
-              {
-                text: 'Cancel',
-                style: 'cancel'
-              },
-              {
-                text: 'Confirm Going',
-                style: 'default',
-                onPress: () => performAttendanceChange(status)
-              }
-            ]
-          )
-          return
-        }
+      if (!userAttendance && isEventFull()) {
+        Alert.alert(
+          'Event Full',
+          'This event has reached its maximum capacity.',
+          [{ text: 'OK' }]
+        )
+        return
       }
 
-      await performAttendanceChange(status)
+      // Clear any existing pending notification timer
+      if (pendingNotification.timer) {
+        clearTimeout(pendingNotification.timer)
+      }
+
+      // Update attendance immediately in UI and database
+      if (userAttendance === 'going') {
+        // User is currently going, so remove their attendance (delete from database)
+        await removeAttendance()
+      } else {
+        // User is not currently going, so add their attendance
+        await addAttendance()
+      }
+
+      // Set up 2-minute delay for notification
+      const newState = userAttendance === 'going' ? null : 'going'
+      const timer = setTimeout(async () => {
+        try {
+          // Check current attendance state after 2 minutes
+          const { data: { user: currentUser } } = await supabase.auth.getUser()
+          if (!currentUser) return
+
+          const { data: currentAttendance } = await supabase
+            .from('event_attendees')
+            .select('status')
+            .eq('event_id', event.id)
+            .eq('user_id', currentUser.id)
+            .single()
+
+          const currentState = currentAttendance ? 'going' : null
+          
+          // Only send notification if the state is different from what it was when the timer started
+          if (currentState !== pendingNotification.lastState) {
+            await sendAttendanceChangeNotification(currentState)
+          }
+        } catch (error) {
+          console.error('Error sending delayed attendance notification:', error)
+        }
+      }, 2 * 60 * 1000) // 2 minutes
+
+      setPendingNotification({
+        timer,
+        lastState: newState
+      })
     } catch (error) {
       console.error('Error updating attendance:', error)
       Alert.alert('Error', 'Failed to update attendance')
     }
   }
 
-  const performAttendanceChange = async (status: 'going' | 'maybe' | 'not_going') => {
+  const addAttendance = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      // Remove existing attendance record
-      await supabase
-        .from('event_attendees')
-        .delete()
-        .eq('event_id', event.id)
-        .eq('user_id', user.id)
-
-      // Add new attendance record
       const { error } = await supabase
         .from('event_attendees')
         .insert({
           event_id: event.id,
           user_id: user.id,
-          status: status
+          status: 'going'
         })
 
       if (error) throw error
 
-      // If someone is going and event is full, remove one maybe attendee
-      if (status === 'going' && isEventFull()) {
-        await convertMaybeToNotGoing()
-      }
-
-      setUserAttendance(status)
+      setUserAttendance('going')
       
       // Refresh attendees list
       await fetchAttendeesWithProfiles()
-      
-      // No alert for attendance changes
     } catch (error) {
-      console.error('Error updating attendance:', error)
-      Alert.alert('Error', 'Failed to update attendance')
+      console.error('Error adding attendance:', error)
+      Alert.alert('Error', 'Failed to mark as going')
     }
   }
 
-  const convertMaybeToNotGoing = async () => {
+  const removeAttendance = async () => {
     try {
-      // Get all maybe attendees
-      const { data: maybeAttendees } = await supabase
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { error } = await supabase
         .from('event_attendees')
-        .select('*')
+        .delete()
         .eq('event_id', event.id)
-        .eq('status', 'maybe')
-        .order('created_at', { ascending: true }) // Remove oldest maybe first
+        .eq('user_id', user.id)
 
-      if (maybeAttendees && maybeAttendees.length > 0) {
-        // Convert the oldest maybe to not_going
-        const oldestMaybe = maybeAttendees[0]
-        
-        await supabase
-          .from('event_attendees')
-          .update({ status: 'not_going' })
-          .eq('id', oldestMaybe.id)
+      if (error) throw error
 
-        // Send notification to the person who lost their spot
-        await notificationService.sendMaybeSpotRemovedNotification(
-          event.id,
-          event.title,
-          oldestMaybe.user_id
-        )
+      setUserAttendance(null)
+      
+      // Refresh attendees list
+      await fetchAttendeesWithProfiles()
+    } catch (error) {
+      console.error('Error removing attendance:', error)
+      Alert.alert('Error', 'Failed to remove attendance')
+    }
+  }
+
+  const sendAttendanceChangeNotification = async (currentState: 'going' | null) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !hostProfile) return
+
+      // Only send notification to the host (not to the user themselves)
+      if (user.id === event.host_id) return
+
+      // Get user's profile data for the notification
+      const { data: userProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .single()
+
+      const userName = userProfile?.full_name || 'A user'
+
+      if (currentState === 'going') {
+        // User is going
+        await NotificationService.sendNotification({
+          type: 'host_update',
+          eventId: event.id,
+          userId: event.host_id,
+          title: 'Someone Joined Your Event',
+          body: `${userName} is now going to "${event.title}"`,
+          data: {
+            eventId: event.id,
+            attendeeId: user.id,
+            action: 'joined'
+          }
+        })
+      } else {
+        // User is not going (removed themselves)
+        await NotificationService.sendNotification({
+          type: 'host_update',
+          eventId: event.id,
+          userId: event.host_id,
+          title: 'Someone Left Your Event',
+          body: `${userName} is no longer going to "${event.title}"`,
+          data: {
+            eventId: event.id,
+            attendeeId: user.id,
+            action: 'left'
+          }
+        })
       }
     } catch (error) {
-      console.error('Error converting maybe to not going:', error)
+      console.error('Error sending attendance change notification:', error)
     }
   }
+
 
   const handleUserPress = (user: any) => {
     setSelectedUser(user)
@@ -360,14 +429,6 @@ export default function EventDetailScreen() {
 
   const getGoingCount = () => {
     return attendees.filter(a => a.status === 'going').length
-  }
-
-  const getMaybeCount = () => {
-    return attendees.filter(a => a.status === 'maybe').length
-  }
-
-  const getNotGoingCount = () => {
-    return attendees.filter(a => a.status === 'not_going').length
   }
 
   const isEventFull = () => {
@@ -403,14 +464,12 @@ export default function EventDetailScreen() {
             )}
           </View>
           <Text style={[styles.attendeeStatus, { color: theme.textSecondary }]}>
-            {attendee.status === 'going' ? 'Going' : 
-             attendee.status === 'maybe' ? 'Maybe' : 'Not Going'}
+            Going
           </Text>
         </View>
         <View style={[
           styles.statusIndicator,
-          { backgroundColor: attendee.status === 'going' ? theme.success :
-                           attendee.status === 'maybe' ? theme.warning : theme.error }
+          { backgroundColor: theme.success }
         ]} />
       </TouchableOpacity>
     )
@@ -461,7 +520,7 @@ export default function EventDetailScreen() {
           {/* Title and Privacy */}
           <View style={styles.titleRow}>
             <Text style={[styles.eventTitle, { color: theme.text }]}>{event.title}</Text>
-            {event.privacy === 'friends_only' && (
+            {event.privacy === 'invite_only' && (
               <View style={styles.privacyBadge}>
                 <Ionicons name="lock-closed" size={16} color={theme.error} />
                 <Text style={styles.privacyText}>Friends Only</Text>
@@ -549,13 +608,10 @@ export default function EventDetailScreen() {
             </View>
           )}
 
-          
-          </View>
-
           {/* Attendance Actions */}
           {!isHost && (
             <View style={styles.attendanceSection}>
-              <Text style={styles.sectionTitle}>Your Attendance</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Your Attendance</Text>
               {isEventFull() && !userAttendance ? (
                 <View style={[styles.eventFullContainer, { backgroundColor: theme.error + '20', borderColor: theme.error }]}>
                   <View style={styles.eventFullHeader}>
@@ -563,50 +619,31 @@ export default function EventDetailScreen() {
                     <Text style={[styles.eventFullTitle, { color: theme.error }]}>Event is Full</Text>
                   </View>
                   <Text style={[styles.eventFullMessage, { color: theme.text }]}>
-                    This event has reached its maximum capacity. You can still join as "maybe" and will be notified if spots open up.
+                    This event has reached its maximum capacity.
                   </Text>
-                  <View style={styles.attendanceButtons}>
+                  <View style={styles.singleAttendanceButton}>
                     <TouchableOpacity
                       style={[
-                        styles.attendanceButton,
-                        { backgroundColor: theme.surface, borderColor: theme.border },
-                        userAttendance === 'maybe' && { backgroundColor: theme.primary, borderColor: theme.primary }
+                        styles.goingButton,
+                        { 
+                          backgroundColor: userAttendance === 'going' ? theme.surface : theme.primary, 
+                          borderColor: userAttendance === 'going' ? theme.border : theme.primary 
+                        }
                       ]}
-                      onPress={() => handleAttendanceChange('maybe')}
+                      onPress={handleAttendanceToggle}
                     >
                       <Ionicons 
-                        name="help-circle" 
-                        size={20} 
-                        color={userAttendance === 'maybe' ? theme.buttonText : theme.warning} 
+                        name={userAttendance === 'going' ? "checkmark-circle-outline" : "checkmark-circle"} 
+                        size={24} 
+                        color={userAttendance === 'going' ? theme.success : theme.buttonText} 
                       />
                       <Text style={[
-                        styles.attendanceButtonText,
-                        { color: theme.text },
-                        userAttendance === 'maybe' && { color: theme.buttonText }
+                        styles.goingButtonText,
+                        { 
+                          color: userAttendance === 'going' ? theme.text : theme.buttonText 
+                        }
                       ]}>
-                        Maybe
-                      </Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity
-                      style={[
-                        styles.attendanceButton,
-                        { backgroundColor: theme.surface, borderColor: theme.border },
-                        userAttendance === 'not_going' && { backgroundColor: theme.primary, borderColor: theme.primary }
-                      ]}
-                      onPress={() => handleAttendanceChange('not_going')}
-                    >
-                      <Ionicons 
-                        name="close-circle" 
-                        size={20} 
-                        color={userAttendance === 'not_going' ? theme.buttonText : theme.error} 
-                      />
-                      <Text style={[
-                        styles.attendanceButtonText,
-                        { color: theme.text },
-                        userAttendance === 'not_going' && { color: theme.buttonText }
-                      ]}>
-                        Not Going
+                        {userAttendance === 'going' ? "I'm Going (Tap to Remove)" : "I'm Going"}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -625,70 +662,29 @@ export default function EventDetailScreen() {
                   )}
                 </View>
               ) : (
-                <View style={styles.attendanceButtons}>
+                <View style={styles.singleAttendanceButton}>
                   <TouchableOpacity
                     style={[
-                      styles.attendanceButton,
-                      { backgroundColor: theme.surface, borderColor: theme.border },
-                      userAttendance === 'going' && { backgroundColor: theme.primary, borderColor: theme.primary }
+                      styles.goingButton,
+                      { 
+                        backgroundColor: userAttendance === 'going' ? theme.surface : theme.primary, 
+                        borderColor: userAttendance === 'going' ? theme.border : theme.primary 
+                      }
                     ]}
-                    onPress={() => handleAttendanceChange('going')}
+                    onPress={handleAttendanceToggle}
                   >
                     <Ionicons 
-                      name="checkmark-circle" 
-                      size={20} 
-                      color={userAttendance === 'going' ? theme.buttonText : theme.success} 
+                      name={userAttendance === 'going' ? "checkmark-circle-outline" : "checkmark-circle"} 
+                      size={24} 
+                      color={userAttendance === 'going' ? theme.success : theme.buttonText} 
                     />
                     <Text style={[
-                      styles.attendanceButtonText,
-                      { color: theme.text },
-                      userAttendance === 'going' && { color: theme.buttonText }
+                      styles.goingButtonText,
+                      { 
+                        color: userAttendance === 'going' ? theme.text : theme.buttonText 
+                      }
                     ]}>
-                      Going
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[
-                      styles.attendanceButton,
-                      { backgroundColor: theme.surface, borderColor: theme.border },
-                      userAttendance === 'maybe' && { backgroundColor: theme.primary, borderColor: theme.primary }
-                    ]}
-                    onPress={() => handleAttendanceChange('maybe')}
-                  >
-                    <Ionicons 
-                      name="help-circle" 
-                      size={20} 
-                      color={userAttendance === 'maybe' ? theme.buttonText : theme.warning} 
-                    />
-                    <Text style={[
-                      styles.attendanceButtonText,
-                      { color: theme.text },
-                      userAttendance === 'maybe' && { color: theme.buttonText }
-                    ]}>
-                      Maybe
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[
-                      styles.attendanceButton,
-                      { backgroundColor: theme.surface, borderColor: theme.border },
-                      userAttendance === 'not_going' && { backgroundColor: theme.primary, borderColor: theme.primary }
-                    ]}
-                    onPress={() => handleAttendanceChange('not_going')}
-                  >
-                    <Ionicons 
-                      name="close-circle" 
-                      size={20} 
-                      color={userAttendance === 'not_going' ? theme.buttonText : theme.error} 
-                    />
-                    <Text style={[
-                      styles.attendanceButtonText,
-                      { color: theme.text },
-                      userAttendance === 'not_going' && { color: theme.buttonText }
-                    ]}>
-                      Not Going
+                      {userAttendance === 'going' ? "I'm Going (Tap to Remove)" : "I'm Going"}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -716,7 +712,6 @@ export default function EventDetailScreen() {
               <View style={styles.attendeeStats}>
                 <Text style={[styles.attendeeStatsText, { color: theme.textSecondary }]}>
                   {getGoingCount()} going
-                  {getMaybeCount() > 0 && `, ${getMaybeCount()} maybe`}
                   {event.max_attendees && ` out of ${event.max_attendees} max`}
                 </Text>
               </View>
@@ -728,9 +723,9 @@ export default function EventDetailScreen() {
               </View>
             ) : profilesLoaded ? (
               <View style={styles.attendeesList}>
-                {attendees.filter(a => a.status !== 'not_going').length > 0 ? (
+                {attendees.filter(a => a.status === 'going').length > 0 ? (
                   attendees
-                    .filter(a => a.status !== 'not_going') // Filter out "not going" attendees
+                    .filter(a => a.status === 'going') // Only show "going" attendees
                     .map(renderAttendee)
                 ) : (
                   <Text style={[styles.noAttendeesText, { color: theme.textSecondary }]}>No attendees yet</Text>
@@ -743,6 +738,7 @@ export default function EventDetailScreen() {
             )}
           </View>
         </View>
+      </View>
       </ScrollView>
 
       {/* Profile Modal */}
@@ -1128,6 +1124,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginLeft: 4,
     fontWeight: '500',
+  },
+  singleAttendanceButton: {
+    width: '100%',
+    marginTop: 4,
+  },
+  goingButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    borderWidth: 2,
+    width: '100%',
+  },
+  goingButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
   },
 
 })

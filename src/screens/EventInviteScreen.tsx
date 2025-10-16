@@ -13,6 +13,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import ImageWithFallback from '../components/ImageWithFallback'
+import { useTheme } from '../context/ThemeContext'
 
 interface ProfileRow {
   id: string
@@ -38,16 +40,17 @@ export const getSelectedUsers = () => globalSelectedUsers
 export const clearSelectedUsers = () => { globalSelectedUsers = [] }
 
 export default function EventInviteScreen() {
+  const { theme } = useTheme()
   const navigation = useNavigation()
   const route = useRoute()
-  const { invitedUsers = [], isEditMode = false, eventId } = route.params as {
+  const { invitedUsers = [], isEditMode = false, eventId, onInvitesUpdated } = route.params as {
     invitedUsers: string[]
     isEditMode?: boolean
     eventId?: string
+    onInvitesUpdated?: (invitedUsers: string[]) => void
   }
 
-  const [allUsers, setAllUsers] = useState<ProfileRow[]>([])
-  const [filteredUsers, setFilteredUsers] = useState<ProfileRow[]>([])
+  const [filteredFriends, setFilteredFriends] = useState<ProfileRow[]>([])
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set(invitedUsers))
   const [friends, setFriends] = useState<ProfileRow[]>([])
   const [friendships, setFriendships] = useState<FriendshipRow[]>([])
@@ -55,48 +58,29 @@ export default function EventInviteScreen() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchUsers()
     fetchFriends()
   }, [])
 
   useEffect(() => {
-    filterUsers()
-  }, [query, allUsers])
+    filterFriends()
+  }, [query, friends])
 
-  const fetchUsers = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const { data: profiles, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
-        .neq('id', user.id) // Exclude current user
-
-      if (error) throw error
-
-      setAllUsers(profiles || [])
-    } catch (error) {
-      console.error('Error fetching users:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const fetchFriends = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      // Fetch friendships where current user is either user_id or friend_id
+      // Optimize: Filter for accepted friendships in the query instead of in memory
       const { data: friendshipsData, error: friendshipsError } = await supabase
         .from('friendships')
         .select('*')
         .or(`user_id.eq.${user.id},friend_id.eq.${user.id}`)
+        .eq('status', 'accepted')
 
       if (friendshipsError) throw friendshipsError
 
-      const acceptedFriendships = (friendshipsData || []).filter(f => f.status === 'accepted')
+      const acceptedFriendships = friendshipsData || []
       setFriendships(acceptedFriendships)
 
       // Get friend profiles
@@ -115,22 +99,24 @@ export default function EventInviteScreen() {
       }
     } catch (error) {
       console.error('Error fetching friends:', error)
+    } finally {
+      setLoading(false)
     }
   }
 
-  const filterUsers = () => {
+  const filterFriends = () => {
     if (!query.trim()) {
-      setFilteredUsers(allUsers)
+      setFilteredFriends(friends)
       return
     }
 
-    const filtered = allUsers.filter(user =>
-      user.full_name?.toLowerCase().includes(query.toLowerCase()) ||
-      user.major?.toLowerCase().includes(query.toLowerCase()) ||
-      user.graduating_year?.toLowerCase().includes(query.toLowerCase())
+    const filtered = friends.filter(friend =>
+      friend.full_name?.toLowerCase().includes(query.toLowerCase()) ||
+      friend.major?.toLowerCase().includes(query.toLowerCase()) ||
+      friend.graduating_year?.toLowerCase().includes(query.toLowerCase())
     )
 
-    setFilteredUsers(filtered)
+    setFilteredFriends(filtered)
   }
 
   const toggleUserSelection = (userId: string) => {
@@ -176,6 +162,12 @@ export default function EventInviteScreen() {
   const handleDone = () => {
     const selectedArray = Array.from(selectedUsers)
     globalSelectedUsers = selectedArray
+    
+    // If there's a callback for updating invites, call it
+    if (onInvitesUpdated) {
+      onInvitesUpdated(selectedArray)
+    }
+    
     navigation.goBack()
   }
 
@@ -188,31 +180,40 @@ export default function EventInviteScreen() {
       <TouchableOpacity
         style={[
           styles.userItem,
-          isSelected && styles.userItemSelected,
-          isAlreadyInvited && styles.userItemInvited
+          { 
+            backgroundColor: theme.surface, 
+            borderBottomColor: isSelected ? 'transparent' : theme.border,
+            borderColor: isSelected ? theme.primary : 'transparent',
+            borderWidth: isSelected ? 2 : 0,
+            borderRadius: isSelected ? 8 : 0,
+            borderBottomWidth: isSelected ? 0 : 1,
+          },
+          isAlreadyInvited && { backgroundColor: theme.primaryLight }
         ]}
         onPress={() => toggleUserSelection(item.id)}
         disabled={isAlreadyInvited}
       >
         <View style={styles.userAvatar}>
           {item.avatar_url ? (
-            <Image source={{ uri: item.avatar_url }} style={styles.avatarImage} />
+            <ImageWithFallback 
+              source={{ uri: item.avatar_url }} 
+              style={styles.avatarImage}
+              fallbackIcon="person"
+              fallbackText=""
+              resizeMode="cover"
+              skipValidation={true}
+              priority="high"
+            />
           ) : (
-            <Ionicons name="person" size={24} color="#7f8c8d" />
+            <Ionicons name="person" size={24} color={theme.textSecondary} />
           )}
         </View>
         
         <View style={styles.userInfo}>
           <View style={styles.userNameRow}>
-            <Text style={styles.userName}>{item.full_name || 'Unknown'}</Text>
-            {isFriend && (
-              <View style={styles.friendBadge}>
-                <Ionicons name="people" size={12} color="white" />
-                <Text style={styles.friendBadgeText}>Friend</Text>
-              </View>
-            )}
+            <Text style={[styles.userName, { color: theme.text }]}>{item.full_name || 'Unknown'}</Text>
             {isAlreadyInvited && (
-              <View style={styles.invitedBadge}>
+              <View style={[styles.invitedBadge, { backgroundColor: theme.primary }]}>
                 <Ionicons name="checkmark" size={12} color="white" />
                 <Text style={styles.invitedBadgeText}>Invited</Text>
               </View>
@@ -220,19 +221,19 @@ export default function EventInviteScreen() {
           </View>
           
           {item.major && (
-            <Text style={styles.userMajor}>{item.major}</Text>
+            <Text style={[styles.userMajor, { color: theme.textSecondary }]}>{item.major}</Text>
           )}
           
           {item.graduating_year && (
-            <Text style={styles.userYear}>{item.graduating_year}</Text>
+            <Text style={[styles.userYear, { color: theme.textSecondary }]}>{item.graduating_year}</Text>
           )}
         </View>
 
         <View style={styles.selectionIndicator}>
           {isSelected ? (
-            <Ionicons name="checkmark-circle" size={24} color="#3498db" />
+            <Ionicons name="checkmark-circle" size={24} color={theme.primary} />
           ) : (
-            <Ionicons name="ellipse-outline" size={24} color="#bdc3c7" />
+            <Ionicons name="ellipse-outline" size={24} color={theme.textSecondary} />
           )}
         </View>
       </TouchableOpacity>
@@ -241,81 +242,84 @@ export default function EventInviteScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading users...</Text>
+          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading friends...</Text>
         </View>
       </SafeAreaView>
     )
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={24} color="#2c3e50" />
+          <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>
-          {isEditMode ? 'Edit Invites' : 'Invite People'}
+        <Text style={[styles.headerTitle, { color: theme.text }]}>
+          {isEditMode ? 'Edit Invites' : 'Invite Friends'}
         </Text>
-        <TouchableOpacity style={styles.doneButton} onPress={handleDone}>
+        <TouchableOpacity 
+          style={[styles.doneButton, { backgroundColor: theme.primary }]} 
+          onPress={handleDone}
+        >
           <Text style={styles.doneButtonText}>Done</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.content}>
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color="#7f8c8d" style={styles.searchIcon} />
+        <View style={[styles.searchContainer, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder }]}>
+          <Ionicons name="search" size={20} color={theme.textSecondary} style={styles.searchIcon} />
           <TextInput
-            style={styles.searchInput}
-            placeholder="Search people..."
+            style={[styles.searchInput, { color: theme.text }]}
+            placeholder="Search friends..."
             value={query}
             onChangeText={setQuery}
-            placeholderTextColor="#7f8c8d"
+            placeholderTextColor={theme.inputPlaceholder}
           />
         </View>
 
         <View style={styles.friendsSection}>
           <View style={styles.friendsHeader}>
-            <Text style={styles.friendsTitle}>Your Friends</Text>
-            <TouchableOpacity style={styles.inviteAllButton} onPress={handleInviteAllFriends}>
-              <Text style={styles.inviteAllButtonText}>Invite All</Text>
-            </TouchableOpacity>
+            <Text style={[styles.friendsTitle, { color: theme.text }]}>Your Friends</Text>
+            {friends.length > 0 && (
+              <TouchableOpacity style={[styles.inviteAllButton, { backgroundColor: theme.primary }]} onPress={handleInviteAllFriends}>
+                <Text style={styles.inviteAllButtonText}>Invite All</Text>
+              </TouchableOpacity>
+            )}
           </View>
           
-          {friends.length > 0 ? (
+          {filteredFriends.length > 0 ? (
             <FlatList
-              data={friends}
+              data={filteredFriends}
               keyExtractor={(item) => item.id}
               renderItem={renderUser}
               style={styles.friendsList}
               showsVerticalScrollIndicator={false}
             />
+          ) : friends.length > 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="search-outline" size={48} color={theme.textSecondary} />
+              <Text style={[styles.emptyStateText, { color: theme.text }]}>No friends match your search</Text>
+              <Text style={[styles.emptyStateSubtext, { color: theme.textSecondary }]}>
+                Try a different search term
+              </Text>
+            </View>
           ) : (
-            <Text style={styles.noFriendsText}>No friends found</Text>
-          )}
-        </View>
-
-        <View style={styles.allUsersSection}>
-          <Text style={styles.allUsersTitle}>All Users</Text>
-          
-          {filteredUsers.length > 0 ? (
-            <FlatList
-              data={filteredUsers}
-              keyExtractor={(item) => item.id}
-              renderItem={renderUser}
-              style={styles.allUsersList}
-              showsVerticalScrollIndicator={false}
-            />
-          ) : (
-            <Text style={styles.noUsersText}>No users found</Text>
+            <View style={styles.emptyState}>
+              <Ionicons name="people-outline" size={48} color={theme.textSecondary} />
+              <Text style={[styles.emptyStateText, { color: theme.text }]}>No friends found</Text>
+              <Text style={[styles.emptyStateSubtext, { color: theme.textSecondary }]}>
+                Add friends to invite them to your events
+              </Text>
+            </View>
           )}
         </View>
 
         {isEditMode && (
-          <View style={styles.editNote}>
-            <Ionicons name="information-circle" size={16} color="#f39c12" />
-            <Text style={styles.editNoteText}>
+          <View style={[styles.editNote, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Ionicons name="information-circle" size={16} color={theme.primary} />
+            <Text style={[styles.editNoteText, { color: theme.text }]}>
               You can add more people but cannot remove those already invited
             </Text>
           </View>
@@ -328,7 +332,6 @@ export default function EventInviteScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
   },
   loadingContainer: {
     flex: 1,
@@ -337,16 +340,13 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#7f8c8d',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 20,
-    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
   },
   backButton: {
     padding: 4,
@@ -354,13 +354,13 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   doneButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: '#3498db',
     borderRadius: 6,
+    minWidth: 60,
+    alignItems: 'center',
   },
   doneButtonText: {
     color: 'white',
@@ -374,13 +374,11 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
   },
   searchIcon: {
     marginRight: 12,
@@ -388,7 +386,6 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: '#2c3e50',
   },
   friendsSection: {
     marginBottom: 24,
@@ -402,10 +399,8 @@ const styles = StyleSheet.create({
   friendsTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2c3e50',
   },
   inviteAllButton: {
-    backgroundColor: '#27ae60',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 6,
@@ -418,54 +413,18 @@ const styles = StyleSheet.create({
   friendsList: {
     maxHeight: 200,
   },
-  noFriendsText: {
-    fontSize: 14,
-    color: '#7f8c8d',
-    textAlign: 'center',
-    padding: 20,
-  },
-  allUsersSection: {
-    flex: 1,
-  },
-  allUsersTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginBottom: 12,
-  },
-  allUsersList: {
-    flex: 1,
-  },
-  noUsersText: {
-    fontSize: 14,
-    color: '#7f8c8d',
-    textAlign: 'center',
-    padding: 20,
-  },
   userItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
     padding: 12,
     borderRadius: 8,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#e1e8ed',
-  },
-  userItemSelected: {
-    backgroundColor: '#e3f2fd',
-    borderColor: '#3498db',
-  },
-  userItemInvited: {
-    backgroundColor: '#fff3cd',
-    borderColor: '#f39c12',
-    opacity: 0.8,
   },
   userAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#f8f9fa',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -486,28 +445,11 @@ const styles = StyleSheet.create({
   userName: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2c3e50',
     marginRight: 8,
-  },
-  friendBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#27ae60',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    marginRight: 8,
-  },
-  friendBadgeText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: '600',
-    marginLeft: 2,
   },
   invitedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f39c12',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 8,
@@ -520,12 +462,10 @@ const styles = StyleSheet.create({
   },
   userMajor: {
     fontSize: 14,
-    color: '#7f8c8d',
     marginBottom: 2,
   },
   userYear: {
     fontSize: 12,
-    color: '#7f8c8d',
   },
   selectionIndicator: {
     marginLeft: 12,
@@ -533,17 +473,29 @@ const styles = StyleSheet.create({
   editNote: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff3cd',
     padding: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#f39c12',
     marginTop: 16,
   },
   editNoteText: {
     fontSize: 14,
-    color: '#2c3e50',
     marginLeft: 8,
     flex: 1,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    textAlign: 'center',
   },
 })

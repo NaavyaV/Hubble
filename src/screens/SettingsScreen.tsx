@@ -280,4 +280,14 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 14,
     color: theme.textSecondary,
   },
+  settingItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  settingItemText: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginLeft: 12,
+  },
 })

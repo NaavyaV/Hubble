@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, Image, ImageStyle, ViewStyle } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
 import { validateImageUrl, retryImageLoad } from '../utils/imageUtils'
+
+// Simple in-memory cache for loaded images
+const imageCache = new Set<string>()
 
 interface ImageWithFallbackProps {
   source: { uri: string }
@@ -14,6 +17,8 @@ interface ImageWithFallbackProps {
   onError?: (error: any) => void
   onLoad?: () => void
   maxRetries?: number
+  skipValidation?: boolean
+  priority?: 'high' | 'normal' | 'low'
 }
 
 export default function ImageWithFallback({
@@ -25,18 +30,38 @@ export default function ImageWithFallback({
   resizeMode = 'cover',
   onError,
   onLoad,
-  maxRetries = 3
+  maxRetries = 3,
+  skipValidation = false,
+  priority = 'normal'
 }: ImageWithFallbackProps) {
   const { theme } = useTheme()
   const [hasError, setHasError] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [imageSource, setImageSource] = useState(source)
 
-  // Validate image URL on mount
+  // Validate image URL on mount (only if not skipped)
   useEffect(() => {
+    if (skipValidation) {
+      // Don't set loading to false immediately when skipping validation
+      // Let the Image component handle loading state
+      return
+    }
+
     const validateImage = async () => {
       if (!source.uri) {
         setHasError(true)
+        setIsLoading(false)
+        return
+      }
+
+      // If image is already cached, skip validation
+      if (imageCache.has(source.uri)) {
+        setIsLoading(false)
+        return
+      }
+
+      // Skip validation for Supabase URLs as they're typically reliable
+      if (source.uri.includes('supabase.co/storage')) {
         setIsLoading(false)
         return
       }
@@ -51,14 +76,17 @@ export default function ImageWithFallback({
             setHasError(true)
             setIsLoading(false)
           }
+        } else {
+          setIsLoading(false)
         }
       } catch (error) {
         console.warn('ImageWithFallback - Error validating URL:', error)
+        setIsLoading(false)
       }
     }
 
     validateImage()
-  }, [source.uri])
+  }, [source.uri, skipValidation])
 
   const handleError = async (error: any) => {
     console.warn('ImageWithFallback - Image load error:', error)
@@ -81,6 +109,8 @@ export default function ImageWithFallback({
   const handleLoad = () => {
     setIsLoading(false)
     setHasError(false)
+    // Cache the successfully loaded image
+    imageCache.add(source.uri)
     onLoad?.()
   }
 

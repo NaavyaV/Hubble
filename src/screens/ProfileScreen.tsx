@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import ImageWithFallback from '../components/ImageWithFallback'
 import { useTheme } from '../context/ThemeContext'
 
 export default function ProfileScreen() {
@@ -119,9 +120,14 @@ export default function ProfileScreen() {
           <View style={styles.profileLeft}>
             <View style={styles.avatarContainer}>
               {profile?.avatar_url ? (
-                <Image 
+                <ImageWithFallback 
                   source={{ uri: profile.avatar_url }} 
-                  style={styles.avatar} 
+                  style={styles.avatar}
+                  fallbackIcon="person"
+                  fallbackText=""
+                  resizeMode="cover"
+                  skipValidation={true}
+                  priority="high"
                 />
               ) : (
                 <View style={styles.avatar}>

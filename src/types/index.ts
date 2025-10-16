@@ -21,7 +21,7 @@ export interface Event {
   location: string
   max_attendees?: number
   image_url?: string
-  privacy?: 'public' | 'friends_only'
+  privacy?: 'public' | 'invite_only'
   tags?: string[]
   created_at: string
   updated_at: string
@@ -31,7 +31,7 @@ export interface EventAttendee {
   id: string
   event_id: string
   user_id: string
-  status: 'going' | 'maybe' | 'not_going'
+  status: 'going'
   created_at: string
   user?: {
     id?: string

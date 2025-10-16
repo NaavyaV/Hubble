@@ -22,9 +22,9 @@ import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { getEventEndDate, isEventEnded, isEventInFuture } from '../utils/eventTimeUtils'
 
-type EventListItem = EventWithAttendees & { goingCount: number; maybeCount: number; tags?: string[] }
+type EventListItem = EventWithAttendees & { goingCount: number; tags?: string[] }
 
-type FilterType = 'my_events' | 'today' | 'week' | 'month' | 'all'
+type FilterType = 'my_events' | 'all'
 type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
 type TimeFilterType = 'current' | 'past' | 'photo_gallery'
 
@@ -82,7 +82,6 @@ export default function EventsListScreen() {
   // Refresh events when the tab is focused
   useFocusEffect(
     React.useCallback(() => {
-      console.log('Events tab focused - refreshing events')
       fetchEvents()
     }, [])
   )
@@ -120,57 +119,63 @@ export default function EventsListScreen() {
 
       setCurrentUserId(user.id)
 
-      // First, get the user's friends
-      await fetchFriends(user.id)
+      // Optimize: Run all queries in parallel for better performance
+      const [friendsResult, invitedEventIds] = await Promise.all([
+        fetchFriends(user.id),
+        getInvitedEventIds(user.id)
+      ])
 
-      // Fetch public events
-      const { data: publicEvents, error: publicError } = await supabase
-        .from('events')
-        .select(`
-          *,
-          attendees:event_attendees(
-            id,
-            user_id,
-            status
-          )
-        `)
-        .eq('privacy', 'public')
-        .order('event_date', { ascending: true })
+      // Run all event queries in parallel
+      const [publicEventsResult, hostedEventsResult, invitedEventsResult] = await Promise.all([
+        supabase
+          .from('events')
+          .select(`
+            *,
+            attendees:event_attendees(
+              id,
+              user_id,
+              status
+            )
+          `)
+          .eq('privacy', 'public')
+          .order('event_date', { ascending: true }),
+        
+        supabase
+          .from('events')
+          .select(`
+            *,
+            attendees:event_attendees(
+              id,
+              user_id,
+              status
+            )
+          `)
+          .eq('host_id', user.id)
+          .order('event_date', { ascending: true }),
+        
+        invitedEventIds.length > 0 ? supabase
+          .from('events')
+          .select(`
+            *,
+            attendees:event_attendees(
+              id,
+              user_id,
+              status
+            )
+          `)
+          .eq('privacy', 'invite_only')
+          .in('id', invitedEventIds)
+          .order('event_date', { ascending: true }) : { data: [], error: null }
+      ])
 
-      if (publicError) throw publicError
+      // Check for errors
+      if (publicEventsResult.error) throw publicEventsResult.error
+      if (hostedEventsResult.error) throw hostedEventsResult.error
+      if (invitedEventsResult.error) throw invitedEventsResult.error
 
-      // Fetch events where user is the host (regardless of privacy)
-      const { data: hostedEvents, error: hostedError } = await supabase
-        .from('events')
-        .select(`
-          *,
-          attendees:event_attendees(
-            id,
-            user_id,
-            status
-          )
-        `)
-        .eq('host_id', user.id)
-        .order('event_date', { ascending: true })
-
-      if (hostedError) throw hostedError
-
-      // Fetch friends-only events where user is invited
-      const { data: invitedEvents, error: invitedError } = await supabase
-        .from('events')
-        .select(`
-          *,
-          attendees:event_attendees(
-            id,
-            user_id,
-            status
-          )
-        `)
-        .eq('privacy', 'friends_only')
-        .in('id', await getInvitedEventIds(user.id))
-        .order('event_date', { ascending: true })
-
-      if (invitedError) throw invitedError
+      const publicEvents = publicEventsResult.data || []
+      const hostedEvents = hostedEventsResult.data || []
+      const invitedEvents = invitedEventsResult.data || []
 
       // Combine all events and remove duplicates
       const allEvents = [...publicEvents, ...hostedEvents, ...invitedEvents]
@@ -182,7 +187,6 @@ export default function EventsListScreen() {
       const eventsWithCounts = uniqueEvents.map(event => ({
         ...event,
         goingCount: event.attendees?.filter((a: any) => a.status === 'going').length || 0,
-        maybeCount: event.attendees?.filter((a: any) => a.status === 'maybe').length || 0,
       }))
 
       // Set events immediately for faster UI response
@@ -421,7 +425,7 @@ export default function EventsListScreen() {
     // Apply advanced filters
     if (advancedFilters.friendsOnly) {
       filtered = filtered.filter(event => 
-        event.privacy === 'friends_only' || 
+        event.privacy === 'invite_only' || 
         friends.has(event.host_id)
       )
     }
@@ -454,25 +458,11 @@ export default function EventsListScreen() {
           // In past events, only show events where user was going
           filtered = filtered.filter(event => userAttendances[event.id] === 'going')
         } else {
-          // In current events, show both going and maybe
+          // In current events, show only going
           filtered = filtered.filter(event => 
-            userAttendances[event.id] === 'going' || userAttendances[event.id] === 'maybe'
+            userAttendances[event.id] === 'going'
           )
         }
-        break
-      case 'today':
-        const today = new Date().toISOString().split('T')[0]
-        filtered = filtered.filter(event => event.event_date === today)
-        break
-      case 'week':
-        const weekFromNow = new Date()
-        weekFromNow.setDate(weekFromNow.getDate() + 7)
-        filtered = filtered.filter(event => new Date(event.event_date) <= weekFromNow)
-        break
-      case 'month':
-        const monthFromNow = new Date()
-        monthFromNow.setMonth(monthFromNow.getMonth() + 1)
-        filtered = filtered.filter(event => new Date(event.event_date) <= monthFromNow)
         break
     }
 
@@ -696,12 +686,6 @@ export default function EventsListScreen() {
               <Ionicons name="people" size={16} color="#27ae60" />
               <Text style={styles.statText}>{item.goingCount} going</Text>
             </View>
-            {item.maybeCount > 0 && (
-              <View style={styles.statItem}>
-                <Ionicons name="help-circle" size={16} color="#f39c12" />
-                <Text style={styles.statText}>{item.maybeCount} maybe</Text>
-              </View>
-            )}
             {item.max_attendees && (
               <View style={styles.statItem}>
                 <Ionicons name="person-add" size={16} color="#3498db" />
@@ -712,17 +696,11 @@ export default function EventsListScreen() {
             )}
           </View>
 
-          {/* Show attendance status if user is going or maybe */}
+          {/* Show attendance status if user is going */}
           {userAttendance === 'going' && (
             <View style={styles.attendanceStatus}>
               <Ionicons name="checkmark-circle" size={16} color="#27ae60" />
               <Text style={styles.attendanceStatusText}>You're going</Text>
-            </View>
-          )}
-          {userAttendance === 'maybe' && (
-            <View style={styles.attendanceStatus}>
-              <Ionicons name="help-circle" size={16} color="#f39c12" />
-              <Text style={styles.attendanceStatusText}>You're maybe</Text>
             </View>
           )}
         </View>
@@ -763,102 +741,117 @@ export default function EventsListScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Time Filter Bar */}
-      <View style={styles.timeFilterContainer}>
-        <TouchableOpacity
-          style={[
-            styles.timeFilterButton,
-            timeFilter === 'current' && styles.timeFilterButtonActive
-          ]}
-          onPress={() => {
-            setTimeFilter('current')
-            setActiveFilter('all') // Reset to default filter for current events
-          }}
+      {/* Unified Header with Scroll View */}
+      <View style={styles.unifiedHeader}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.headerScrollContent}
+          scrollEnabled={true}
+          bounces={false}
         >
-          <Text 
+          <TouchableOpacity
             style={[
-              styles.timeFilterText,
-              timeFilter === 'current' && styles.timeFilterTextActive
+              styles.headerButton,
+              activeFilter === 'my_events' && timeFilter === 'current' && styles.headerButtonActive
             ]}
-            numberOfLines={1}
+            onPress={() => {
+              setTimeFilter('current')
+              setActiveFilter('my_events')
+            }}
           >
-            Coming Events
-          </Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={[
-            styles.timeFilterButton,
-            timeFilter === 'past' && styles.timeFilterButtonActive
-          ]}
-          onPress={() => {
-            setTimeFilter('past')
-            setActiveFilter('all') // Reset to default filter for past events
-          }}
-        >
-          <Text 
-            style={[
-              styles.timeFilterText,
-              timeFilter === 'past' && styles.timeFilterTextActive
-            ]}
-            numberOfLines={1}
-          >
-            Past Events
-          </Text>
-        </TouchableOpacity>
+            <Text 
+              style={[
+                styles.headerButtonText,
+                activeFilter === 'my_events' && timeFilter === 'current' && styles.headerButtonTextActive
+              ]}
+            >
+              My Events
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.photoGalleryIcon}
-          onPress={() => {
-            setTimeFilter('photo_gallery')
-            // Navigate to general photo gallery
-            ;(navigation as any).navigate('GeneralPhotoGallery')
-          }}
-        >
-          <Ionicons 
-            name="images-outline" 
-            size={24} 
-            color={timeFilter === 'photo_gallery' ? theme.primary : theme.textSecondary} 
+          <TouchableOpacity
+            style={[
+              styles.headerButton,
+              timeFilter === 'current' && activeFilter === 'all' && styles.headerButtonActive
+            ]}
+            onPress={() => {
+              setTimeFilter('current')
+              setActiveFilter('all')
+            }}
+          >
+            <Text 
+              style={[
+                styles.headerButtonText,
+                timeFilter === 'current' && activeFilter === 'all' && styles.headerButtonTextActive
+              ]}
+            >
+              Coming Events
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[
+              styles.headerButton,
+              timeFilter === 'past' && styles.headerButtonActive
+            ]}
+            onPress={() => {
+              setTimeFilter('past')
+              setActiveFilter('all')
+            }}
+          >
+            <Text 
+              style={[
+                styles.headerButtonText,
+                timeFilter === 'past' && styles.headerButtonTextActive
+              ]}
+            >
+              Past Events
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+        
+        {/* Floating buttons with fade effect */}
+        <View style={styles.floatingButtonsContainer}>
+          <LinearGradient
+            colors={[`${theme.headerBackground}00`, theme.headerBackground]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.fadeOverlay}
           />
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.floatingButton}
+            onPress={() => setShowFilterModal(true)}
+          >
+            <Ionicons name="options-outline" size={20} color={theme.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.floatingButton,
+              timeFilter === 'photo_gallery' && styles.floatingButtonActive
+            ]}
+            onPress={() => {
+              setTimeFilter('photo_gallery')
+            }}
+          >
+            <Ionicons 
+              name="images-outline" 
+              size={20} 
+              color={timeFilter === 'photo_gallery' ? theme.primary : theme.textSecondary} 
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Filter container with integrated filter button - only for coming events */}
-      {timeFilter === 'current' && (
-        <View style={styles.filterContainer}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterContent}
-            scrollEnabled={true}
-            bounces={false}
-          >
-            {renderFilterButton('my_events', 'My Events')}
-            {renderFilterButton('all', 'All')}
-            {renderFilterButton('today', 'Today')}
-            {renderFilterButton('week', 'This Week')}
-            {renderFilterButton('month', 'This Month')}
-          </ScrollView>
-        
-          {/* Filter button with fade effect */}
-          <View style={styles.filterButtonContainer}>
-            <LinearGradient
-              colors={[`${theme.headerBackground}00`, theme.headerBackground]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.fadeOverlay}
-            />
-            <TouchableOpacity
-              style={styles.filterIcon}
-              onPress={() => setShowFilterModal(true)}
-            >
-              <Ionicons name="options" size={20} color={theme.textSecondary} />
-            </TouchableOpacity>
-          </View>
+      {timeFilter === 'photo_gallery' ? (
+        // Photo Gallery Content
+        <View style={styles.photoGalleryContainer}>
+          <Text style={[styles.photoGalleryTitle, { color: theme.text }]}>Photo Gallery</Text>
+          <Text style={[styles.photoGalleryMessage, { color: theme.textSecondary }]}>
+            All event photos will be displayed here
+          </Text>
         </View>
-      )}
-
-      {timeFilter !== 'photo_gallery' && (
+      ) : (
         // Events List
         <FlatList
           data={filteredEvents}
@@ -1104,6 +1097,75 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  unifiedHeader: {
+    backgroundColor: theme.headerBackground,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.headerBorder,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    position: 'relative',
+  },
+  headerScrollContent: {
+    paddingHorizontal: 16,
+    paddingRight: 100, // Add extra padding to ensure scrollability past floating buttons
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+  },
+  headerButtonActive: {
+    backgroundColor: theme.primary,
+  },
+  headerButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.textSecondary,
+  },
+  headerButtonTextActive: {
+    color: 'white',
+  },
+  floatingButtonsContainer: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 16,
+    backgroundColor: theme.headerBackground,
+    width: 80,
+    justifyContent: 'flex-end',
+  },
+  floatingButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  floatingButtonActive: {
+    backgroundColor: theme.primary + '20',
+    borderRadius: 8,
+  },
+  photoGalleryContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  photoGalleryTitle: {
+    fontSize: 24,
+    fontWeight: '600',
+    marginBottom: 16,
+  },
+  photoGalleryMessage: {
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
   timeFilterButton: {
     flex: 1,
     paddingVertical: 10,
@@ -1209,22 +1271,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   myEventsTextActive: {
     color: 'white',
   },
-  photoGalleryContainer: {
-    flex: 1,
-    backgroundColor: theme.background,
-  },
   photoGalleryContent: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 40,
-  },
-  photoGalleryTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: theme.text,
-    marginTop: 16,
-    marginBottom: 8,
   },
   photoGallerySubtitle: {
     fontSize: 16,

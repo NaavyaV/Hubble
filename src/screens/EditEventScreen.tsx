@@ -52,7 +52,7 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
   const [startTime, setStartTime] = useState(new Date(`2000-01-01T${event.start_time}`))
   const [endTime, setEndTime] = useState(new Date(`2000-01-01T${event.end_time || event.start_time}`))
   const [hasEndTime, setHasEndTime] = useState(!!event.end_time)
-  const [privacy, setPrivacy] = useState<'public' | 'friends_only'>(event.privacy || 'public')
+  const [privacy, setPrivacy] = useState<'public' | 'invite_only'>(event.privacy || 'public')
   const [imageUri, setImageUri] = useState<string | null>(event.image_url || null)
   const [selectedTags, setSelectedTags] = useState<string[]>(event.tags || [])
   const [loading, setLoading] = useState(false)
@@ -193,8 +193,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
       return
     }
 
-    if (privacy === 'friends_only' && invitedUsers.length === 0) {
-      Alert.alert('Error', 'Please invite at least one person for friends-only events')
+    if (privacy === 'invite_only' && invitedUsers.length === 0) {
+      Alert.alert('Error', 'Please invite at least one person for invite-only events')
       return
     }
 
@@ -287,18 +287,18 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
   }
 
   const canChangeToPublic = () => {
-    return event.privacy === 'friends_only'
+    return event.privacy === 'invite_only'
   }
 
   const canSavePrivacyChange = () => {
     // Allow saving if privacy hasn't changed
     if (privacy === event.privacy) return true
     
-    // Allow saving if changing from public to friends_only (can always make private)
-    if (event.privacy === 'public' && privacy === 'friends_only') return true
+    // Allow saving if changing from public to invite_only (can always make private)
+    if (event.privacy === 'public' && privacy === 'invite_only') return true
     
-    // Allow saving if changing from friends_only to public (can always make public)
-    if (event.privacy === 'friends_only' && privacy === 'public') return true
+    // Allow saving if changing from invite_only to public (can always make public)
+    if (event.privacy === 'invite_only' && privacy === 'public') return true
     
     return false
   }
@@ -365,21 +365,21 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
                   style={[
                     styles.privacyOption,
                     { backgroundColor: theme.surface },
-                    privacy === 'friends_only' && { backgroundColor: theme.primaryLight }
+                    privacy === 'invite_only' && { backgroundColor: theme.primaryLight }
                   ]}
-                  onPress={() => setPrivacy('friends_only')}
+                  onPress={() => setPrivacy('invite_only')}
                 >
                   <Ionicons
-                    name={privacy === 'friends_only' ? 'radio-button-on' : 'radio-button-off'}
+                    name={privacy === 'invite_only' ? 'radio-button-on' : 'radio-button-off'}
                     size={20}
-                    color={privacy === 'friends_only' ? theme.primary : theme.textSecondary}
+                    color={privacy === 'invite_only' ? theme.primary : theme.textSecondary}
                   />
                   <Text style={[
                     styles.privacyText,
                     { color: theme.text },
-                    privacy === 'friends_only' && { color: theme.primaryDark }
+                    privacy === 'invite_only' && { color: theme.primaryDark }
                   ]}>
-                    Friends Only
+                    Invite Only
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -390,8 +390,8 @@ export default function EditEventScreen({ route, navigation }: EditEventScreenPr
               )}
             </View>
 
-            {/* Invite People (only for friends only events) */}
-            {privacy === 'friends_only' && (
+            {/* Invite People (only for invite only events) */}
+            {privacy === 'invite_only' && (
               <View style={styles.section}>
                 <Text style={[styles.sectionTitle, { color: theme.text }]}>Invite People</Text>
                 <TouchableOpacity style={[styles.inviteButton, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={handleInviteUsers}>

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
 import ProfileModal from '../components/ProfileModal'
+import ImageWithFallback from '../components/ImageWithFallback'
 import { useTheme } from '../context/ThemeContext'
 
 interface ProfileRow {
@@ -39,22 +40,43 @@ export default function FriendsScreen() {
   const [recentlyAccepted, setRecentlyAccepted] = useState<Set<string>>(new Set())
 
   useEffect(() => {
+    // Add a timeout to prevent infinite loading
+    const timeoutId = setTimeout(() => {
+      if (loading) {
+        console.log('Loading timeout reached, forcing loading to false')
+        setLoading(false)
+      }
+    }, 15000) // 15 second timeout to give more time
+
     init()
+
+    return () => clearTimeout(timeoutId)
   }, [])
 
   const init = async () => {
     try {
+      console.log('Starting FriendsScreen initialization...')
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      if (!user) {
+        console.log('No authenticated user found')
+        setLoading(false)
+        return
+      }
 
+      console.log('User found, setting up...')
       setMe(user.id)
+      
+      console.log('Fetching users and friendships...')
       await Promise.all([
         fetchAllUsers(),
         fetchFriendships(user.id),
       ])
+      
+      console.log('FriendsScreen initialization complete')
     } catch (error) {
-      console.error('Error initializing:', error)
+      console.error('Error initializing FriendsScreen:', error)
     } finally {
+      console.log('Setting loading to false')
       setLoading(false)
     }
   }
@@ -62,13 +84,14 @@ export default function FriendsScreen() {
   const fetchAllUsers = async () => {
     try {
       console.log('Fetching all users...')
+      // Optimize: Only fetch essential fields, no college join for better performance
       const { data, error } = await supabase
         .from('profiles')
         .select(`
-          id, full_name, avatar_url, phone_number, major, graduating_year, bio,
-          college:colleges(*)
+          id, full_name, avatar_url, phone_number, major, graduating_year, bio
         `)
         .order('full_name')
+        .limit(1000) // Add reasonable limit to prevent massive queries
 
       if (error) {
         console.error('Error fetching users:', error)
@@ -77,14 +100,18 @@ export default function FriendsScreen() {
       
       console.log('Fetched users:', data?.length || 0, 'users')
       setAllUsers(data || [])
+      console.log('Users state updated')
     } catch (error) {
       console.error('Error fetching users:', error)
-      Alert.alert('Error', 'Failed to fetch users. Please check your connection.')
+      // Don't show alert during initialization, just log the error
+      console.log('Setting empty users array due to error')
+      setAllUsers([])
     }
   }
 
   const fetchFriendships = async (userId: string) => {
     try {
+      console.log('Fetching friendships for user:', userId)
       const { data, error } = await supabase
         .from('friendships')
         .select('*')
@@ -93,6 +120,7 @@ export default function FriendsScreen() {
       if (error) throw error
 
       const friendshipsData = data || []
+      console.log('Fetched friendships:', friendshipsData.length)
       setFriendships(friendshipsData)
 
       // Separate incoming and outgoing requests
@@ -106,37 +134,42 @@ export default function FriendsScreen() {
       setIncoming(incomingRequests)
       setOutgoing(outgoingRequests)
 
-      // Fetch profiles for incoming requests
-      if (incomingRequests.length > 0) {
-        const senderIds = incomingRequests.map(f => f.user_id)
-        const { data: profiles } = await supabase
+      // Optimize: Fetch all needed profiles in parallel
+      const allProfileIds = [
+        ...incomingRequests.map(f => f.user_id),
+        ...outgoingRequests.map(f => f.friend_id)
+      ].filter((id, index, arr) => arr.indexOf(id) === index) // Remove duplicates
+
+      if (allProfileIds.length > 0) {
+        const { data: allProfiles } = await supabase
           .from('profiles')
           .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
-          .in('id', senderIds)
+          .in('id', allProfileIds)
 
-        const profilesMap: Record<string, ProfileRow> = {}
-        profiles?.forEach(p => {
-          profilesMap[p.id] = p
+        // Create maps for incoming and outgoing
+        const incomingMap: Record<string, ProfileRow> = {}
+        const outgoingMap: Record<string, ProfileRow> = {}
+        
+        allProfiles?.forEach(profile => {
+          if (incomingRequests.some(f => f.user_id === profile.id)) {
+            incomingMap[profile.id] = profile
+          }
+          if (outgoingRequests.some(f => f.friend_id === profile.id)) {
+            outgoingMap[profile.id] = profile
+          }
         })
-        setIncomingProfiles(profilesMap)
-      }
-
-      // Fetch profiles for outgoing requests
-      if (outgoingRequests.length > 0) {
-        const receiverIds = outgoingRequests.map(f => f.friend_id)
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
-          .in('id', receiverIds)
-
-        const profilesMap: Record<string, ProfileRow> = {}
-        profiles?.forEach(p => {
-          profilesMap[p.id] = p
-        })
-        setOutgoingProfiles(profilesMap)
+        
+        setIncomingProfiles(incomingMap)
+        setOutgoingProfiles(outgoingMap)
       }
     } catch (error) {
       console.error('Error fetching friendships:', error)
+      // Set empty arrays on error to prevent loading state issues
+      setFriendships([])
+      setIncoming([])
+      setOutgoing([])
+      setIncomingProfiles({})
+      setOutgoingProfiles({})
     }
   }
 
@@ -395,9 +428,14 @@ export default function FriendsScreen() {
   const renderAvatar = (user: ProfileRow) => {
     if (user.avatar_url) {
       return (
-        <Image 
+        <ImageWithFallback 
           source={{ uri: user.avatar_url }} 
           style={styles.avatarImage}
+          fallbackIcon="person"
+          fallbackText=""
+          resizeMode="cover"
+          skipValidation={true}
+          priority="high"
         />
       )
     }
@@ -703,9 +741,9 @@ export default function FriendsScreen() {
             <Text style={[styles.tabText, { color: theme.textSecondary }, activeTab === 'pending' && { color: theme.primary, fontWeight: '600' }]}>
               Pending
             </Text>
-            {(incoming.length + outgoing.length) > 0 && (
+            {incoming.length > 0 && (
               <View style={[styles.redBadge, { backgroundColor: theme.error }]}>
-                <Text style={[styles.badgeText, { color: theme.buttonText }]}>{incoming.length + outgoing.length}</Text>
+                <Text style={[styles.badgeText, { color: theme.buttonText }]}>{incoming.length}</Text>
               </View>
             )}
           </View>

@@ -171,7 +171,6 @@ export default function EditProfileScreen({ navigation }: any) {
             id: user.id,
             full_name: fullName,
             major: major || null,
-            college_id: collegeId || null,
             graduating_year: graduatingYear || null,
             bio: bio || null,
             avatar_url: avatarUrl || null,
@@ -239,19 +238,19 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>College *</Text>
+              <Text style={[styles.label, { color: theme.text }]}>College</Text>
               <View style={styles.collegeList}>
-                {colleges.map((college) => (
-                  <TouchableOpacity
+                {colleges.filter(college => college.id === collegeId).map((college) => (
+                  <View
                     key={college.id}
                     style={[
                       styles.collegeOption,
+                      styles.collegeOptionDisabled,
                       { 
-                        backgroundColor: collegeId === college.id ? theme.primary : theme.surface,
-                        borderColor: collegeId === college.id ? theme.primary : theme.border
+                        backgroundColor: theme.surface,
+                        borderColor: theme.border
                       }
                     ]}
-                    onPress={() => setCollegeId(college.id)}
                   >
                     {college.logo_url && (
                       <Image 
@@ -263,23 +262,24 @@ export default function EditProfileScreen({ navigation }: any) {
                     <View style={styles.collegeInfo}>
                       <Text style={[
                         styles.collegeName,
-                        { color: collegeId === college.id ? theme.buttonText : theme.text }
+                        { color: theme.text }
                       ]}>
                         {college.name}
                       </Text>
                       <Text style={[
                         styles.collegeShortName,
-                        { color: collegeId === college.id ? theme.buttonText : theme.textSecondary }
+                        { color: theme.textSecondary }
                       ]}>
                         {college.short_name}
                       </Text>
                     </View>
-                    {collegeId === college.id && (
-                      <Ionicons name="checkmark-circle" size={24} color={theme.buttonText} />
-                    )}
-                  </TouchableOpacity>
+                    <Ionicons name="lock-closed" size={20} color={theme.textSecondary} />
+                  </View>
                 ))}
               </View>
+              <Text style={[styles.helpText, { color: theme.textSecondary }]}>
+                College setting cannot be changed after account creation
+              </Text>
             </View>
 
             <View style={styles.inputGroup}>
@@ -473,5 +473,13 @@ const styles = StyleSheet.create({
   },
   collegeShortName: {
     fontSize: 14,
+  },
+  collegeOptionDisabled: {
+    opacity: 0.7,
+  },
+  helpText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 4,
   },
 })

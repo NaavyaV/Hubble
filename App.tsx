@@ -30,11 +30,15 @@ import EventPhotoGalleryScreen from './src/screens/EventPhotoGalleryScreen'
 import PhotoViewerScreen from './src/screens/PhotoViewerScreen'
 import GeneralPhotoGalleryScreen from './src/screens/GeneralPhotoGalleryScreen'
 import LeaderboardScreen from './src/screens/LeaderboardScreen'
+import AccountVerificationScreen from './src/screens/AccountVerificationScreen'
+import ResetPasswordScreen from './src/screens/ResetPasswordScreen'
 import CustomTabBar from './src/components/CustomTabBar'
 
 type RootStackParamList = {
   Auth: undefined
   Onboarding: undefined
+  AccountVerification: { email: string; userId?: string }
+  ResetPassword: undefined
   Main: undefined
   EventDetail: { event: EventWithAttendees }
   EditProfile: undefined
@@ -171,9 +175,33 @@ function AppContent() {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        console.log('Auth state change:', { event, session: session ? 'exists' : 'none' })
+        console.log('User email confirmed:', session?.user?.email_confirmed_at)
+        
         if (session?.user) {
-          setUser(session.user as User)
+          // Add a small delay to allow profile updates to complete
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          
+          // Check if user has completed OTP verification
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('otp_verified')
+            .eq('id', session.user.id)
+            .single()
+          
+          console.log('Profile query result:', { profile, profileError })
+          console.log('OTP verified:', profile?.otp_verified)
+          
+          // Only allow access if OTP is verified
+          if (profile?.otp_verified) {
+            console.log('Setting user as authenticated - OTP verified')
+            setUser(session.user as User)
+          } else {
+            console.log('User OTP not verified, staying in unauthenticated flow')
+            setUser(null)
+          }
         } else {
+          console.log('No session, setting user to null')
           setUser(null)
         }
         setLoading(false)
@@ -186,8 +214,27 @@ function AppContent() {
   const checkUser = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
+      console.log('Checking user:', user ? 'exists' : 'none')
+      console.log('User email confirmed:', user?.email_confirmed_at)
+      
       if (user) {
-        setUser(user as User)
+        // Check if user has completed OTP verification
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('otp_verified')
+          .eq('id', user.id)
+          .single()
+        
+        console.log('OTP verified:', profile?.otp_verified)
+        
+        // Only allow access if OTP is verified
+        if (profile?.otp_verified) {
+          console.log('Setting user as authenticated - OTP verified')
+          setUser(user as User)
+        } else {
+          console.log('User OTP not verified, staying in unauthenticated flow')
+          setUser(null)
+        }
       }
     } catch (error) {
       console.error('Error checking user:', error)
@@ -375,8 +422,22 @@ function AppContent() {
                 }}
               />
               <Stack.Screen 
+                name="ResetPassword" 
+                component={ResetPasswordScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen 
                 name="Onboarding" 
-                component={OnboardingScreen}
+                component={OnboardingScreen as any}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen 
+                name="AccountVerification" 
+                component={AccountVerificationScreen}
                 options={{
                   headerShown: false,
                 }}

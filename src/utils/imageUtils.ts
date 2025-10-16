@@ -17,14 +17,32 @@ export async function validateImageUrl(url: string): Promise<ImageValidationResu
 
     // Check if it's a Supabase storage URL
     if (url.includes('supabase.co/storage')) {
-      // Try to access the image
-      const response = await fetch(url, { method: 'HEAD' })
+      // For Supabase URLs, skip expensive HEAD request and just validate URL format
+      // Supabase storage URLs are typically reliable
+      try {
+        new URL(url)
+        return { isValid: true }
+      } catch {
+        return { isValid: false, error: 'Invalid Supabase URL format' }
+      }
+    }
+
+    // For non-Supabase URLs, do a quick HEAD request with timeout
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3000) // 3 second timeout
+      
+      const response = await fetch(url, { 
+        method: 'HEAD',
+        signal: controller.signal
+      })
+      
+      clearTimeout(timeoutId)
       
       if (!response.ok) {
         return { 
           isValid: false, 
-          error: `HTTP ${response.status}: ${response.statusText}`,
-          alternativeUrl: generateFallbackUrl(url)
+          error: `HTTP ${response.status}: ${response.statusText}`
         }
       }
 
@@ -33,27 +51,22 @@ export async function validateImageUrl(url: string): Promise<ImageValidationResu
       if (!contentType || !contentType.startsWith('image/')) {
         return { 
           isValid: false, 
-          error: 'Not an image file',
-          alternativeUrl: generateFallbackUrl(url)
+          error: 'Not an image file'
         }
       }
 
       return { isValid: true }
-    }
-
-    // For non-Supabase URLs, just check if it's a valid URL format
-    try {
-      new URL(url)
-      return { isValid: true }
-    } catch {
-      return { isValid: false, error: 'Invalid URL format' }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return { isValid: false, error: 'Request timeout' }
+      }
+      throw error
     }
   } catch (error) {
     console.error('Error validating image URL:', error)
     return { 
       isValid: false, 
-      error: error instanceof Error ? error.message : 'Unknown error',
-      alternativeUrl: generateFallbackUrl(url)
+      error: error instanceof Error ? error.message : 'Unknown error'
     }
   }
 }

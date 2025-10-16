@@ -55,6 +55,8 @@ export default function OnboardingScreen({ navigation }: any) {
   })
   const [loading, setLoading] = useState(false)
   const [colleges, setColleges] = useState<any[]>([])
+  const [collegesLoading, setCollegesLoading] = useState(true)
+  const [emailDomainError, setEmailDomainError] = useState(false)
 
   useEffect(() => {
     fetchColleges()
@@ -62,18 +64,51 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const fetchColleges = async () => {
     try {
+      setCollegesLoading(true)
       const { data: collegesData, error } = await supabase
         .from('colleges')
         .select('*')
         .order('name')
       
       if (error) {
-        console.error('Error fetching colleges:', error)
+        Alert.alert('Error', 'Failed to load colleges. Please try again.')
+        setColleges([])
       } else {
         setColleges(collegesData || [])
       }
     } catch (error) {
-      console.error('Error fetching colleges:', error)
+      Alert.alert('Error', 'Failed to load colleges. Please try again.')
+      setColleges([])
+    } finally {
+      setCollegesLoading(false)
+    }
+  }
+
+  const getSelectedCollegeDomain = () => {
+    if (!colleges || colleges.length === 0) return ''
+    const selectedCollege = colleges.find(college => college.id === data.collegeId)
+    return selectedCollege?.email_domain || ''
+  }
+
+  const validateEmailDomain = (email: string) => {
+    if (!data.collegeId || !colleges || colleges.length === 0) return false
+    const domain = getSelectedCollegeDomain()
+    if (!domain) return false
+    return email.toLowerCase().endsWith(`@${domain}`)
+  }
+
+  const validateEmailDomainWithDatabase = async (email: string) => {
+    try {
+      const { data: isValid, error } = await supabase
+        .rpc('validate_email_domain', { email_to_check: email })
+      
+      if (error) {
+        return false
+      }
+      
+      return isValid
+    } catch (error) {
+      return false
     }
   }
 
@@ -101,11 +136,127 @@ export default function OnboardingScreen({ navigation }: any) {
     'credentials',
   ]
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1)
     } else {
-      handleCreateAccount()
+      // Final step - create account, profile, and send OTP
+      
+      // Email domain validation will happen after loading starts
+      
+      setLoading(true)
+      let authData: any = null
+      try {
+        // Step 1: Create auth user with signUp (with college_id in metadata for backend validation)
+        const authResult = await supabase.auth.signUp({
+          email: data.email.trim(),
+          password: data.password,
+          options: {
+            emailRedirectTo: undefined, // We'll handle verification with OTP instead
+            data: {
+              college_id: data.collegeId
+            }
+          }
+        })
+
+        if (authResult.error) {
+          Alert.alert('Error', `Failed to create account: ${authResult.error.message}`)
+          return
+        }
+
+        if (!authResult.data.user) {
+          Alert.alert('Error', 'Failed to create user account. Please try again.')
+          return
+        }
+
+        authData = authResult.data
+
+        // Step 3: Upload profile image if provided
+        let avatarUrl = null
+        if (data.profileImageUri && !data.profileImageUri.startsWith('http')) {
+          try {
+            const fileExt = data.profileImageUri.split('.').pop()?.toLowerCase() || 'jpg'
+            const fileName = `profile-${Date.now()}.${fileExt}`
+            const filePath = `profile-images/${fileName}`
+            const contentType = guessContentTypeFromUri(data.profileImageUri)
+
+            avatarUrl = await uploadBytesToBucket({
+              bucket: 'profile-images',
+              filePath,
+              uri: data.profileImageUri,
+              contentType,
+            })
+          } catch (uploadError) {
+            // Continue without profile image - don't fail the entire process
+          }
+        }
+
+        // Step 4: Create profile with all onboarding data
+        const profileData = {
+          id: authData.user.id,
+          full_name: data.fullName.trim(),
+          college_id: data.collegeId,
+          major: data.major.trim(),
+          graduating_year: data.graduatingYear,
+          bio: data.bio.trim(),
+          avatar_url: avatarUrl,
+          phone_number: data.phoneNumber.trim(),
+          phone_visibility: data.phoneVisibility,
+          phone_visible_when_hosting: data.phoneVisibleWhenHosting,
+          otp_verified: false, // Will be set to true after OTP verification
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+        
+        
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert(profileData)
+
+        if (profileError) {
+          // Profile creation failed - DELETE the auth user immediately
+          
+          // Delete the auth user to prevent orphaned records
+          try {
+            await supabase.auth.admin.deleteUser(authData.user.id)
+          } catch (deleteError) {
+          }
+          
+          // Show user-friendly error
+          if (profileError.message.includes('Email domain does not match')) {
+            Alert.alert(
+              'Invalid Email Domain',
+              'Your email domain does not match your selected college. Please use your college email address.',
+              [{ text: 'OK' }]
+            )
+          } else {
+            Alert.alert('Error', `Failed to create profile: ${profileError.message}`)
+          }
+          return // Stay on current screen
+        }
+
+
+        // Step 5: Navigate to verification screen with email and userId
+        navigation.navigate('AccountVerification', { 
+          email: data.email.trim(),
+          userId: authData.user.id
+        })
+        
+      } catch (error) {
+        // Unexpected error - cleanup auth user if it was created
+        
+        // Try to delete auth user if it was created
+        try {
+          if (authData?.user?.id) {
+            await supabase.auth.admin.deleteUser(authData.user.id)
+          }
+        } catch (deleteError) {
+        }
+        
+        Alert.alert('Error', 'Failed to create account. Please try again.')
+      } finally {
+        setLoading(false)
+      }
     }
   }
 
@@ -116,244 +267,26 @@ export default function OnboardingScreen({ navigation }: any) {
   }
 
   const updateData = (field: keyof OnboardingData, value: string | boolean) => {
-    setData(prev => ({ ...prev, [field]: value }))
-  }
-
-  const pickProfileImage = async () => {
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant permission to access your photo library')
-        return
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      })
-
-      if (!result.canceled) {
-        updateData('profileImageUri', result.assets[0].uri)
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to pick image')
-    }
-  }
-
-  const formatUSPhone = (input: string) => {
-    const digits = (input || '').replace(/\D/g, '').slice(0, 10)
-    const len = digits.length
-    if (len <= 3) return digits
-    if (len <= 6) return `(${digits.slice(0,3)}) ${digits.slice(3)}`
-    return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`
-  }
-
-  const getWordCount = (text: string) => {
-    return text.trim().split(/\s+/).filter(word => word.length > 0).length
-  }
-
-  const requestNotificationPermissions = async () => {
-    try {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync()
-      let finalStatus = existingStatus
-
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync()
-        finalStatus = status
-      }
-
-      if (finalStatus !== 'granted') {
-        Alert.alert(
-          'Permission Required',
-          'To receive notifications about events and friend requests, please enable notifications in your device settings.',
-          [{ text: 'OK' }]
-        )
-        return false
-      }
-
-      return true
-    } catch (error) {
-      console.error('Error requesting notification permissions:', error)
-      return false
-    }
-  }
-
-  const handleCreateAccount = async () => {
-    if (!data.fullName.trim()) {
-      Alert.alert('Error', 'Please enter your full name')
-      return
-    }
-
-    if (!data.email.trim() || !data.password.trim()) {
-      Alert.alert('Error', 'Please fill in all required fields')
-      return
-    }
-
-    if (data.password !== data.confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match')
-      return
-    }
-
-    setLoading(true)
-    try {
-      console.log('Starting account creation process...')
-      console.log('Creating account with email:', data.email.trim())
+    setData(prev => {
+      const newData = { ...prev, [field]: value }
       
-      // Create account - try without metadata first to isolate the issue
-      console.log('Attempting to create account without metadata...')
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: data.email.trim(),
-        password: data.password,
-        // Temporarily remove options.data to avoid trigger conflicts
-      })
-      
-      console.log('Auth response:', {
-        user: authData.user ? 'User created' : 'No user',
-        session: authData.session ? 'Session created' : 'No session',
-        error: authError ? 'Error occurred' : 'No error'
-      })
-
-      if (authError) {
-        console.error('Auth error details:', {
-          message: authError.message,
-          status: authError.status,
-          details: authError
-        })
-        
-        // If it's a 500 error, it might be a database trigger issue
-        if (authError.status === 500) {
-          console.log('500 error detected - this is likely a database trigger issue')
-          console.log('The handle_new_user() trigger is probably failing')
-          console.log('Check your Supabase dashboard → Database → Functions for handle_new_user')
-          
-          // Try to provide a more helpful error message
-          if (authError.message.includes('database error saving new user')) {
-            throw new Error('Database trigger error. Please check your Supabase dashboard for the handle_new_user function.')
-          }
-        }
-        
-        throw new Error(`Failed to create account: ${authError.message}`)
+      // If phone visibility is set to public, automatically enable phone visible when hosting
+      if (field === 'phoneVisibility' && value === 'public') {
+        newData.phoneVisibleWhenHosting = true
       }
       
-      if (authData.user) {
-        console.log('Auth account created successfully:', authData.user.id)
-        console.log('User email confirmed:', authData.user.email_confirmed_at ? 'Yes' : 'No')
-        
-        if (!authData.session) {
-          console.log('No session created - email confirmation may be required')
-        }
-      } else {
-        console.log('No user created in auth response')
+      // Clear email domain error when user starts typing after getting an error
+      if (field === 'email' && emailDomainError) {
+        setEmailDomainError(false)
       }
-
-      // Upload profile image if selected
-      let avatarUrl = null
-      if (data.profileImageUri && !data.profileImageUri.startsWith('http')) {
-        try {
-          const fileExt = data.profileImageUri.split('.').pop()?.toLowerCase() || 'jpg'
-          const fileName = `profile-${Date.now()}.${fileExt}`
-          const filePath = `profile-images/${fileName}`
-          const contentType = guessContentTypeFromUri(data.profileImageUri)
-
-          avatarUrl = await uploadBytesToBucket({
-            bucket: 'profile-images',
-            filePath,
-            uri: data.profileImageUri,
-            contentType,
-          })
-
-          // Update user metadata with avatar URL and notification settings
-          const { error: updateError } = await supabase.auth.updateUser({
-            data: { 
-              avatar_url: avatarUrl,
-              notifications_enabled: data.notificationsEnabled
-            }
-          })
-          
-          if (updateError) {
-            console.warn('Failed to update user metadata with avatar:', updateError)
-          }
-        } catch (error) {
-          console.warn('Profile image upload failed:', error)
-          // Don't throw here - image upload failure shouldn't block account creation
-        }
-      } else {
-        // No profile image, but still update notification settings
-        const { error: updateError } = await supabase.auth.updateUser({
-          data: { 
-            notifications_enabled: data.notificationsEnabled
-          }
-        })
-        
-        if (updateError) {
-          console.warn('Failed to update user metadata with notification settings:', updateError)
-        }
+      
+      // Reset email domain error when college is changed
+      if (field === 'collegeId') {
+        setEmailDomainError(false)
       }
-
-      // Create profile in public profiles table
-      if (authData.user) {
-        // Check if profile already exists (from trigger)
-        const { data: existingProfile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', authData.user.id)
-          .single()
-        
-        console.log('Existing profile check:', existingProfile)
-        
-        const profileData = {
-          id: authData.user.id,
-          full_name: data.fullName.trim(),
-          major: data.major.trim() || null,
-          college_id: data.collegeId || null,
-          graduating_year: data.graduatingYear || null,
-          bio: data.bio.trim() || null,
-          avatar_url: avatarUrl,
-          phone_number: data.phoneNumber || null,
-          phone_visibility: data.phoneVisibility,
-          phone_visible_when_hosting: data.phoneVisibleWhenHosting,
-        }
-        
-        console.log('Creating profile with data:', profileData)
-        console.log('Full onboarding data:', data)
-        
-        const { data: insertedProfile, error: profileError } = await supabase
-          .from('profiles')
-          .upsert(profileData)
-          .select()
-        
-        if (profileError) {
-          console.error('Profile creation error:', profileError)
-          console.error('Profile data that failed:', profileData)
-          throw new Error(`Failed to create profile: ${profileError.message}`)
-        }
-        
-        console.log('Profile created successfully:', insertedProfile)
-        
-        // Verify the profile was actually saved
-        const { data: verifyProfile, error: verifyError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', authData.user.id)
-          .single()
-        
-        if (verifyError) {
-          console.error('Failed to verify profile creation:', verifyError)
-        } else {
-          console.log('Profile verification successful:', verifyProfile)
-        }
-      }
-
-      // Navigate to main screen after successful account creation
-      navigation.navigate('Main' as never)
-    } catch (error: any) {
-      console.error('Account creation error:', error)
-      Alert.alert('Error', error.message || 'Failed to create account. Please try again.')
-    } finally {
-      setLoading(false)
-    }
+      
+      return newData
+    })
   }
 
   const renderNameStep = () => (
@@ -398,52 +331,64 @@ export default function OnboardingScreen({ navigation }: any) {
       <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Connect with students from your school</Text>
       
       <View style={styles.collegeList}>
-        {colleges.map((college) => (
-          <TouchableOpacity
-            key={college.id}
-            style={[
-              styles.collegeOption,
-              { 
-                backgroundColor: data.collegeId === college.id ? theme.primary : theme.surface,
-                borderColor: data.collegeId === college.id ? theme.primary : theme.border
-              }
-            ]}
-            onPress={() => updateData('collegeId', college.id)}
-          >
-            {college.logo_url && (
-              <Image 
-                source={{ uri: college.logo_url }} 
-                style={styles.collegeLogo}
-                resizeMode="contain"
-              />
-            )}
-            <View style={styles.collegeInfo}>
-              <Text style={[
-                styles.collegeName,
-                { color: data.collegeId === college.id ? theme.buttonText : theme.text }
-              ]}>
-                {college.name}
-              </Text>
-              <Text style={[
-                styles.collegeShortName,
-                { color: data.collegeId === college.id ? theme.buttonText : theme.textSecondary }
-              ]}>
-                {college.short_name}
-              </Text>
-            </View>
-            {data.collegeId === college.id && (
-              <Ionicons name="checkmark-circle" size={24} color={theme.buttonText} />
-            )}
-          </TouchableOpacity>
-        ))}
+        {collegesLoading ? (
+          <View style={styles.loadingContainer}>
+            <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading colleges...</Text>
+          </View>
+        ) : colleges.length === 0 ? (
+          <View style={styles.errorContainer}>
+            <Text style={[styles.errorText, { color: theme.textSecondary }]}>No colleges available. Please try again later.</Text>
+          </View>
+        ) : (
+          colleges.map((college) => (
+            <TouchableOpacity
+              key={college.id}
+              style={[
+                styles.collegeOption,
+                { 
+                  backgroundColor: data.collegeId === college.id ? theme.primary : theme.surface,
+                  borderColor: data.collegeId === college.id ? theme.primary : theme.border
+                }
+              ]}
+              onPress={() => updateData('collegeId', college.id)}
+            >
+              {college.logo_url && (
+                <Image 
+                  source={{ uri: college.logo_url }} 
+                  style={styles.collegeLogo}
+                  resizeMode="contain"
+                />
+              )}
+              <View style={styles.collegeInfo}>
+                <Text style={[
+                  styles.collegeName,
+                  { color: data.collegeId === college.id ? theme.buttonText : theme.text }
+                ]}>
+                  {college.name}
+                </Text>
+                <Text style={[
+                  styles.collegeShortName,
+                  { color: data.collegeId === college.id ? theme.buttonText : theme.textSecondary }
+                ]}>
+                  {college.short_name}
+                </Text>
+              </View>
+              {data.collegeId === college.id && (
+                <Ionicons name="checkmark-circle" size={24} color={theme.buttonText} />
+              )}
+            </TouchableOpacity>
+          ))
+        )}
         
         {/* Coming Soon Message */}
-        <View style={[styles.comingSoonContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <Ionicons name="time-outline" size={20} color={theme.textSecondary} />
-          <Text style={[styles.comingSoonText, { color: theme.textSecondary }]}>
-            More colleges to be added soon!
-          </Text>
-        </View>
+        {!collegesLoading && colleges.length > 0 && (
+          <View style={[styles.comingSoonContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Ionicons name="time-outline" size={20} color={theme.textSecondary} />
+            <Text style={[styles.comingSoonText, { color: theme.textSecondary }]}>
+              More colleges to be added soon!
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   )
@@ -500,6 +445,29 @@ export default function OnboardingScreen({ navigation }: any) {
     </View>
   )
 
+  const pickProfileImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please grant permission to access your photo library')
+        return
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      })
+
+      if (!result.canceled) {
+        updateData('profileImageUri', result.assets[0].uri)
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to pick image')
+    }
+  }
+
   const renderProfilePictureStep = () => (
     <View style={styles.stepContainer}>
       <Text style={[styles.stepTitle, { color: theme.text }]}>Add a profile picture</Text>
@@ -515,6 +483,14 @@ export default function OnboardingScreen({ navigation }: any) {
       </TouchableOpacity>
     </View>
   )
+
+  const formatUSPhone = (input: string) => {
+    const digits = (input || '').replace(/\D/g, '').slice(0, 10)
+    const len = digits.length
+    if (len <= 3) return digits
+    if (len <= 6) return `(${digits.slice(0,3)}) ${digits.slice(3)}`
+    return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`
+  }
 
   const renderPhoneNumberStep = () => (
     <View style={styles.stepContainer}>
@@ -607,36 +583,73 @@ export default function OnboardingScreen({ navigation }: any) {
           ))}
         </View>
 
-        {(data.phoneVisibility === 'friends_only' || data.phoneVisibility === 'private') && (
-          <TouchableOpacity 
-            style={[styles.hostingToggleContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}
-            onPress={() => updateData('phoneVisibleWhenHosting', !data.phoneVisibleWhenHosting)}
-          >
-            <View style={styles.hostingToggleLeft}>
-              <Ionicons name="calendar" size={24} color={theme.textSecondary} />
-              <View style={styles.hostingToggleText}>
-                <Text style={[styles.hostingToggleTitle, { color: theme.text }]}>
-                  Phone number shown only when hosting events
-                </Text>
-                <Text style={[styles.hostingToggleDescription, { color: theme.textSecondary }]}>
-                  Show your phone number for contact when you host events
-                </Text>
-              </View>
+        {/* Show hosting toggle for all privacy levels, but with different behavior for public */}
+        <TouchableOpacity 
+          style={[
+            styles.hostingToggleContainer, 
+            { backgroundColor: theme.surface, borderColor: theme.border },
+            data.phoneVisibility === 'public' && { opacity: 0.7 } // Dim when public (auto-enabled)
+          ]}
+          onPress={() => {
+            // Don't allow toggling when public since it's automatically enabled
+            if (data.phoneVisibility !== 'public') {
+              updateData('phoneVisibleWhenHosting', !data.phoneVisibleWhenHosting)
+            }
+          }}
+          disabled={data.phoneVisibility === 'public'}
+        >
+          <View style={styles.hostingToggleLeft}>
+            <Ionicons name="calendar" size={24} color={theme.textSecondary} />
+            <View style={styles.hostingToggleText}>
+              <Text style={[styles.hostingToggleTitle, { color: theme.text }]}>
+                Phone number shown when hosting events
+              </Text>
+              <Text style={[styles.hostingToggleDescription, { color: theme.textSecondary }]}>
+                {data.phoneVisibility === 'public' 
+                  ? 'Automatically enabled since your phone number is public'
+                  : 'Show your phone number for contact when you host events'
+                }
+              </Text>
             </View>
+          </View>
+          <View style={[
+            styles.iosToggle,
+            { backgroundColor: data.phoneVisibleWhenHosting ? theme.primary : theme.border }
+          ]}>
             <View style={[
-              styles.iosToggle,
-              { backgroundColor: data.phoneVisibleWhenHosting ? theme.primary : theme.border }
-            ]}>
-              <View style={[
-                styles.iosToggleThumb,
-                { backgroundColor: theme.surface },
-                data.phoneVisibleWhenHosting && styles.iosToggleThumbActive
-              ]} />
-            </View>
-          </TouchableOpacity>
-        )}
+              styles.iosToggleThumb,
+              { backgroundColor: theme.surface },
+              data.phoneVisibleWhenHosting && styles.iosToggleThumbActive
+            ]} />
+          </View>
+        </TouchableOpacity>
       </View>
     )
+  }
+
+  const requestNotificationPermissions = async () => {
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync()
+      let finalStatus = existingStatus
+
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync()
+        finalStatus = status
+      }
+
+      if (finalStatus !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'To receive notifications about events and friend requests, please enable notifications in your device settings.',
+          [{ text: 'OK' }]
+        )
+        return false
+      }
+
+      return true
+    } catch (error) {
+      return false
+    }
   }
 
   const renderNotificationsStep = () => {
@@ -713,7 +726,6 @@ export default function OnboardingScreen({ navigation }: any) {
           </View>
         </View>
 
-
         <Text style={[styles.helpText, { color: theme.textTertiary }]}>
           You can change these settings anytime in your device settings or in the app
         </Text>
@@ -721,62 +733,91 @@ export default function OnboardingScreen({ navigation }: any) {
     )
   }
 
-  const renderCredentialsStep = () => (
-    <View style={styles.stepContainer}>
-      <Text style={[styles.stepTitle, { color: theme.text }]}>Create your account</Text>
-      <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Enter your email and password to finish</Text>
-      
-      <View style={styles.credentialsContainer}>
-        <View style={styles.inputGroup}>
-          <Text style={[styles.credentialLabel, { color: theme.text }]}>Email</Text>
-          <TextInput
-            style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-            placeholder="Enter your email"
-            placeholderTextColor={theme.inputPlaceholder}
-            value={data.email}
-            onChangeText={(value) => updateData('email', value)}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            textContentType="emailAddress"
-          />
-        </View>
+  const getWordCount = (text: string) => {
+    return text.trim().split(/\s+/).filter(word => word.length > 0).length
+  }
 
-        <View style={styles.inputGroup}>
-          <Text style={[styles.credentialLabel, { color: theme.text }]}>Password</Text>
-          <TextInput
-            style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-            placeholder="Create a password"
-            placeholderTextColor={theme.inputPlaceholder}
-            value={data.password}
-            onChangeText={(value) => updateData('password', value)}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            textContentType="newPassword"
-          />
-        </View>
+  const renderCredentialsStep = () => {
+    const selectedCollegeDomain = getSelectedCollegeDomain()
+    const emailPlaceholder = selectedCollegeDomain 
+      ? `Enter your ${selectedCollegeDomain} email` 
+      : 'Enter your college email'
+    
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={[styles.stepTitle, { color: theme.text }]}>Create your account</Text>
+        <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Enter your college email and password to finish</Text>
+        
+        <View style={styles.credentialsContainer}>
+          <View style={styles.inputGroup}>
+            <Text style={[styles.credentialLabel, { color: theme.text }]}>College Email</Text>
+            <TextInput
+              style={[
+                styles.credentialInput, 
+                { backgroundColor: theme.inputBackground, color: theme.inputText },
+                emailDomainError 
+                  ? { borderColor: '#ff4444', borderWidth: 2 } 
+                  : { borderColor: theme.inputBorder }
+              ]}
+              placeholder={emailPlaceholder}
+              placeholderTextColor={theme.inputPlaceholder}
+              value={data.email}
+              onChangeText={(value) => updateData('email', value)}
+              onBlur={() => {
+                // Validate email domain when user finishes typing
+                if (data.email.trim().length > 0 && data.collegeId && colleges.length > 0) {
+                  const isValidDomain = validateEmailDomain(data.email.trim())
+                  setEmailDomainError(!isValidDomain)
+                }
+              }}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              textContentType="emailAddress"
+            />
+            {selectedCollegeDomain && emailDomainError && (
+              <View style={styles.emailErrorContainer}>
+                <Text style={[styles.emailDomainHint, { color: '#ff4444' }]}>
+                  Only {selectedCollegeDomain} email addresses are accepted
+                </Text>
+              </View>
+            )}
+          </View>
 
-        <View style={styles.inputGroup}>
-          <Text style={[styles.credentialLabel, { color: theme.text }]}>Confirm Password</Text>
-          <TextInput
-            style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-            placeholder="Confirm your password"
-            placeholderTextColor={theme.inputPlaceholder}
-            value={data.confirmPassword}
-            onChangeText={(value) => updateData('confirmPassword', value)}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            textContentType="newPassword"
-          />
+          <View style={styles.inputGroup}>
+            <Text style={[styles.credentialLabel, { color: theme.text }]}>Password</Text>
+            <TextInput
+              style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+              placeholder="Create a password"
+              placeholderTextColor={theme.inputPlaceholder}
+              value={data.password}
+              onChangeText={(value) => updateData('password', value)}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={[styles.credentialLabel, { color: theme.text }]}>Confirm Password</Text>
+            <TextInput
+              style={[styles.credentialInput, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+              placeholder="Confirm your password"
+              placeholderTextColor={theme.inputPlaceholder}
+              value={data.confirmPassword}
+              onChangeText={(value) => updateData('confirmPassword', value)}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+            />
+          </View>
         </View>
       </View>
-    </View>
-  )
+    )
+  }
 
   const renderCurrentStep = () => {
     switch (steps[currentStep]) {
@@ -812,7 +853,7 @@ export default function OnboardingScreen({ navigation }: any) {
       case 'major':
         return true // Optional
       case 'college':
-        return data.collegeId.length > 0
+        return !collegesLoading && data.collegeId.length > 0
       case 'graduatingYear':
         return data.graduatingYear.length > 0
       case 'bio':
@@ -826,9 +867,12 @@ export default function OnboardingScreen({ navigation }: any) {
       case 'notifications':
         return true // Settings step
       case 'credentials':
-        return data.email.trim().length > 0 && 
+        return !collegesLoading && 
+               colleges.length > 0 &&
+               data.email.trim().length > 0 && 
                data.password.length > 0 && 
-               data.password === data.confirmPassword
+               data.password === data.confirmPassword &&
+               validateEmailDomain(data.email.trim())
       default:
         return false
     }
@@ -926,79 +970,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
-    width: '50%', // 1/3 of screen width
+    width: '50%',
     minWidth: '50%',
-    maxWidth: '50%', // Expandable to 1/2 of screen width
-    textAlign: 'center', // Center aligned when typing
-  },
-  textArea: {
-    height: 100,
-    textAlignVertical: 'top',
-  },
-  bioTextArea: {
-    width: '75%', // 3/4 of screen width
-    minWidth: '75%',
-    maxWidth: '75%',
-  },
-  privacyNote: {
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 12,
-    lineHeight: 16,
-    paddingHorizontal: 20,
-  },
-  wordCount: {
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  yearGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    marginTop: 20,
-    gap: 10,
-  },
-  yearButton: {
-    width: '30%',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    alignItems: 'center',
-  },
-  yearButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  profileImageButton: {
-    alignSelf: 'center',
-    marginTop: 20,
-  },
-  profileImage: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 3,
-  },
-  profileImagePlaceholder: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
+    maxWidth: '50%',
+    textAlign: 'left',
   },
   inputGroup: {
     marginBottom: 20,
     alignItems: 'center',
     width: '100%',
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
   },
   credentialsContainer: {
     width: '100%',
@@ -1080,7 +1060,91 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontStyle: 'italic',
   },
-  // Privacy settings styles
+  loadingContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    fontStyle: 'italic',
+  },
+  errorContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  emailDomainHint: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  emailErrorContainer: {
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  textArea: {
+    height: 100,
+    textAlignVertical: 'top',
+  },
+  bioTextArea: {
+    width: '75%',
+    minWidth: '75%',
+    maxWidth: '75%',
+  },
+  wordCount: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  yearGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginTop: 20,
+    gap: 10,
+  },
+  yearButton: {
+    width: '30%',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  yearButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  profileImageButton: {
+    alignSelf: 'center',
+    marginTop: 20,
+  },
+  profileImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 3,
+  },
+  profileImagePlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+  },
+  privacyNote: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 12,
+    lineHeight: 16,
+    paddingHorizontal: 20,
+  },
   privacyOptions: {
     marginTop: 20,
     width: '100%',
@@ -1148,7 +1212,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  // Notification settings styles - iOS style
   notificationSection: {
     marginTop: 20,
     borderRadius: 16,
@@ -1196,7 +1259,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 12,
   },
-  // iOS-style toggle
   iosToggle: {
     width: 51,
     height: 31,

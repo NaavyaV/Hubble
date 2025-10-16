@@ -16,10 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import * as ImagePicker from 'expo-image-picker'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
+import NotificationService from '../services/notifications'
 
 interface CreateEventScreenProps {
   onBack: () => void
@@ -41,6 +43,7 @@ const predefinedTags = [
 
 export default function CreateEventScreen({ onBack, onEventCreated }: CreateEventScreenProps) {
   const { theme } = useTheme()
+  const navigation = useNavigation()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [location, setLocation] = useState('')
@@ -50,6 +53,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
   const [endTime, setEndTime] = useState(new Date())
   const [hasEndTime, setHasEndTime] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [privacy, setPrivacy] = useState<'public' | 'invite_only'>('public')
+  const [invitedUsers, setInvitedUsers] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [imageUri, setImageUri] = useState<string | null>(null)
   const [showDatePicker, setShowDatePicker] = useState(false)
@@ -62,6 +67,17 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
         ? prev.filter(t => t !== tag)
         : [...prev, tag]
     )
+  }
+
+  const handleInviteUsers = () => {
+    navigation.navigate('EventInvite', {
+      invitedUsers: invitedUsers,
+      isEditMode: false,
+      // Pass callback to update invited users when returning
+      onInvitesUpdated: (newInvitedUsers: string[]) => {
+        setInvitedUsers(newInvitedUsers)
+      }
+    })
   }
 
   const pickImage = async () => {
@@ -206,12 +222,55 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
           location: location.trim(),
           max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
           image_url: imageUrl,
+          privacy: privacy,
           tags: selectedTags.length > 0 ? selectedTags : null,
         })
         .select()
         .single()
 
       if (eventError) throw eventError
+
+      // If it's an invite-only event, create invitations for selected users
+      if (privacy === 'invite_only' && invitedUsers.length > 0) {
+        const invitations = invitedUsers.map(userId => ({
+          event_id: event.id,
+          user_id: userId,
+          invited_by: user.id
+        }))
+
+        const { error: inviteError } = await supabase
+          .from('event_invitations')
+          .insert(invitations)
+
+        if (inviteError) {
+          console.error('Error creating invitations:', inviteError)
+          // Don't fail the entire event creation if invitations fail
+        } else {
+          // Send push notifications to invited users (excluding the host)
+          for (const userId of invitedUsers) {
+            // Skip notification if the user is the host
+            if (userId === user.id) {
+              continue
+            }
+            
+            try {
+              await NotificationService.sendNotification({
+                type: 'event_invitation',
+                eventId: event.id,
+                userId: userId,
+                title: 'Event Invitation',
+                body: `You've been invited to "${event.title}" by ${profileData?.full_name || 'a friend'}`,
+                data: {
+                  eventId: event.id,
+                  hostId: user.id
+                }
+              })
+            } catch (error) {
+              console.error('Error sending invitation notification:', error)
+            }
+          }
+        }
+      }
 
       // Automatically add host as going to their own event
       const { error: hostAttendanceError } = await supabase
@@ -243,6 +302,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
             setHasEndTime(false)
             setImageUri(null)
             setSelectedTags([])
+            setPrivacy('public')
+            setInvitedUsers([])
             onEventCreated()
           }
         }
@@ -282,6 +343,88 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                 )}
               </TouchableOpacity>
             </View>
+
+            {/* Privacy Settings */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
+              <View style={[styles.privacyContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                <TouchableOpacity
+                  style={[
+                    styles.privacyOption,
+                    { backgroundColor: theme.surface, borderBottomColor: theme.border },
+                    privacy === 'public' && { backgroundColor: theme.primaryLight }
+                  ]}
+                  onPress={() => setPrivacy('public')}
+                >
+                  <Ionicons
+                    name={privacy === 'public' ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={privacy === 'public' ? theme.primary : theme.textSecondary}
+                  />
+                  <Text style={[
+                    styles.privacyText,
+                    { color: theme.text },
+                    privacy === 'public' && { color: theme.primaryDark }
+                  ]}>
+                    Public
+                  </Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.privacyOption,
+                    { backgroundColor: theme.surface },
+                    privacy === 'invite_only' && { backgroundColor: theme.primaryLight }
+                  ]}
+                  onPress={() => {
+                    setPrivacy('invite_only')
+                    setMaxAttendees('') // Clear max attendees when switching to invite-only
+                  }}
+                >
+                  <Ionicons
+                    name={privacy === 'invite_only' ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={privacy === 'invite_only' ? theme.primary : theme.textSecondary}
+                  />
+                  <Text style={[
+                    styles.privacyText,
+                    { color: theme.text },
+                    privacy === 'invite_only' && { color: theme.primaryDark }
+                  ]}>
+                    Invite Only
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.privacyDescription, { color: theme.textSecondary }]}>
+                {privacy === 'public' 
+                  ? 'Anyone can see and join this event' 
+                  : 'Only invited people can see and join this event'}
+              </Text>
+            </View>
+
+            {/* Invitation Section - Only show when invite only is selected */}
+            {privacy === 'invite_only' && (
+              <View style={styles.inputGroup}>
+                <Text style={[styles.label, { color: theme.text }]}>Invitations</Text>
+                <TouchableOpacity
+                  style={[styles.inviteButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  onPress={handleInviteUsers}
+                >
+                  <Ionicons name="people" size={20} color={theme.primary} />
+                  <Text style={[styles.inviteButtonText, { color: theme.text }]}>
+                    {invitedUsers.length === 0 
+                      ? 'Invite Friends' 
+                      : `${invitedUsers.length} friend${invitedUsers.length === 1 ? '' : 's'} invited`}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+                </TouchableOpacity>
+                {invitedUsers.length > 0 && (
+                  <Text style={[styles.inviteDescription, { color: theme.textSecondary }]}>
+                    Tap to manage invitations
+                  </Text>
+                )}
+              </View>
+            )}
 
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Event Title *</Text>
@@ -356,15 +499,32 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               <View style={[styles.inputGroup, styles.halfWidth]}>
                 <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="Optional"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  value={maxAttendees}
-                  onChangeText={setMaxAttendees}
+                  style={[
+                    styles.input, 
+                    { 
+                      backgroundColor: privacy === 'invite_only' ? `${theme.inputBackground}80` : theme.inputBackground, 
+                      borderColor: privacy === 'invite_only' ? `${theme.inputBorder}80` : theme.inputBorder, 
+                      color: privacy === 'invite_only' ? `${theme.inputText}80` : theme.inputText 
+                    }
+                  ]}
+                  placeholder={privacy === 'invite_only' ? "Not needed for invite-only" : "Optional"}
+                  placeholderTextColor={privacy === 'invite_only' ? `${theme.inputPlaceholder}80` : theme.inputPlaceholder}
+                  value={privacy === 'invite_only' ? '' : maxAttendees}
+                  onChangeText={(text) => {
+                    if (privacy !== 'invite_only') {
+                      setMaxAttendees(text)
+                    }
+                  }}
                   keyboardType="numeric"
                   autoCorrect={false}
                   spellCheck={false}
+                  editable={privacy !== 'invite_only'}
                 />
+                {privacy === 'invite_only' && (
+                  <Text style={[styles.disabledHint, { color: theme.textSecondary }]}>
+                    Max attendees not needed - only invited people can attend
+                  </Text>
+                )}
               </View>
             </View>
 
@@ -569,6 +729,50 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
+  privacyContainer: {
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  privacyOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  privacyText: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginLeft: 12,
+  },
+  privacyDescription: {
+    fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  inviteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  inviteButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    flex: 1,
+    marginLeft: 12,
+  },
+  inviteDescription: {
+    fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
   createButton: {
     borderRadius: 8,
     paddingVertical: 16,
@@ -628,5 +832,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 6,
     fontWeight: '500',
+  },
+  disabledHint: {
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: 'italic',
   },
 })
