@@ -93,6 +93,7 @@ export default function EventInviteScreen() {
           .from('profiles')
           .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
           .in('id', friendIds)
+          .eq('otp_verified', true) // Only show OTP verified users
 
         if (friendsError) throw friendsError
         setFriends(friendProfiles || [])
@@ -181,14 +182,14 @@ export default function EventInviteScreen() {
         style={[
           styles.userItem,
           { 
-            backgroundColor: theme.surface, 
-            borderBottomColor: isSelected ? 'transparent' : theme.border,
-            borderColor: isSelected ? theme.primary : 'transparent',
-            borderWidth: isSelected ? 2 : 0,
-            borderRadius: isSelected ? 8 : 0,
-            borderBottomWidth: isSelected ? 0 : 1,
-          },
-          isAlreadyInvited && { backgroundColor: theme.primaryLight }
+            backgroundColor: isAlreadyInvited ? theme.primaryLight : theme.surface,
+            borderColor: isSelected ? theme.primary : theme.border,
+            borderWidth: isSelected ? 2 : 1,
+            borderRadius: 8,
+            marginHorizontal: 0,
+            marginVertical: 3,
+            opacity: isAlreadyInvited ? 0.6 : 1
+          }
         ]}
         onPress={() => toggleUserSelection(item.id)}
         disabled={isAlreadyInvited}
@@ -231,9 +232,12 @@ export default function EventInviteScreen() {
 
         <View style={styles.selectionIndicator}>
           {isSelected ? (
-            <Ionicons name="checkmark-circle" size={24} color={theme.primary} />
+            <View style={[styles.selectedIndicator, { backgroundColor: theme.primary }]}>
+              <Ionicons name="checkmark" size={16} color="white" />
+            </View>
           ) : (
-            <Ionicons name="ellipse-outline" size={24} color={theme.textSecondary} />
+            <View style={[styles.unselectedIndicator, { borderColor: theme.border }]}>
+            </View>
           )}
         </View>
       </TouchableOpacity>
@@ -252,19 +256,14 @@ export default function EventInviteScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>
           {isEditMode ? 'Edit Invites' : 'Invite Friends'}
         </Text>
-        <TouchableOpacity 
-          style={[styles.doneButton, { backgroundColor: theme.primary }]} 
-          onPress={handleDone}
-        >
-          <Text style={styles.doneButtonText}>Done</Text>
-        </TouchableOpacity>
+        <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.content}>
@@ -325,6 +324,16 @@ export default function EventInviteScreen() {
           </View>
         )}
       </View>
+
+      {/* Floating Done Button */}
+      <View style={[styles.floatingButtonContainer, { backgroundColor: theme.background }]}>
+        <TouchableOpacity 
+          style={[styles.floatingDoneButton, { backgroundColor: theme.primary }]} 
+          onPress={handleDone}
+        >
+          <Text style={styles.floatingDoneButtonText}>Done</Text>
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   )
 }
@@ -345,7 +354,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderBottomWidth: 1,
   },
   backButton: {
@@ -354,6 +364,9 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
+  },
+  headerSpacer: {
+    width: 40, // Same width as back button for centering
   },
   doneButton: {
     paddingHorizontal: 16,
@@ -370,6 +383,7 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     padding: 20,
+    paddingBottom: 140, // Add space for floating button positioned higher
   },
   searchContainer: {
     flexDirection: 'row',
@@ -388,6 +402,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   friendsSection: {
+    flex: 1,
     marginBottom: 24,
   },
   friendsHeader: {
@@ -411,14 +426,13 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   friendsList: {
-    maxHeight: 200,
+    flex: 1,
   },
   userItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderWidth: 1,
   },
   userAvatar: {
@@ -470,6 +484,19 @@ const styles = StyleSheet.create({
   selectionIndicator: {
     marginLeft: 12,
   },
+  selectedIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  unselectedIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+  },
   editNote: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -497,5 +524,34 @@ const styles = StyleSheet.create({
   emptyStateSubtext: {
     fontSize: 14,
     textAlign: 'center',
+  },
+  floatingButtonContainer: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 60,
+    paddingVertical: 0,
+    borderTopWidth: 0,
+    alignItems: 'center',
+  },
+  floatingDoneButton: {
+    paddingVertical: 16,
+    paddingHorizontal: 60,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  floatingDoneButtonText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: '600',
   },
 })

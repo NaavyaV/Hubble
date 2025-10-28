@@ -32,8 +32,8 @@ export default function SettingsScreen() {
   const styles = createStyles(theme)
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.background }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
@@ -159,7 +159,6 @@ export default function SettingsScreen() {
 const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'row',

@@ -62,6 +62,7 @@ export default function EventPhotoGalleryScreen() {
         .from('profiles')
         .select('id, full_name, avatar_url')
         .eq('id', event.host_id)
+        .eq('otp_verified', true) // Only show OTP verified users
         .single()
 
       if (error) {

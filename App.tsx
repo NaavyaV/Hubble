@@ -5,10 +5,10 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { View, Text, TouchableOpacity } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import * as Device from 'expo-device'
 import { supabase } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
-import notificationProcessor from './src/services/notificationProcessor'
 import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 
 // Import screens
@@ -20,7 +20,6 @@ import EventDetailScreen from './src/screens/EventDetailScreen'
 import EditProfileScreen from './src/screens/EditProfileScreen'
 import MyEventsScreen from './src/screens/MyEventsScreen'
 import CreateEventScreen from './src/screens/CreateEventScreen'
-import EditEventScreen from './src/screens/EditEventScreen'
 import FriendsScreen from './src/screens/FriendsScreen'
 import EventInviteScreen from './src/screens/EventInviteScreen'
 import SettingsScreen from './src/screens/SettingsScreen'
@@ -44,7 +43,6 @@ type RootStackParamList = {
   EditProfile: undefined
   MyEvents: undefined
   CreateEvent: undefined
-  EditEvent: { event: any }
   EventInvite: { invitedUsers: string[] }
   Settings: undefined
   NotificationSettings: undefined
@@ -75,18 +73,27 @@ function MainTabNavigator() {
     // Initialize notifications when user is logged in
     const initializeNotifications = async () => {
       try {
+        // Add a small delay to ensure the app is fully loaded
+        await new Promise(resolve => setTimeout(resolve, 500))
+        
         const token = await notificationService.initialize()
         if (token) {
-          console.log('Notifications initialized successfully')
+          if (__DEV__) {
+            console.log('Notifications initialized successfully')
+          }
         }
       } catch (error) {
-        console.error('Error initializing notifications:', error)
+        if (__DEV__) {
+          console.error('Error initializing notifications:', error)
+        }
+        // Don't let notification errors crash the app
       }
     }
 
-    initializeNotifications()
-    // Start notification processing
-    notificationProcessor.startProcessing()
+    // Only initialize notifications if we're on a device
+    if (Device.isDevice) {
+      initializeNotifications()
+    }
   }, [])
 
   useEffect(() => {
@@ -175,8 +182,10 @@ function AppContent() {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('Auth state change:', { event, session: session ? 'exists' : 'none' })
-        console.log('User email confirmed:', session?.user?.email_confirmed_at)
+        if (__DEV__) {
+          console.log('Auth state change:', { event, session: session ? 'exists' : 'none' })
+          console.log('User email confirmed:', session?.user?.email_confirmed_at)
+        }
         
         if (session?.user) {
           // Add a small delay to allow profile updates to complete
@@ -189,19 +198,27 @@ function AppContent() {
             .eq('id', session.user.id)
             .single()
           
-          console.log('Profile query result:', { profile, profileError })
-          console.log('OTP verified:', profile?.otp_verified)
+          if (__DEV__) {
+            console.log('Profile query result:', { profile, profileError })
+            console.log('OTP verified:', profile?.otp_verified)
+          }
           
           // Only allow access if OTP is verified
           if (profile?.otp_verified) {
-            console.log('Setting user as authenticated - OTP verified')
+            if (__DEV__) {
+              console.log('Setting user as authenticated - OTP verified')
+            }
             setUser(session.user as User)
           } else {
-            console.log('User OTP not verified, staying in unauthenticated flow')
+            if (__DEV__) {
+              console.log('User OTP not verified, staying in unauthenticated flow')
+            }
             setUser(null)
           }
         } else {
-          console.log('No session, setting user to null')
+          if (__DEV__) {
+            console.log('No session, setting user to null')
+          }
           setUser(null)
         }
         setLoading(false)
@@ -214,8 +231,10 @@ function AppContent() {
   const checkUser = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      console.log('Checking user:', user ? 'exists' : 'none')
-      console.log('User email confirmed:', user?.email_confirmed_at)
+      if (__DEV__) {
+        console.log('Checking user:', user ? 'exists' : 'none')
+        console.log('User email confirmed:', user?.email_confirmed_at)
+      }
       
       if (user) {
         // Check if user has completed OTP verification
@@ -225,19 +244,27 @@ function AppContent() {
           .eq('id', user.id)
           .single()
         
-        console.log('OTP verified:', profile?.otp_verified)
+        if (__DEV__) {
+          console.log('OTP verified:', profile?.otp_verified)
+        }
         
         // Only allow access if OTP is verified
         if (profile?.otp_verified) {
-          console.log('Setting user as authenticated - OTP verified')
+          if (__DEV__) {
+            console.log('Setting user as authenticated - OTP verified')
+          }
           setUser(user as User)
         } else {
-          console.log('User OTP not verified, staying in unauthenticated flow')
+          if (__DEV__) {
+            console.log('User OTP not verified, staying in unauthenticated flow')
+          }
           setUser(null)
         }
       }
     } catch (error) {
-      console.error('Error checking user:', error)
+      if (__DEV__) {
+        console.error('Error checking user:', error)
+      }
     } finally {
       setLoading(false)
     }
@@ -355,13 +382,6 @@ function AppContent() {
                   />
                 )}
               </Stack.Screen>
-              <Stack.Screen
-                name="EditEvent"
-                component={EditEventScreen}
-                options={{
-                  headerShown: false,
-                }}
-              />
               <Stack.Screen
                 name="EventInvite"
                 component={EventInviteScreen}

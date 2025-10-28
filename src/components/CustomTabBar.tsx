@@ -38,7 +38,7 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
         iconName = 'help-outline'
     }
 
-    return <Ionicons name={iconName} size={24} color={focused ? theme.tabBarActive : theme.tabBarInactive} />
+    return <Ionicons name={iconName} size={26} color={focused ? theme.tabBarActive : theme.tabBarInactive} />
   }
 
   const renderTab = (route: any, index: number) => {
@@ -122,7 +122,7 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
 
 const styles = StyleSheet.create({
   tabBar: {
-    height: 75,
+    height: 90,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.1,
@@ -143,9 +143,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
-    marginTop: 4,
+    marginTop: 6,
   },
   badge: {
     position: 'absolute',

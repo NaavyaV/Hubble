@@ -72,6 +72,7 @@ export default function GeneralPhotoGalleryScreen() {
         .from('profiles')
         .select('id, full_name, avatar_url')
         .in('id', hostIds)
+        .eq('otp_verified', true) // Only show OTP verified users
 
       if (error) {
         console.error('Error fetching host profiles:', error)
@@ -237,15 +238,6 @@ export default function GeneralPhotoGalleryScreen() {
     </TouchableOpacity>
   )
 
-  const renderHeader = () => (
-    <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
-      <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-        <Ionicons name="arrow-back" size={24} color={theme.text} />
-      </TouchableOpacity>
-      <Text style={[styles.headerTitle, { color: theme.text }]}>Photo Gallery</Text>
-      <View style={styles.headerRight} />
-    </View>
-  )
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
@@ -259,19 +251,16 @@ export default function GeneralPhotoGalleryScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-        {renderHeader()}
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
         <View style={styles.loadingContainer}>
           <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading photos...</Text>
         </View>
-      </SafeAreaView>
+      </View>
     )
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      {renderHeader()}
-      
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       {photos.length === 0 ? (
         renderEmptyState()
       ) : (
@@ -360,32 +349,13 @@ export default function GeneralPhotoGalleryScreen() {
           })}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  backButton: {
-    padding: 8,
-    marginLeft: -8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  headerRight: {
-    width: 40,
   },
   loadingContainer: {
     flex: 1,

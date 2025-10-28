@@ -21,6 +21,7 @@ import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { getEventEndDate, isEventEnded, isEventInFuture } from '../utils/eventTimeUtils'
+import GeneralPhotoGalleryScreen from './GeneralPhotoGalleryScreen'
 
 type EventListItem = EventWithAttendees & { goingCount: number; tags?: string[] }
 
@@ -251,6 +252,7 @@ export default function EventsListScreen() {
         .from('profiles')
         .select('id, full_name, username, avatar_url')
         .in('id', hostIds)
+        .eq('otp_verified', true) // Only show OTP verified users
 
       if (profiles) {
         const profilesMap = profiles.reduce((acc, profile) => {
@@ -327,6 +329,7 @@ export default function EventsListScreen() {
         .from('profiles')
         .select('id, full_name, username, avatar_url')
         .in('id', Array.from(attendeeUserIds))
+        .eq('otp_verified', true) // Only show OTP verified users
 
       if (profiles) {
         const profilesMap = profiles.reduce((acc, profile) => {
@@ -731,7 +734,7 @@ export default function EventsListScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Loading events...</Text>
         </View>
@@ -740,9 +743,9 @@ export default function EventsListScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Unified Header with Scroll View */}
-      <View style={styles.unifiedHeader}>
+      <View style={[styles.unifiedHeader, { backgroundColor: theme.background }]}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -820,10 +823,18 @@ export default function EventsListScreen() {
             style={styles.fadeOverlay}
           />
           <TouchableOpacity
-            style={styles.floatingButton}
-            onPress={() => setShowFilterModal(true)}
+            style={[
+              styles.floatingButton,
+              timeFilter === 'photo_gallery' && styles.floatingButtonDisabled
+            ]}
+            onPress={() => timeFilter !== 'photo_gallery' && setShowFilterModal(true)}
+            disabled={timeFilter === 'photo_gallery'}
           >
-            <Ionicons name="options-outline" size={20} color={theme.textSecondary} />
+            <Ionicons 
+              name="options-outline" 
+              size={20} 
+              color={timeFilter === 'photo_gallery' ? theme.textTertiary : theme.textSecondary} 
+            />
           </TouchableOpacity>
           <TouchableOpacity
             style={[
@@ -845,18 +856,14 @@ export default function EventsListScreen() {
 
       {timeFilter === 'photo_gallery' ? (
         // Photo Gallery Content
-        <View style={styles.photoGalleryContainer}>
-          <Text style={[styles.photoGalleryTitle, { color: theme.text }]}>Photo Gallery</Text>
-          <Text style={[styles.photoGalleryMessage, { color: theme.textSecondary }]}>
-            All event photos will be displayed here
-          </Text>
-        </View>
+        <GeneralPhotoGalleryScreen />
       ) : (
         // Events List
         <FlatList
           data={filteredEvents}
           renderItem={renderEventCard}
           keyExtractor={(item) => item.id}
+          style={styles.eventsFlatList}
           contentContainerStyle={[
             styles.eventsList,
             filteredEvents.length === 0 && timeFilter === 'past' && styles.emptyStateContainer
@@ -870,7 +877,6 @@ export default function EventsListScreen() {
             />
           }
           showsVerticalScrollIndicator={false}
-          style={styles.eventsFlatList}
           ListEmptyComponent={
             timeFilter === 'past' ? (
               <View style={styles.pastEventsEmptyState}>
@@ -887,6 +893,21 @@ export default function EventsListScreen() {
                 <Text style={styles.myEventsEmptyMessage}>
                   You haven't signed up for any events yet!
                 </Text>
+              </View>
+            ) : timeFilter === 'current' && activeFilter === 'all' ? (
+              <View style={styles.comingEventsEmptyState}>
+                <Ionicons name="calendar-outline" size={48} color={theme.textSecondary} />
+                <Text style={styles.comingEventsEmptyTitle}>No Coming Events</Text>
+                <Text style={styles.comingEventsEmptyMessage}>
+                  No upcoming events to show right now
+                </Text>
+                <TouchableOpacity 
+                  style={styles.createEventButton}
+                  onPress={() => (navigation as any).navigate('Host')}
+                >
+                  <Ionicons name="add" size={20} color="white" />
+                  <Text style={styles.createEventButtonText}>Create One!</Text>
+                </TouchableOpacity>
               </View>
             ) : null
           }
@@ -1098,9 +1119,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingVertical: 12,
   },
   unifiedHeader: {
-    backgroundColor: theme.headerBackground,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.headerBorder,
+    backgroundColor: theme.background,
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
@@ -1108,7 +1127,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerScrollContent: {
     paddingHorizontal: 16,
-    paddingRight: 100, // Add extra padding to ensure scrollability past floating buttons
+    paddingRight: 120, // Add extra padding to ensure scrollability past floating buttons
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -1118,9 +1137,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginRight: 8,
     borderRadius: 20,
     backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: theme.border,
   },
   headerButtonActive: {
     backgroundColor: theme.primary,
+    borderColor: theme.primary,
   },
   headerButtonText: {
     fontSize: 14,
@@ -1139,16 +1161,25 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     paddingRight: 16,
     backgroundColor: theme.headerBackground,
-    width: 80,
+    width: 110,
     justifyContent: 'flex-end',
   },
   floatingButton: {
     padding: 8,
     marginLeft: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
   },
   floatingButtonActive: {
     backgroundColor: theme.primary + '20',
     borderRadius: 8,
+    borderColor: theme.primary,
+  },
+  floatingButtonDisabled: {
+    backgroundColor: theme.surface,
+    opacity: 0.5,
   },
   photoGalleryContainer: {
     flex: 1,
@@ -1218,15 +1249,15 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     paddingRight: 20,
     backgroundColor: theme.headerBackground,
-    width: 80,
+    width: 120,
     justifyContent: 'flex-end',
   },
   fadeOverlay: {
     position: 'absolute',
-    left: -40,
+    left: -60,
     top: 0,
     bottom: 0,
-    width: 40,
+    width: 60,
   },
   filterIcon: {
     padding: 8,
@@ -1326,6 +1357,49 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.textSecondary,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  comingEventsEmptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingVertical: 60,
+  },
+  comingEventsEmptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: theme.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  comingEventsEmptyMessage: {
+    fontSize: 16,
+    color: theme.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  createEventButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    shadowColor: theme.primary,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  createEventButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
   },
   eventsList: {
     padding: 20,

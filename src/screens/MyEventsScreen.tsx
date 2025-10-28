@@ -78,9 +78,6 @@ export default function MyEventsScreen() {
     ;(navigation as any).navigate('EventDetail', { event })
   }
 
-  const handleEditEvent = (event: EventWithAttendees) => {
-    ;(navigation as any).navigate('EditEvent', { event })
-  }
 
   const handleDeleteEvent = async (eventId: string) => {
     // Find the event to get its title and host_id
@@ -157,12 +154,6 @@ export default function MyEventsScreen() {
           <View style={styles.eventHeader}>
             <Text style={[styles.eventTitle, { color: theme.text }]}>{item.title}</Text>
             <View style={styles.eventActions}>
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: theme.surface }]}
-                onPress={() => handleEditEvent(item)}
-              >
-                <Ionicons name="create-outline" size={20} color={theme.primary} />
-              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actionButton, { backgroundColor: theme.surface }]}
                 onPress={() => handleDeleteEvent(item.id)}

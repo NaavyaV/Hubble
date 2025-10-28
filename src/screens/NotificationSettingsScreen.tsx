@@ -51,14 +51,65 @@ export default function NotificationSettingsScreen() {
 
   const fetchNotificationSettings = async () => {
     try {
+      setLoading(true)
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      // For now, we'll use default settings since we don't have a notification_settings table yet
-      // In a real implementation, you would fetch from the database
-      console.log('Fetching notification settings for user:', user.id)
+      // Fetch notification preferences from database
+      const { data: preferences, error } = await supabase
+        .from('notification_preferences')
+        .select('*')
+        .eq('user_id', user.id)
+        .single()
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+        console.error('Error fetching notification settings:', error)
+        return
+      }
+
+      if (preferences) {
+        setSettings({
+          pushNotifications: preferences.push_notifications,
+          eventReminders: preferences.event_reminders,
+          goingStatusUpdates: preferences.going_status_updates,
+          friendRequests: preferences.friend_requests,
+          eventInvitations: preferences.event_invitations,
+          eventDeletions: preferences.event_deletions,
+        })
+        setOriginalSettings({
+          pushNotifications: preferences.push_notifications,
+          eventReminders: preferences.event_reminders,
+          goingStatusUpdates: preferences.going_status_updates,
+          friendRequests: preferences.friend_requests,
+          eventInvitations: preferences.event_invitations,
+          eventDeletions: preferences.event_deletions,
+        })
+      } else {
+        // Create default preferences if none exist
+        const defaultSettings = {
+          push_notifications: true,
+          event_reminders: true,
+          going_status_updates: true,
+          friend_requests: true,
+          event_invitations: true,
+          event_deletions: true,
+        }
+        
+        const { error: insertError } = await supabase
+          .from('notification_preferences')
+          .insert({
+            user_id: user.id,
+            ...defaultSettings
+          })
+
+        if (insertError) {
+          console.error('Error creating default notification preferences:', insertError)
+        }
+      }
     } catch (error) {
       console.error('Error fetching notification settings:', error)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -89,9 +140,25 @@ export default function NotificationSettingsScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      // In a real implementation, you would save to the database here
-      // For now, we'll just log the changes
-      console.log('Saving notification settings:', settings)
+      // Save notification preferences to database
+      const { error } = await supabase
+        .from('notification_preferences')
+        .upsert({
+          user_id: user.id,
+          push_notifications: settings.pushNotifications,
+          event_reminders: settings.eventReminders,
+          going_status_updates: settings.goingStatusUpdates,
+          friend_requests: settings.friendRequests,
+          event_invitations: settings.eventInvitations,
+          event_deletions: settings.eventDeletions,
+          updated_at: new Date().toISOString()
+        })
+
+      if (error) {
+        console.error('Error saving notification settings:', error)
+        Alert.alert('Error', 'Failed to save notification settings')
+        return
+      }
       
       // Update original settings to match current settings
       setOriginalSettings({ ...settings })
@@ -147,23 +214,24 @@ export default function NotificationSettingsScreen() {
           <Ionicons name={icon as any} size={20} color={theme.primary} />
         </View>
         <View style={styles.settingText}>
-          <Text style={[styles.settingTitle, { color: theme.text }]}>{title}</Text>
-          <Text style={[styles.settingDescription, { color: theme.textSecondary }]}>{description}</Text>
+          <Text style={[styles.settingTitle, { color: theme.text }]} numberOfLines={2}>{title}</Text>
+          <Text style={[styles.settingDescription, { color: theme.textSecondary }]} numberOfLines={2}>{description}</Text>
         </View>
       </View>
       <Switch
         value={value}
         onValueChange={onValueChange}
+        disabled={disabled || saving}
         trackColor={{ false: theme.border, true: theme.primary }}
         thumbColor={value ? theme.buttonText : theme.textSecondary}
-        disabled={disabled || saving}
+        ios_backgroundColor={theme.border}
       />
     </View>
   )
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
           <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
@@ -223,7 +291,7 @@ export default function NotificationSettingsScreen() {
           
           <SettingRow
             title="Event Invitations"
-            description="Notify when you're invited to private events"
+            description="Notify when you're invited to events"
             value={settings.eventInvitations}
             onValueChange={(value) => updateSetting('eventInvitations', value)}
             icon="mail"
@@ -311,7 +379,6 @@ const styles = StyleSheet.create({
   settingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     padding: 16,
     borderRadius: 12,
     borderWidth: 1,
@@ -321,6 +388,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    marginRight: 16,
+    minWidth: 0, // Allow shrinking
   },
   iconContainer: {
     width: 40,
@@ -329,9 +398,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+    flexShrink: 0, // Don't shrink icon
   },
   settingText: {
     flex: 1,
+    minWidth: 0, // Allow text to shrink
   },
   settingTitle: {
     fontSize: 16,

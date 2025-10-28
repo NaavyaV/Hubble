@@ -84,12 +84,13 @@ export default function FriendsScreen() {
   const fetchAllUsers = async () => {
     try {
       console.log('Fetching all users...')
-      // Optimize: Only fetch essential fields, no college join for better performance
+      // Only fetch users who have completed OTP verification
       const { data, error } = await supabase
         .from('profiles')
         .select(`
           id, full_name, avatar_url, phone_number, major, graduating_year, bio
         `)
+        .eq('otp_verified', true) // Only show OTP verified users
         .order('full_name')
         .limit(1000) // Add reasonable limit to prevent massive queries
 
@@ -145,6 +146,7 @@ export default function FriendsScreen() {
           .from('profiles')
           .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
           .in('id', allProfileIds)
+          // Note: Don't filter by OTP for pending requests - we want to show all pending requests
 
         // Create maps for incoming and outgoing
         const incomingMap: Record<string, ProfileRow> = {}
@@ -473,12 +475,9 @@ export default function FriendsScreen() {
         </View>
         <View style={styles.actionButton}>
           {status === 'accepted' ? (
-            <TouchableOpacity
-              style={[styles.unfriendButton, { backgroundColor: theme.textTertiary }]}
-              onPress={() => unfriend(item.id, item.full_name || 'this person')}
-            >
-              <Text style={[styles.unfriendText, { color: theme.buttonText }]}>Unfriend</Text>
-            </TouchableOpacity>
+            <View style={styles.moreIcon}>
+              <Ionicons name="ellipsis-horizontal" size={16} color={theme.textSecondary} />
+            </View>
           ) : status === 'pending' ? (
             <TouchableOpacity
               style={[styles.cancelButton, { backgroundColor: theme.error }]}
@@ -694,18 +693,31 @@ export default function FriendsScreen() {
         )
       case 'friends':
         return (
-          <FlatList
-            data={friends}
-            keyExtractor={(item) => item.id}
-            renderItem={renderUserItem}
-            style={styles.list}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <View style={styles.emptyContainer}>
-                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>No friends yet</Text>
-              </View>
-            }
-          />
+          <View style={styles.friendsContainer}>
+            <View style={[styles.friendsSearchContainer, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder }]}>
+              <Ionicons name="search" size={20} color={theme.textSecondary} style={styles.searchIcon} />
+              <TextInput
+                style={[styles.friendsSearchInput, { color: theme.text }]}
+                placeholder="Search friends..."
+                value={query}
+                onChangeText={setQuery}
+                placeholderTextColor={theme.inputPlaceholder}
+              />
+            </View>
+            <FlatList
+              data={friends}
+              keyExtractor={(item) => item.id}
+              renderItem={renderUserItem}
+              style={styles.list}
+              contentContainerStyle={styles.friendsListContent}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={
+                <View style={styles.emptyContainer}>
+                  <Text style={[styles.emptyText, { color: theme.textSecondary }]}>No friends yet</Text>
+                </View>
+              }
+            />
+          </View>
         )
       default:
         return null
@@ -724,7 +736,7 @@ export default function FriendsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.tabContainer, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+      <View style={[styles.tabContainer, { backgroundColor: theme.background }]}>
         <TouchableOpacity
           style={[styles.tab, activeTab === 'search' && { borderBottomColor: theme.primary }]}
           onPress={() => setActiveTab('search')}
@@ -765,7 +777,7 @@ export default function FriendsScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.content}>
+      <View style={[styles.content, { backgroundColor: theme.background }]}>
         {renderTabContent()}
       </View>
 
@@ -793,7 +805,6 @@ const styles = StyleSheet.create({
   },
   tabContainer: {
     flexDirection: 'row',
-    borderBottomWidth: 1,
   },
   tab: {
     flex: 1,
@@ -846,6 +857,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 16,
   },
+  friendsSearchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  friendsSearchInput: {
+    flex: 1,
+    fontSize: 16,
+  },
   pendingContainer: {
     flex: 1,
     padding: 16,
@@ -863,6 +887,16 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
+  },
+  friendsContainer: {
+    flex: 1,
+    padding: 16,
+  },
+  searchIcon: {
+    marginRight: 12,
+  },
+  friendsListContent: {
+    paddingBottom: 20,
   },
   userItem: {
     flexDirection: 'row',
@@ -983,6 +1017,9 @@ const styles = StyleSheet.create({
   unfriendText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  moreIcon: {
+    padding: 8,
   },
   emptyContainer: {
     flex: 1,

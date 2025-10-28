@@ -166,6 +166,7 @@ export default function EventDetailScreen() {
           .from('profiles')
           .select('id, full_name, avatar_url, bio, phone_number')
           .in('id', userIds)
+          .eq('otp_verified', true) // Only show OTP verified users
         
         if (profilesError) throw profilesError
         profilesData = profiles || []

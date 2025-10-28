@@ -157,7 +157,7 @@ export default function PhoneVisibilityScreen() {
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-        <View style={styles.header}>
+        <View style={[styles.header, { backgroundColor: theme.background }]}>
           <TouchableOpacity
             style={styles.backButton}
             onPress={handleBackPress}
@@ -176,7 +176,7 @@ export default function PhoneVisibilityScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.background }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={handleBackPress}
@@ -230,19 +230,36 @@ export default function PhoneVisibilityScreen() {
               <View style={styles.hostingToggleLeft}>
                 <Ionicons name="calendar" size={24} color={theme.textSecondary} />
                 <View style={styles.hostingToggleText}>
-                  <Text style={styles.hostingToggleTitle}>Phone number shown only when hosting events</Text>
-                  <Text style={styles.hostingToggleDescription}>
+                  <Text style={styles.hostingToggleTitle} numberOfLines={2}>Phone number shown only when hosting events</Text>
+                  <Text style={styles.hostingToggleDescription} numberOfLines={2}>
                     Show your phone number for contact when you host events
                   </Text>
                 </View>
               </View>
-              <Switch
-                value={phoneVisibleWhenHosting}
-                onValueChange={handleHostingVisibilityChange}
-                disabled={saving || phoneVisibility === 'public'}
-                trackColor={{ false: theme.border, true: theme.primary + '40' }}
-                thumbColor={phoneVisibleWhenHosting ? theme.primary : theme.textTertiary}
-              />
+              <TouchableOpacity
+                style={[
+                  styles.hostingSwitchButton,
+                  { 
+                    backgroundColor: phoneVisibleWhenHosting ? theme.primary : theme.border,
+                    opacity: saving ? 0.5 : 1
+                  }
+                ]}
+                onPress={() => {
+                  if (!saving) {
+                    handleHostingVisibilityChange(!phoneVisibleWhenHosting)
+                  }
+                }}
+                disabled={saving}
+                activeOpacity={0.7}
+              >
+                <View style={[
+                  styles.hostingSwitchThumb,
+                  { 
+                    backgroundColor: phoneVisibleWhenHosting ? theme.buttonText : theme.textSecondary,
+                    transform: [{ translateX: phoneVisibleWhenHosting ? 20 : 2 }]
+                  }
+                ]} />
+              </TouchableOpacity>
             </View>
           )}
 
@@ -349,7 +366,6 @@ const createStyles = (theme: any) => StyleSheet.create({
   hostingToggleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingVertical: 20,
     paddingHorizontal: 20,
     backgroundColor: theme.surface,
@@ -363,10 +379,30 @@ const createStyles = (theme: any) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    marginRight: 16,
+    minWidth: 0, // Allow shrinking
   },
   hostingToggleText: {
     marginLeft: 16,
     flex: 1,
+    minWidth: 0, // Allow text to shrink
+  },
+  hostingSwitchButton: {
+    width: 50,
+    height: 30,
+    borderRadius: 15,
+    padding: 2,
+    justifyContent: 'center',
+  },
+  hostingSwitchThumb: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
   },
   hostingToggleTitle: {
     fontSize: 14,

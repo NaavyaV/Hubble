@@ -42,7 +42,7 @@ const predefinedTags = [
 ]
 
 export default function CreateEventScreen({ onBack, onEventCreated }: CreateEventScreenProps) {
-  const { theme } = useTheme()
+  const { theme, isDark } = useTheme()
   const navigation = useNavigation()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -70,7 +70,7 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
   }
 
   const handleInviteUsers = () => {
-    navigation.navigate('EventInvite', {
+    ;(navigation as any).navigate('EventInvite', {
       invitedUsers: invitedUsers,
       isEditMode: false,
       // Pass callback to update invited users when returning
@@ -259,7 +259,7 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                 eventId: event.id,
                 userId: userId,
                 title: 'Event Invitation',
-                body: `You've been invited to "${event.title}" by ${profileData?.full_name || 'a friend'}`,
+                body: `You've been invited to "${event.title}" by a friend`,
                 data: {
                   eventId: event.id,
                   hostId: user.id
@@ -332,16 +332,34 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
             {/* Event Image */}
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Event Image (Optional)</Text>
-              <TouchableOpacity style={[styles.imageButton, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={pickImage}>
+              <View style={[styles.imageContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                 {imageUri ? (
-                  <Image source={{ uri: imageUri }} style={styles.imagePreview} />
-                ) : (
-                  <View style={styles.imagePlaceholder}>
-                    <Ionicons name="camera" size={32} color={theme.textSecondary} />
-                    <Text style={[styles.imagePlaceholderText, { color: theme.textSecondary }]}>Tap to add image</Text>
+                  <View style={styles.imagePreviewContainer}>
+                    <TouchableOpacity style={styles.imagePreviewTouchable} onPress={pickImage}>
+                      <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+                      <View style={styles.imageOverlay}>
+                        <View style={styles.imageOverlayContent}>
+                          <Ionicons name="camera" size={24} color="white" />
+                          <Text style={styles.imageOverlayText}>Tap to change</Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.deleteImageButton, { backgroundColor: theme.error }]}
+                      onPress={() => setImageUri(null)}
+                    >
+                      <Ionicons name="trash" size={16} color="white" />
+                    </TouchableOpacity>
                   </View>
+                ) : (
+                  <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
+                    <View style={styles.imagePlaceholder}>
+                      <Ionicons name="camera" size={32} color={theme.textSecondary} />
+                      <Text style={[styles.imagePlaceholderText, { color: theme.textSecondary }]}>Tap to add image</Text>
+                    </View>
+                  </TouchableOpacity>
                 )}
-              </TouchableOpacity>
+              </View>
             </View>
 
             {/* Privacy Settings */}
@@ -426,6 +444,30 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               </View>
             )}
 
+            {/* Notify Friends Section - Only show when public is selected */}
+            {privacy === 'public' && (
+              <View style={styles.inputGroup}>
+                <Text style={[styles.label, { color: theme.text }]}>Notify Friends</Text>
+                <TouchableOpacity
+                  style={[styles.inviteButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  onPress={handleInviteUsers}
+                >
+                  <Ionicons name="notifications" size={20} color={theme.primary} />
+                  <Text style={[styles.inviteButtonText, { color: theme.text }]}>
+                    {invitedUsers.length === 0 
+                      ? 'Notify Friends' 
+                      : `${invitedUsers.length} friend${invitedUsers.length === 1 ? '' : 's'} to notify`}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+                </TouchableOpacity>
+                {invitedUsers.length > 0 && (
+                  <Text style={[styles.inviteDescription, { color: theme.textSecondary }]}>
+                    Tap to manage notifications
+                  </Text>
+                )}
+              </View>
+            )}
+
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Event Title *</Text>
               <TextInput
@@ -490,7 +532,7 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                   }}
                   minimumDate={new Date()}
                   textColor={theme.text}
-                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                  themeVariant={isDark ? 'dark' : 'light'}
                 />
               )}
             </View>
@@ -550,20 +592,22 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                     }
                   }}
                   textColor={theme.text}
-                  themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                  themeVariant={isDark ? 'dark' : 'light'}
+                  minuteInterval={5}
                 />
               )}
             </View>
 
             {/* End Time */}
-            <View style={styles.inputGroup}>
+            <View style={[styles.inputGroup, styles.endTimeGroup]}>
               <View style={styles.endTimeHeader}>
-                <Text style={[styles.label, { color: theme.text }]}>End Time</Text>
+                <Text style={[styles.label, { color: theme.text, flex: 1 }]}>End Time</Text>
                 <Switch
                   value={hasEndTime}
                   onValueChange={setHasEndTime}
                   trackColor={{ false: theme.border, true: theme.primary }}
                   thumbColor={hasEndTime ? theme.buttonText : theme.textSecondary}
+                  ios_backgroundColor={theme.border}
                 />
               </View>
               {hasEndTime && (
@@ -587,7 +631,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                         }
                       }}
                       textColor={theme.text}
-                      themeVariant={theme.mode === 'dark' ? 'dark' : 'light'}
+                      themeVariant={isDark ? 'dark' : 'light'}
+                      minuteInterval={5}
                     />
                   )}
                   {/* Midnight spanning indicator */}
@@ -686,6 +731,9 @@ const styles = StyleSheet.create({
   inputGroup: {
     marginBottom: 20,
   },
+  endTimeGroup: {
+    marginBottom: 30,
+  },
   label: {
     fontSize: 16,
     fontWeight: '500',
@@ -773,6 +821,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontStyle: 'italic',
   },
+  notifyDescription: {
+    fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
   createButton: {
     borderRadius: 8,
     paddingVertical: 16,
@@ -783,17 +836,64 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  imageButton: {
-    height: 120,
+  imageContainer: {
+    height: 200,
     borderRadius: 8,
     borderWidth: 1,
+    overflow: 'hidden',
+  },
+  imageButton: {
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  imagePreviewContainer: {
+    position: 'relative',
+    height: '100%',
+    flexDirection: 'row',
+  },
+  imagePreviewTouchable: {
+    flex: 1,
+    position: 'relative',
   },
   imagePreview: {
     width: '100%',
     height: '100%',
-    borderRadius: 8,
+  },
+  imageOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    opacity: 0,
+  },
+  imageOverlayContent: {
+    alignItems: 'center',
+  },
+  imageOverlayText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  deleteImageButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 5,
   },
   imagePlaceholder: {
     alignItems: 'center',
@@ -818,6 +918,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 10,
   },
   midnightIndicator: {
     flexDirection: 'row',

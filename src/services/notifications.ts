@@ -4,19 +4,119 @@ import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { supabase } from './supabase'
 
+// Process background notifications silently
+async function processBackgroundNotification(data: any) {
+  try {
+    // Use safe logging to avoid nativejs logger issues
+    if (__DEV__) {
+      console.log('Processing background notification:', data)
+    }
+    
+    // If there are queued notifications, process them
+    if (data.type === 'process_queue') {
+      await processQueuedNotifications()
+    }
+  } catch (error) {
+    if (__DEV__) {
+      console.error('Error processing background notification:', error)
+    }
+  }
+}
+
+// Process queued notifications from database
+async function processQueuedNotifications() {
+  try {
+    const { data: notifications, error } = await supabase
+      .from('notification_queue')
+      .select('*')
+      .eq('processed', false)
+      .lte('scheduled_for', new Date().toISOString())
+      .limit(10)
+
+    if (error) {
+      if (__DEV__) {
+        console.error('Error fetching notifications:', error)
+      }
+      return
+    }
+
+    if (!notifications || notifications.length === 0) {
+      return
+    }
+
+    if (__DEV__) {
+      console.log(`Processing ${notifications.length} notifications`)
+    }
+
+    // Process each notification
+    for (const notification of notifications) {
+      try {
+        // Send the notification
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: notification.title,
+            body: notification.body,
+            data: {
+              type: notification.type,
+              eventId: notification.event_id,
+              userId: notification.user_id,
+              ...notification.data
+            }
+          },
+          trigger: null // Send immediately
+        })
+
+        // Mark as processed
+        await supabase
+          .from('notification_queue')
+          .update({ processed: true })
+          .eq('id', notification.id)
+
+        if (__DEV__) {
+          console.log(`Sent notification ${notification.id} to user ${notification.user_id}`)
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.error(`Error processing notification ${notification.id}:`, error)
+        }
+      }
+    }
+  } catch (error) {
+    if (__DEV__) {
+      console.error('Error in processQueuedNotifications:', error)
+    }
+  }
+}
+
 // Configure notification behavior
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    // Handle silent push notifications (content-available: 1)
+    if (notification.request.content.data?.contentAvailable === 1) {
+      // Process background notification without showing alert
+      await processBackgroundNotification(notification.request.content.data)
+      return {
+        shouldShowAlert: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+      }
+    }
+    
+    // Handle regular notifications
+    return {
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }
+  },
 })
 
 export interface NotificationData {
-  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation'
+  type: 'event_reminder' | 'host_update' | 'friend_request' | 'event_edited_deleted' | 'event_invitation' | 'event_deleted' | 'going_status_updates'
   eventId?: string
   userId?: string
   title: string
@@ -37,17 +137,30 @@ class NotificationService {
 
   async initialize(): Promise<string | null> {
     try {
-      // Request permissions
-      const { status: existingStatus } = await Notifications.getPermissionsAsync()
-      let finalStatus = existingStatus
+      // Add a small delay to ensure all modules are loaded
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
+      // Request permissions with better error handling
+      let finalStatus = 'undetermined'
+      try {
+        const { status: existingStatus } = await Notifications.getPermissionsAsync()
+        finalStatus = existingStatus
 
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync()
-        finalStatus = status
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync()
+          finalStatus = status
+        }
+      } catch (permissionError) {
+        if (__DEV__) {
+          console.log('Error getting notification permissions:', permissionError)
+        }
+        return null
       }
 
       if (finalStatus !== 'granted') {
-        console.log('Notification permission denied')
+        if (__DEV__) {
+          console.log('Notification permission denied')
+        }
         return null
       }
 
@@ -59,12 +172,16 @@ class NotificationService {
             projectId: Constants.expoConfig?.extra?.eas?.projectId,
           })
           this.notificationToken = token.data
-          console.log('Push token:', this.notificationToken)
+          if (__DEV__) {
+            console.log('Push token obtained:', this.notificationToken)
+          }
           
           // Save token to Supabase
           await this.saveTokenToDatabase(this.notificationToken)
         } catch (error) {
-          console.log('Push notifications not available in Expo Go, using local notifications only')
+          if (__DEV__) {
+            console.log('Push notifications not available in Expo Go, using local notifications only')
+          }
           this.notificationToken = 'expo-go-local-only'
           
           // Save a placeholder token for Expo Go
@@ -73,11 +190,15 @@ class NotificationService {
         
         return this.notificationToken
       } else {
-        console.log('Must use physical device for notifications')
+        if (__DEV__) {
+          console.log('Must use physical device for notifications')
+        }
         return null
       }
     } catch (error) {
-      console.error('Error initializing notifications:', error)
+      if (__DEV__) {
+        console.error('Error initializing notifications:', error)
+      }
       return null
     }
   }
@@ -85,39 +206,44 @@ class NotificationService {
   private async saveTokenToDatabase(token: string): Promise<void> {
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      // First, try to update existing token
-      const { error: updateError } = await supabase
-        .from('notification_tokens')
-        .update({
-          token,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', user.id)
-        .eq('platform', Platform.OS)
-
-      if (updateError) {
-        // If update fails, try to insert new token
-        const { error: insertError } = await supabase
-          .from('notification_tokens')
-          .insert({
-            user_id: user.id,
-            token,
-            platform: Platform.OS,
-            updated_at: new Date().toISOString()
-          })
-
-        if (insertError) {
-          console.error('Error saving notification token:', insertError)
-        } else {
-          console.log('Notification token saved to database')
+      if (!user) {
+        if (__DEV__) {
+          console.log('No user found, cannot save notification token')
         }
+        return
+      }
+
+      if (__DEV__) {
+        console.log(`Saving notification token for user ${user.id}: ${token.substring(0, 20)}...`)
+      }
+
+      // Use upsert to handle both insert and update cases
+      const { error } = await supabase
+        .from('notification_tokens')
+        .upsert({
+          user_id: user.id,
+          token,
+          platform: Platform.OS,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'user_id,platform'
+        })
+
+      if (error) {
+        if (__DEV__) {
+          console.error('Error saving notification token:', error)
+        }
+        throw error
       } else {
-        console.log('Notification token updated in database')
+        if (__DEV__) {
+          console.log('Notification token saved/updated in database successfully')
+        }
       }
     } catch (error) {
-      console.error('Error saving token to database:', error)
+      if (__DEV__) {
+        console.error('Error saving token to database:', error)
+      }
+      throw error
     }
   }
 
@@ -128,70 +254,48 @@ class NotificationService {
       const now = new Date()
       
       if (reminderTime <= now) {
-        console.log('Event is too soon to schedule reminder')
+        if (__DEV__) {
+          console.log('Event is too soon to schedule reminder')
+        }
         return
       }
 
-      // Schedule reminder for all going attendees
-      await this.scheduleReminderForAttendees(eventId, eventTitle, reminderTime, 'going', 'Event Starting Soon!', 'starts in 15 minutes')
-
-      console.log(`Scheduled reminders for event ${eventId} at ${reminderTime}`)
-    } catch (error) {
-      console.error('Error scheduling event reminder:', error)
-    }
-  }
-
-  // Schedule reminder notifications for specific attendee types
-  private async scheduleReminderForAttendees(
-    eventId: string, 
-    eventTitle: string, 
-    reminderTime: Date, 
-    attendeeStatus: 'going',
-    title: string,
-    bodySuffix: string
-  ): Promise<void> {
-    try {
-      const now = new Date()
-      const delay = reminderTime.getTime() - now.getTime()
-      
-      if (delay <= 0) {
-        console.log('Event is too soon to schedule reminder')
-        return
-      }
-
-      // Get all attendees with the specified status
+      // Get all attendees with 'going' status
       const { data: attendees } = await supabase
         .from('event_attendees')
         .select('user_id')
         .eq('event_id', eventId)
-        .eq('status', attendeeStatus)
+        .eq('status', 'going')
 
       if (!attendees || attendees.length === 0) {
-        console.log(`No ${attendeeStatus} attendees to schedule reminders for`)
+        if (__DEV__) {
+          console.log('No going attendees to schedule reminders for')
+        }
         return
       }
 
-      // Schedule notification for each attendee
-      setTimeout(async () => {
-        for (const attendee of attendees) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: title,
-              body: `${eventTitle} ${bodySuffix}`,
-              data: { 
-                eventId, 
-                type: 'event_reminder',
-                userId: attendee.user_id
-              }
-            },
-            trigger: null // Send immediately when timeout fires
+      // Add reminder notifications to the queue for server-side processing
+      for (const attendee of attendees) {
+        await supabase
+          .from('notification_queue')
+          .insert({
+            user_id: attendee.user_id,
+            event_id: eventId,
+            type: 'event_reminder',
+            title: 'Event Starting Soon!',
+            body: `${eventTitle} starts in 15 minutes`,
+            scheduled_for: reminderTime.toISOString(),
+            data: { eventId, type: 'event_reminder' }
           })
-        }
-      }, delay)
+      }
 
-      console.log(`Scheduled ${attendeeStatus} reminders for ${attendees.length} attendees for event ${eventId}`)
+      if (__DEV__) {
+        console.log(`Scheduled reminders for event ${eventId} at ${reminderTime}`)
+      }
     } catch (error) {
-      console.error(`Error scheduling ${attendeeStatus} reminders:`, error)
+      if (__DEV__) {
+        console.error('Error scheduling event reminder:', error)
+      }
     }
   }
 
@@ -264,27 +368,34 @@ class NotificationService {
         return
       }
 
-      // Send notification to each attendee
+      // Add notifications to the queue for server-side processing
+      const actionText = action === 'edited' ? 'edited' : 'deleted'
+      const emoji = action === 'edited' ? '✏️' : '🗑️'
+      
       for (const attendee of attendees) {
-        const actionText = action === 'edited' ? 'edited' : 'deleted'
-        const emoji = action === 'edited' ? '✏️' : '🗑️'
-        
-        await this.sendNotification({
-          type: 'event_edited_deleted',
-          eventId: eventId,
-          userId: attendee.user_id,
-          title: `${emoji} Event ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
-          body: `"${eventTitle}" has been ${actionText} by the host`,
-          data: {
-            action: action,
-            eventTitle: eventTitle
-          }
-        })
+        await supabase
+          .from('notification_queue')
+          .insert({
+            user_id: attendee.user_id,
+            event_id: eventId,
+            type: 'event_edited_deleted',
+            title: `${emoji} Event ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
+            body: `"${eventTitle}" has been ${actionText} by the host`,
+            scheduled_for: new Date().toISOString(),
+            data: {
+              action: action,
+              eventTitle: eventTitle
+            }
+          })
       }
 
-      console.log(`Sent ${action} notifications to ${attendees.length} attendees for event ${eventId}`)
+      if (__DEV__) {
+        console.log(`Queued ${action} notifications for ${attendees.length} attendees for event ${eventId}`)
+      }
     } catch (error) {
-      console.error(`Error sending event ${action} notifications:`, error)
+      if (__DEV__) {
+        console.error(`Error queuing event ${action} notifications:`, error)
+      }
     }
   }
 
@@ -296,6 +407,46 @@ class NotificationService {
       await Notifications.cancelAllScheduledNotificationsAsync()
     } catch (error) {
       console.error('Error clearing notifications:', error)
+    }
+  }
+
+  // Refresh notification token (useful for token expiration)
+  async refreshToken(): Promise<string | null> {
+    try {
+      if (Device.isDevice) {
+        const token = await Notifications.getExpoPushTokenAsync({
+          projectId: Constants.expoConfig?.extra?.eas?.projectId,
+        })
+        this.notificationToken = token.data
+        await this.saveTokenToDatabase(this.notificationToken)
+        return this.notificationToken
+      }
+      return null
+    } catch (error) {
+      if (__DEV__) {
+        console.error('Error refreshing notification token:', error)
+      }
+      return null
+    }
+  }
+
+  // Remove token from database (for logout)
+  async removeToken(): Promise<void> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      await supabase
+        .from('notification_tokens')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('platform', Platform.OS)
+
+      this.notificationToken = null
+    } catch (error) {
+      if (__DEV__) {
+        console.error('Error removing notification token:', error)
+      }
     }
   }
 }

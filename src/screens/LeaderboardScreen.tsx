@@ -50,20 +50,42 @@ export default function LeaderboardScreen() {
       setCurrentUserId(user.id)
 
       // Fetch all leaderboard data
-      const { data, error } = await supabase
+      const { data: leaderboardData, error: leaderboardError } = await supabase
         .from('host_leaderboard')
         .select('*')
         .order('rank', { ascending: true })
 
-      if (error) throw error
+      if (leaderboardError) throw leaderboardError
 
-      const leaderboardData = data || []
+      // Get all host IDs from leaderboard
+      const hostIds = leaderboardData?.map(entry => entry.host_id) || []
       
-      // Show all users in traditional leaderboard format
-      setLeaderboard(leaderboardData)
+      // Fetch only OTP verified profiles
+      const { data: verifiedProfiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id')
+        .in('id', hostIds)
+        .eq('otp_verified', true)
+
+      if (profilesError) throw profilesError
+
+      // Filter leaderboard to only include OTP verified users
+      const verifiedHostIds = new Set(verifiedProfiles?.map(p => p.id) || [])
+      const filteredLeaderboard = leaderboardData?.filter(entry => 
+        verifiedHostIds.has(entry.host_id)
+      ) || []
       
-      // Find current user's rank
-      const userEntry = leaderboardData.find(entry => entry.host_id === user.id)
+      // Re-rank the filtered leaderboard to show consecutive numbers
+      const reRankedLeaderboard = filteredLeaderboard.map((entry, index) => ({
+        ...entry,
+        rank: index + 1 // Re-rank starting from 1
+      }))
+      
+      // Show only OTP verified users in leaderboard format
+      setLeaderboard(reRankedLeaderboard)
+      
+      // Find current user's rank (only if they're OTP verified)
+      const userEntry = reRankedLeaderboard.find(entry => entry.host_id === user.id)
       setCurrentUserRank(userEntry || null)
 
     } catch (error) {
@@ -128,7 +150,7 @@ export default function LeaderboardScreen() {
         <View style={styles.rankContainer}>
           {item.rank <= 3 ? (
             <LinearGradient
-              colors={rankBackground}
+              colors={rankBackground as [string, string]}
               style={styles.rankBadge}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
@@ -202,10 +224,7 @@ export default function LeaderboardScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <LinearGradient
-        colors={[theme.primary + '20', theme.primary + '05']}
-        style={styles.header}
-      >
+      <View style={[styles.header, { backgroundColor: theme.background }]}>
         <View style={styles.headerContent}>
           <View style={styles.titleContainer}>
             <Ionicons name="trophy" size={32} color={theme.primary} />
@@ -215,16 +234,8 @@ export default function LeaderboardScreen() {
             Ranked by total RSVPs received
           </Text>
         </View>
-      </LinearGradient>
+      </View>
 
-      {loading && (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.primary} />
-          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>
-            Loading leaderboard...
-          </Text>
-        </View>
-      )}
 
       <FlatList
         data={leaderboard}
