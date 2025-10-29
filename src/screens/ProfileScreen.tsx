@@ -100,6 +100,129 @@ export default function ProfileScreen() {
     navigation.navigate('Settings' as never)
   }
 
+  const handleTestNotification = async () => {
+    const logBorder = '----------------------------------------'
+    
+    console.log(logBorder)
+    console.log('🧪 TEST NOTIFICATION - Starting')
+    console.log(logBorder)
+    
+    try {
+      // Step 1: Check if user is authenticated
+      console.log(logBorder)
+      console.log('Step 1: Checking user authentication...')
+      console.log(logBorder)
+      
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      
+      if (authError || !user) {
+        console.log('❌ User not authenticated:', authError)
+        console.log(logBorder)
+        Alert.alert('Error', 'User not authenticated')
+        return
+      }
+      
+      console.log('✅ User authenticated:', user.id)
+      console.log('User email:', user.email)
+      console.log(logBorder)
+      
+      // Step 2: Check notification token (needed for Supabase to send notifications)
+      console.log(logBorder)
+      console.log('Step 2: Checking notification token...')
+      console.log(logBorder)
+      
+      const { data: tokenData, error: tokenError } = await supabase
+        .from('notification_tokens')
+        .select('token')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      
+      if (tokenError && tokenError.code !== 'PGRST116') {
+        console.log('⚠️ Error checking token:', tokenError.message)
+      }
+      
+      if (!tokenData || !tokenData.token) {
+        console.log('⚠️ No notification token found in database')
+        console.log('The notification will be queued, but may not be delivered')
+        console.log('Please ensure notifications are enabled in your settings')
+      } else {
+        console.log('✅ Notification token found:', `${tokenData.token.substring(0, 20)}...`)
+        console.log('Token will be used by Supabase Edge Function to deliver notification')
+      }
+      
+      console.log(logBorder)
+      
+      // Step 4: Send test notification through Supabase queue
+      console.log(logBorder)
+      console.log('Step 4: Queuing test notification in Supabase...')
+      console.log(logBorder)
+      
+      const testNotificationData = {
+        user_id: user.id,
+        event_id: null,
+        type: 'event_reminder',
+        title: '🧪 Test Notification',
+        body: `Hello ${profile?.full_name || 'User'}! This is a test notification from Hubble.`,
+        scheduled_for: new Date().toISOString(), // Schedule for immediate processing
+        data: {
+          test: true,
+          timestamp: new Date().toISOString()
+        }
+      }
+      
+      console.log('Notification queue payload:', JSON.stringify(testNotificationData, null, 2))
+      
+      const { data: queuedNotification, error: queueError } = await supabase
+        .from('notification_queue')
+        .insert(testNotificationData)
+        .select()
+        .single()
+      
+      if (queueError) {
+        console.log('❌ Failed to queue notification:', queueError)
+        throw queueError
+      }
+      
+      console.log('✅ Notification queued successfully!')
+      console.log('Queue ID:', queuedNotification.id)
+      console.log('Scheduled for:', queuedNotification.scheduled_for)
+      console.log('Processed:', queuedNotification.processed)
+      console.log(logBorder)
+      
+      console.log('ℹ️  Notification will be processed automatically by Edge Function')
+      console.log('The database trigger will wait 2 seconds, then process all queued notifications')
+      console.log('Your notification should arrive shortly!')
+      console.log(logBorder)
+      
+      // Step 5: Summary
+      console.log(logBorder)
+      console.log('Step 5: Summary')
+      console.log(logBorder)
+      console.log('✅ User:', user.email)
+      console.log('✅ Notification queued with ID:', queuedNotification.id)
+      console.log('✅ Token status:', tokenData && tokenData.token ? 'Available' : 'Not found')
+      console.log('✅ Notification scheduled for:', queuedNotification.scheduled_for)
+      console.log(logBorder)
+      console.log('🎉 TEST NOTIFICATION - Completed Successfully')
+      console.log('The notification will be processed and delivered through Supabase')
+      console.log(logBorder)
+      
+      Alert.alert(
+        'Success!',
+        'Test notification queued in Supabase! It will be processed and delivered shortly. Check your notifications panel in a few moments.',
+        [{ text: 'OK' }]
+      )
+    } catch (error: any) {
+      console.log(logBorder)
+      console.log('❌ TEST NOTIFICATION - Failed')
+      console.log('Error:', error.message)
+      console.log('Error details:', error)
+      console.log(logBorder)
+      
+      Alert.alert('Error', `Failed to send test notification: ${error.message}`)
+    }
+  }
+
   const styles = createStyles(theme)
 
   if (loading) {
@@ -203,6 +326,10 @@ export default function ProfileScreen() {
 
         <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
           <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.testNotificationButton, { backgroundColor: theme.primary }]} onPress={handleTestNotification}>
+          <Text style={[styles.testNotificationText, { color: theme.buttonText }]}>Send Test Notification</Text>
         </TouchableOpacity>
 
         <View style={styles.footer}>
@@ -369,6 +496,25 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   signOutText: {
     color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  testNotificationButton: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: theme.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  testNotificationText: {
     fontSize: 16,
     fontWeight: '600',
   },

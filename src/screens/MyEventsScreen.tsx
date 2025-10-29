@@ -16,7 +16,7 @@ import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
-import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
+import { formatEventTimeDisplay, isMidnightSpanningEvent, isEventEnded, isEventCurrentlyHappening, isEventInFuture } from '../utils/eventTimeUtils'
 
 export default function MyEventsScreen() {
   const { theme } = useTheme()
@@ -138,8 +138,47 @@ export default function MyEventsScreen() {
     return `${displayHour}:${minutes} ${ampm}`
   }
 
+  // Categorize events into past, current, and coming
+  const categorizeEvents = () => {
+    const past: EventWithAttendees[] = []
+    const current: EventWithAttendees[] = []
+    const coming: EventWithAttendees[] = []
+
+    events.forEach(event => {
+      if (isEventCurrentlyHappening(event.event_date, event.start_time, event.end_time)) {
+        current.push(event)
+      } else if (isEventEnded(event.event_date, event.start_time, event.end_time)) {
+        past.push(event)
+      } else if (isEventInFuture(event.event_date, event.start_time)) {
+        coming.push(event)
+      }
+    })
+
+    // Sort each category by date (most recent first for past, earliest first for coming)
+    past.sort((a, b) => {
+      const dateA = new Date(a.event_date + ' ' + a.start_time)
+      const dateB = new Date(b.event_date + ' ' + b.start_time)
+      return dateB.getTime() - dateA.getTime()
+    })
+
+    current.sort((a, b) => {
+      const dateA = new Date(a.event_date + ' ' + a.start_time)
+      const dateB = new Date(b.event_date + ' ' + b.start_time)
+      return dateA.getTime() - dateB.getTime()
+    })
+
+    coming.sort((a, b) => {
+      const dateA = new Date(a.event_date + ' ' + a.start_time)
+      const dateB = new Date(b.event_date + ' ' + b.start_time)
+      return dateA.getTime() - dateB.getTime()
+    })
+
+    return { past, current, coming }
+  }
+
   const renderEvent = ({ item }: { item: EventWithAttendees }) => {
     const attendeeCount = (item as any).attendee_count || 0
+    const isCurrent = isEventCurrentlyHappening(item.event_date, item.start_time, item.end_time)
     
     return (
       <TouchableOpacity
@@ -152,7 +191,15 @@ export default function MyEventsScreen() {
         
         <View style={styles.eventContent}>
           <View style={styles.eventHeader}>
-            <Text style={[styles.eventTitle, { color: theme.text }]}>{item.title}</Text>
+            <View style={styles.eventTitleContainer}>
+              <Text style={[styles.eventTitle, { color: theme.text }]}>{item.title}</Text>
+              {isCurrent && (
+                <View style={[styles.currentBadge, { backgroundColor: theme.success + '20', borderColor: theme.success }]}>
+                  <Ionicons name="pulse" size={10} color={theme.success} />
+                  <Text style={[styles.currentBadgeText, { color: theme.success }]}>Current</Text>
+                </View>
+              )}
+            </View>
             <View style={styles.eventActions}>
               <TouchableOpacity
                 style={[styles.actionButton, { backgroundColor: theme.surface }]}
@@ -213,12 +260,63 @@ export default function MyEventsScreen() {
     )
   }
 
+  const { past, current, coming } = categorizeEvents()
+  const hasAnyEvents = past.length > 0 || current.length > 0 || coming.length > 0
+
+  const renderSectionHeader = (title: string, count: number) => {
+    if (count === 0) return null
+    
+    return (
+      <View style={[styles.sectionHeader, { backgroundColor: theme.background }]}>
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>{title}</Text>
+        <View style={[styles.badge, { backgroundColor: theme.primary + '20' }]}>
+          <Text style={[styles.badgeText, { color: theme.primary }]}>{count}</Text>
+        </View>
+      </View>
+    )
+  }
+
+  // Combined list for FlatList with sections
+  const renderSectionedList = () => {
+    const sections: Array<{ type: 'header' | 'event', data: any }> = []
+    
+    if (current.length > 0) {
+      sections.push({ type: 'header', data: { title: 'Current', count: current.length } })
+      current.forEach(event => sections.push({ type: 'event', data: event }))
+    }
+    
+    if (coming.length > 0) {
+      sections.push({ type: 'header', data: { title: 'Coming', count: coming.length } })
+      coming.forEach(event => sections.push({ type: 'event', data: event }))
+    }
+    
+    if (past.length > 0) {
+      sections.push({ type: 'header', data: { title: 'Past', count: past.length } })
+      past.forEach(event => sections.push({ type: 'event', data: event }))
+    }
+    
+    return sections
+  }
+
+  const renderItem = ({ item }: { item: { type: 'header' | 'event', data: any } }) => {
+    if (item.type === 'header') {
+      return renderSectionHeader(item.data.title, item.data.count)
+    } else {
+      return renderEvent({ item: item.data })
+    }
+  }
+
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <FlatList
-        data={events}
-        keyExtractor={(item) => item.id}
-        renderItem={renderEvent}
+        data={renderSectionedList()}
+        keyExtractor={(item, index) => {
+          if (item.type === 'header') {
+            return `header-${item.data.title}-${index}`
+          }
+          return `event-${item.data.id}-${index}`
+        }}
+        renderItem={renderItem}
         contentContainerStyle={styles.eventsList}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -230,13 +328,15 @@ export default function MyEventsScreen() {
           />
         }
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events Yet</Text>
-            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-              You haven't created any events yet. Tap the + button to create your first event!
-            </Text>
-          </View>
+          hasAnyEvents ? null : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events Yet</Text>
+              <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+                You haven't created any events yet. Tap the + button to create your first event!
+              </Text>
+            </View>
+          )
         }
       />
     </View>
@@ -346,5 +446,48 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginLeft: 3,
     fontWeight: '500',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    minWidth: 30,
+    alignItems: 'center',
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  eventTitleContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginRight: 8,
+  },
+  currentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    gap: 4,
+  },
+  currentBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
   },
 })

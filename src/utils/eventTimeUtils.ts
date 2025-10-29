@@ -66,8 +66,14 @@ export function getEventStartDate(eventDate: string, startTime: string): Date {
 export function isEventCurrentlyHappening(eventDate: string, startTime: string, endTime?: string): boolean {
   const now = new Date()
   const startDate = getEventStartDate(eventDate, startTime)
-  const endDate = getEventEndDate(eventDate, startTime, endTime)
   
+  // Special handling for events without end time: consider current for 12 hours
+  if (!endTime) {
+    const twelveHoursLater = new Date(startDate.getTime() + 12 * 60 * 60 * 1000)
+    return now >= startDate && now <= twelveHoursLater
+  }
+  
+  const endDate = getEventEndDate(eventDate, startTime, endTime)
   return now >= startDate && now <= endDate
 }
 
@@ -80,8 +86,15 @@ export function isEventCurrentlyHappening(eventDate: string, startTime: string, 
  */
 export function isEventEnded(eventDate: string, startTime: string, endTime?: string): boolean {
   const now = new Date()
-  const endDate = getEventEndDate(eventDate, startTime, endTime)
   
+  // Special handling for events without end time: mark as ended after 12 hours
+  if (!endTime) {
+    const startDate = getEventStartDate(eventDate, startTime)
+    const twelveHoursLater = new Date(startDate.getTime() + 12 * 60 * 60 * 1000)
+    return now > twelveHoursLater
+  }
+  
+  const endDate = getEventEndDate(eventDate, startTime, endTime)
   return now > endDate
 }
 

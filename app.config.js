@@ -26,7 +26,6 @@ export default ({ config }) => {
     ios: {
       supportsTablet: true,
       deploymentTarget: "15.1",
-      buildNumber: "2",
       infoPlist: {
         UIBackgroundModes: ["remote-notification"],
         ITSAppUsesNonExemptEncryption: false,
@@ -76,6 +75,7 @@ export default ({ config }) => {
     },
     updates: {
       url: "https://u.expo.dev/3a800a94-2beb-4074-b4bc-dbd3aca9faf5",
+      fallbackToCacheTimeout: 0,
     },
   };
 };

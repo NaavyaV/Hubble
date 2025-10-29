@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Alert, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
+import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import ProfileModal from '../components/ProfileModal'
 import ImageWithFallback from '../components/ImageWithFallback'
@@ -38,6 +39,8 @@ export default function FriendsScreen() {
   const [activeTab, setActiveTab] = useState<'search' | 'pending' | 'friends'>('search')
   const [selectedUser, setSelectedUser] = useState<ProfileRow | null>(null)
   const [recentlyAccepted, setRecentlyAccepted] = useState<Set<string>>(new Set())
+  const isInitialMount = React.useRef(true)
+  const hasInitialized = React.useRef(false)
 
   useEffect(() => {
     // Add a timeout to prevent infinite loading
@@ -52,6 +55,54 @@ export default function FriendsScreen() {
 
     return () => clearTimeout(timeoutId)
   }, [])
+
+  // Refresh data when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      const refreshData = async () => {
+        if (!me || !hasInitialized.current) return
+        
+        console.log('FriendsScreen: Refreshing data on focus...')
+        try {
+          await Promise.all([
+            fetchAllUsers(),
+            fetchFriendships(me),
+          ])
+          console.log('FriendsScreen: Data refreshed successfully')
+        } catch (error) {
+          console.error('FriendsScreen: Error refreshing data:', error)
+        }
+      }
+      
+      refreshData()
+    }, [me])
+  )
+
+  // Refresh data when switching tabs
+  useEffect(() => {
+    // Skip refresh on initial mount
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
+
+    const refreshData = async () => {
+      if (!me || !hasInitialized.current) return
+      
+      console.log(`FriendsScreen: Tab switched to ${activeTab}, refreshing data...`)
+      try {
+        await Promise.all([
+          fetchAllUsers(),
+          fetchFriendships(me),
+        ])
+        console.log(`FriendsScreen: Data refreshed for ${activeTab} tab`)
+      } catch (error) {
+        console.error('FriendsScreen: Error refreshing data on tab switch:', error)
+      }
+    }
+    
+    refreshData()
+  }, [activeTab, me])
 
   const init = async () => {
     try {
@@ -73,6 +124,7 @@ export default function FriendsScreen() {
       ])
       
       console.log('FriendsScreen initialization complete')
+      hasInitialized.current = true
     } catch (error) {
       console.error('Error initializing FriendsScreen:', error)
     } finally {

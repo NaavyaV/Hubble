@@ -6,6 +6,8 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { View, Text, TouchableOpacity } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as Device from 'expo-device'
+import { Platform } from 'react-native'
+import * as Updates from 'expo-updates'
 import { supabase } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
@@ -76,11 +78,74 @@ function MainTabNavigator() {
         // Add a small delay to ensure the app is fully loaded
         await new Promise(resolve => setTimeout(resolve, 500))
         
-        const token = await notificationService.initialize()
-        if (token) {
+        // Get current user
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
           if (__DEV__) {
-            console.log('Notifications initialized successfully')
+            console.log('No user found, skipping notification initialization')
           }
+          return
+        }
+
+        // Step 1: Check user's notification preferences
+        const { data: preferences, error: prefError } = await supabase
+          .from('notification_preferences')
+          .select('push_notifications')
+          .eq('user_id', user.id)
+          .single()
+
+        if (prefError && prefError.code !== 'PGRST116') {
+          if (__DEV__) {
+            console.error('Error fetching notification preferences:', prefError)
+          }
+          return
+        }
+
+        // If no preferences exist or push_notifications is false, skip initialization
+        if (!preferences || !preferences.push_notifications) {
+          if (__DEV__) {
+            console.log('Push notifications disabled in preferences')
+          }
+          return
+        }
+
+        // Step 2: Check if user already has a token
+        const { data: existingToken, error: tokenError } = await supabase
+          .from('notification_tokens')
+          .select('token')
+          .eq('user_id', user.id)
+          .eq('platform', Platform.OS)
+          .maybeSingle()
+
+        if (tokenError) {
+          if (__DEV__) {
+            console.error('Error checking existing token:', tokenError)
+          }
+          return
+        }
+
+        // If user has preferences enabled but no token, initialize notifications
+        if (!existingToken || !existingToken.token) {
+          if (__DEV__) {
+            console.log('Notification preferences enabled but no token found, initializing...')
+          }
+          
+          const token = await notificationService.initialize()
+          if (token) {
+            if (__DEV__) {
+              console.log('Notifications initialized successfully and token saved')
+            }
+          } else {
+            if (__DEV__) {
+              console.log('Failed to initialize notifications (permission may have been denied)')
+            }
+          }
+        } else {
+          if (__DEV__) {
+            console.log('Notification token already exists, skipping initialization')
+          }
+          // Update the service with existing token
+          notificationService.setToken(existingToken.token)
         }
       } catch (error) {
         if (__DEV__) {
@@ -470,6 +535,41 @@ function AppContent() {
     )
   }
 export default function App() {
+  useEffect(() => {
+    async function checkForUpdates() {
+      try {
+        // Only check for updates in production builds with Updates enabled
+        if (__DEV__) {
+          return
+        }
+
+        // Check if Updates is available and enabled
+        if (!Updates.isEnabled || !Updates.checkForUpdateAsync) {
+          return
+        }
+
+        const update = await Updates.checkForUpdateAsync()
+        if (update.isAvailable) {
+          console.log('Update available, fetching...')
+          await Updates.fetchUpdateAsync()
+          console.log('Update fetched, reloading...')
+          // reload to apply update immediately
+          await Updates.reloadAsync()
+        }
+      } catch (e) {
+        console.log('EAS update check failed:', e)
+        // Don't let update check errors break the app
+      }
+    }
+
+    // Check for updates after a short delay to ensure app is registered
+    const timer = setTimeout(() => {
+      checkForUpdates()
+    }, 1000)
+
+    return () => clearTimeout(timer)
+  }, [])
+
   return (
     <ThemeProvider>
       <AppContent />

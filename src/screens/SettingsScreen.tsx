@@ -1,19 +1,25 @@
-import React from 'react'
+import React, { useState } from 'react'
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  Alert,
+  ActivityIndicator,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
+import { supabase } from '../services/supabase'
+import notificationService from '../services/notifications'
+import { isEventEnded } from '../utils/eventTimeUtils'
 
 export default function SettingsScreen() {
   const navigation = useNavigation()
   const { theme, themeMode, setThemeMode, isDark } = useTheme()
+  const [deleting, setDeleting] = useState(false)
 
   const themeOptions = [
     { value: 'light' as const, label: 'Light', icon: 'sunny' },
@@ -27,6 +33,207 @@ export default function SettingsScreen() {
 
   const handlePhoneVisibilityPress = () => {
     navigation.navigate('PhoneVisibility' as never)
+  }
+
+  const handleDeleteProfile = () => {
+    // First warning
+    Alert.alert(
+      'Delete Profile',
+      'Are you sure you want to delete your profile? This will:\n\n• Delete all your friendships\n• Delete all your upcoming events\n• Remove you from all events\n\nThis action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            // Second warning
+            Alert.alert(
+              'Final Confirmation',
+              'This is your last chance to cancel. Are you absolutely sure you want to permanently delete your profile?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Yes, Delete Forever',
+                  style: 'destructive',
+                  onPress: () => deleteProfile(),
+                },
+              ]
+            )
+          },
+        },
+      ]
+    )
+  }
+
+  const deleteProfile = async () => {
+    setDeleting(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        Alert.alert('Error', 'User not found')
+        return
+      }
+
+      const userId = user.id
+
+      // Step 1: Get all upcoming events by this user
+      const { data: allEvents, error: eventsError } = await supabase
+        .from('events')
+        .select('id, event_date, start_time, end_time')
+        .eq('host_id', userId)
+
+      if (eventsError) {
+        console.error('Error fetching events:', eventsError)
+      }
+
+      // Filter to get only upcoming events
+      const upcomingEventIds: string[] = []
+      if (allEvents) {
+        for (const event of allEvents) {
+          const isPast = isEventEnded(event.event_date, event.start_time, event.end_time)
+          if (!isPast) {
+            upcomingEventIds.push(event.id)
+          }
+        }
+      }
+
+      console.log(`Found ${upcomingEventIds.length} upcoming events to delete`)
+
+      // Step 2: Delete event attendees for upcoming events (cascading should handle this, but be explicit)
+      if (upcomingEventIds.length > 0) {
+        const { error: attendeesError } = await supabase
+          .from('event_attendees')
+          .delete()
+          .in('event_id', upcomingEventIds)
+
+        if (attendeesError) {
+          console.error('Error deleting event attendees:', attendeesError)
+        }
+
+        // Delete event invitations for upcoming events
+        const { error: invitationsError } = await supabase
+          .from('event_invitations')
+          .delete()
+          .in('event_id', upcomingEventIds)
+
+        if (invitationsError) {
+          console.error('Error deleting event invitations:', invitationsError)
+        }
+
+        // Delete event photos for upcoming events
+        const { error: photosError } = await supabase
+          .from('event_photos')
+          .delete()
+          .in('event_id', upcomingEventIds)
+
+        if (photosError) {
+          console.error('Error deleting event photos:', photosError)
+        }
+
+        // Delete notification queue for upcoming events
+        const { error: queueError } = await supabase
+          .from('notification_queue')
+          .delete()
+          .in('event_id', upcomingEventIds)
+
+        if (queueError) {
+          console.error('Error deleting notification queue:', queueError)
+        }
+
+        // Delete upcoming events
+        const { error: deleteEventsError } = await supabase
+          .from('events')
+          .delete()
+          .in('id', upcomingEventIds)
+
+        if (deleteEventsError) {
+          console.error('Error deleting events:', deleteEventsError)
+          throw deleteEventsError
+        }
+      }
+
+      // Step 3: Delete all friendships (both as user and as friend)
+      const { error: friendshipsError } = await supabase
+        .from('friendships')
+        .delete()
+        .or(`user_id.eq.${userId},friend_id.eq.${userId}`)
+
+      if (friendshipsError) {
+        console.error('Error deleting friendships:', friendshipsError)
+        throw friendshipsError
+      }
+
+      // Step 4: Delete event attendees where user is an attendee (remove user from all events)
+      const { error: userAttendeesError } = await supabase
+        .from('event_attendees')
+        .delete()
+        .eq('user_id', userId)
+
+      if (userAttendeesError) {
+        console.error('Error deleting user attendees:', userAttendeesError)
+      }
+
+      // Step 5: Delete event invitations for this user
+      const { error: userInvitationsError } = await supabase
+        .from('event_invitations')
+        .delete()
+        .or(`user_id.eq.${userId},invited_by.eq.${userId}`)
+
+      if (userInvitationsError) {
+        console.error('Error deleting user invitations:', userInvitationsError)
+      }
+
+      // Step 6: Delete notification data
+      // Delete notification preferences
+      await supabase
+        .from('notification_preferences')
+        .delete()
+        .eq('user_id', userId)
+
+      // Delete notification tokens
+      await notificationService.removeToken()
+
+      // Delete notification queue entries
+      await supabase
+        .from('notification_queue')
+        .delete()
+        .eq('user_id', userId)
+
+      // Delete notification logs
+      await supabase
+        .from('notification_log')
+        .delete()
+        .eq('user_id', userId)
+
+      // Step 7: Delete the profile
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', userId)
+
+      if (profileError) {
+        console.error('Error deleting profile:', profileError)
+        throw profileError
+      }
+
+      // Step 8: Sign out and navigate to auth
+      await supabase.auth.signOut()
+
+      Alert.alert(
+        'Profile Deleted',
+        'Your profile has been successfully deleted. You have been signed out.',
+        [{ text: 'OK' }]
+      )
+    } catch (error: any) {
+      console.error('Error deleting profile:', error)
+      Alert.alert(
+        'Error',
+        `Failed to delete profile: ${error.message}`,
+        [{ text: 'OK' }]
+      )
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const styles = createStyles(theme)
@@ -150,6 +357,30 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.textTertiary} />
           </TouchableOpacity>
+        </View>
+
+        {/* Delete Profile Section */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={[styles.deleteButton, { backgroundColor: theme.error }]}
+            onPress={handleDeleteProfile}
+            disabled={deleting}
+          >
+            {deleting ? (
+              <>
+                <ActivityIndicator color="white" size="small" style={{ marginRight: 8 }} />
+                <Text style={styles.deleteButtonText}>Deleting Profile...</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="trash-outline" size={20} color="white" style={{ marginRight: 8 }} />
+                <Text style={styles.deleteButtonText}>Delete Profile</Text>
+              </>
+            )}
+          </TouchableOpacity>
+          <Text style={[styles.deleteWarning, { color: theme.textSecondary }]}>
+            This will permanently delete your profile and all associated data. This action cannot be undone.
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -288,5 +519,25 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     marginLeft: 12,
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  deleteButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteWarning: {
+    fontSize: 12,
+    textAlign: 'center',
+    paddingHorizontal: 20,
+    lineHeight: 18,
   },
 })

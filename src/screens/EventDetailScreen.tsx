@@ -66,6 +66,7 @@ export default function EventDetailScreen() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
   const [showHostPhone, setShowHostPhone] = useState(false)
+  const [hostPhoneVisibilityLoading, setHostPhoneVisibilityLoading] = useState(true)
   const [pendingNotification, setPendingNotification] = useState<{
     timer: NodeJS.Timeout | null
     lastState: 'going' | null
@@ -229,14 +230,20 @@ export default function EventDetailScreen() {
   }
 
   const checkHostPhoneVisibility = async () => {
-    if (!hostProfile || !currentUserId) return
+    if (!hostProfile || !currentUserId) {
+      setHostPhoneVisibilityLoading(false)
+      return
+    }
     
+    setHostPhoneVisibilityLoading(true)
     try {
       const shouldShow = await shouldShowPhoneNumber(hostProfile.id, currentUserId, true) // true because host is hosting this event
       setShowHostPhone(shouldShow)
     } catch (error) {
       console.error('Error checking host phone visibility:', error)
       setShowHostPhone(false)
+    } finally {
+      setHostPhoneVisibilityLoading(false)
     }
   }
 
@@ -648,7 +655,21 @@ export default function EventDetailScreen() {
                       </Text>
                     </TouchableOpacity>
                   </View>
-                  {hostProfile?.phone_number && showHostPhone && (
+                  {/* Show loading placeholder while checking phone visibility to prevent flash */}
+                  {hostProfile?.phone_number && hostPhoneVisibilityLoading && (
+                    <View style={styles.contactHostSection}>
+                      <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
+                        Or contact the host directly:
+                      </Text>
+                      <View style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                        <Ionicons name="call" size={16} color={theme.textTertiary} />
+                        <View style={[styles.loadingPlaceholder, { backgroundColor: theme.divider }]} />
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Only show phone number after loading completes and permission is granted */}
+                  {hostProfile?.phone_number && !hostPhoneVisibilityLoading && showHostPhone && (
                     <View style={styles.contactHostSection}>
                       <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
                         Or contact the host directly:
@@ -966,6 +987,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#3498db',
     fontWeight: '500',
+    marginLeft: 8,
+  },
+  loadingPlaceholder: {
+    height: 16,
+    width: 120,
+    borderRadius: 4,
     marginLeft: 8,
   },
   noContactText: {

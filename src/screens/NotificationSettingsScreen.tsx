@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
+import notificationService from '../services/notifications'
 
 interface NotificationSettings {
   pushNotifications: boolean
@@ -140,6 +141,10 @@ export default function NotificationSettingsScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
+      // Check if push notifications are being enabled and if user previously had them disabled
+      const wasPushEnabledBefore = originalSettings.pushNotifications
+      const isPushEnabledNow = settings.pushNotifications
+
       // Save notification preferences to database
       const { error } = await supabase
         .from('notification_preferences')
@@ -158,6 +163,31 @@ export default function NotificationSettingsScreen() {
         console.error('Error saving notification settings:', error)
         Alert.alert('Error', 'Failed to save notification settings')
         return
+      }
+      
+      // If push notifications are being enabled now (weren't before), check for token
+      if (isPushEnabledNow && !wasPushEnabledBefore) {
+        try {
+          // Check if user has a token
+          const { data: existingToken } = await supabase
+            .from('notification_tokens')
+            .select('token')
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+          // If no token exists, initialize notifications
+          if (!existingToken || !existingToken.token) {
+            const token = await notificationService.initialize()
+            if (token) {
+              console.log('Notification token initialized after enabling push notifications')
+            } else {
+              console.log('Failed to initialize notification token (permission may have been denied)')
+            }
+          }
+        } catch (tokenError) {
+          console.error('Error initializing notification token:', tokenError)
+          // Don't fail the save if token initialization fails
+        }
       }
       
       // Update original settings to match current settings

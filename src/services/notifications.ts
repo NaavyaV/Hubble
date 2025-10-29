@@ -4,6 +4,53 @@ import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { supabase } from './supabase'
 
+// Helper function to trigger the Edge Function to process notifications
+async function triggerProcessNotifications(): Promise<void> {
+  try {
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL
+    if (!supabaseUrl) {
+      if (__DEV__) {
+        console.log('No Supabase URL configured, skipping Edge Function trigger')
+      }
+      return
+    }
+
+    const { data: { session } } = await supabase.auth.getSession()
+    
+    const edgeFunctionUrl = `${supabaseUrl}/functions/v1/process-notifications`
+    
+    if (__DEV__) {
+      console.log('Triggering Edge Function to process notifications:', edgeFunctionUrl)
+    }
+    
+    const response = await fetch(edgeFunctionUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session?.access_token || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    })
+
+    if (response.ok) {
+      const result = await response.json()
+      if (__DEV__) {
+        console.log('Edge Function triggered successfully:', result)
+      }
+    } else {
+      const errorText = await response.text()
+      if (__DEV__) {
+        console.log('Edge Function trigger failed:', errorText)
+      }
+    }
+  } catch (error) {
+    if (__DEV__) {
+      console.error('Error triggering Edge Function:', error)
+    }
+    // Don't throw - notification is still queued and will be processed eventually
+  }
+}
+
 // Process background notifications silently
 async function processBackgroundNotification(data: any) {
   try {
@@ -274,24 +321,31 @@ class NotificationService {
         return
       }
 
-      // Add reminder notifications to the queue for server-side processing
-      for (const attendee of attendees) {
-        await supabase
-          .from('notification_queue')
-          .insert({
-            user_id: attendee.user_id,
-            event_id: eventId,
-            type: 'event_reminder',
-            title: 'Event Starting Soon!',
-            body: `${eventTitle} starts in 15 minutes`,
-            scheduled_for: reminderTime.toISOString(),
-            data: { eventId, type: 'event_reminder' }
-          })
+      // Batch insert all reminder notifications
+      const notificationData = attendees.map(attendee => ({
+        user_id: attendee.user_id,
+        event_id: eventId,
+        type: 'event_reminder',
+        title: 'Event Starting Soon!',
+        body: `${eventTitle} starts in 15 minutes`,
+        scheduled_for: reminderTime.toISOString(),
+        data: { eventId, type: 'event_reminder' }
+      }))
+
+      const { error: insertError } = await supabase
+        .from('notification_queue')
+        .insert(notificationData)
+
+      if (insertError) {
+        throw insertError
       }
 
       if (__DEV__) {
         console.log(`Scheduled reminders for event ${eventId} at ${reminderTime}`)
       }
+
+      // Note: Edge Function will be triggered automatically by the database trigger
+      // after a 2-second debounce period to allow batch inserts
     } catch (error) {
       if (__DEV__) {
         console.error('Error scheduling event reminder:', error)
@@ -368,30 +422,37 @@ class NotificationService {
         return
       }
 
-      // Add notifications to the queue for server-side processing
+      // Batch insert all notifications
       const actionText = action === 'edited' ? 'edited' : 'deleted'
       const emoji = action === 'edited' ? '✏️' : '🗑️'
       
-      for (const attendee of attendees) {
-        await supabase
-          .from('notification_queue')
-          .insert({
-            user_id: attendee.user_id,
-            event_id: eventId,
-            type: 'event_edited_deleted',
-            title: `${emoji} Event ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
-            body: `"${eventTitle}" has been ${actionText} by the host`,
-            scheduled_for: new Date().toISOString(),
-            data: {
-              action: action,
-              eventTitle: eventTitle
-            }
-          })
+      const notificationData = attendees.map(attendee => ({
+        user_id: attendee.user_id,
+        event_id: eventId,
+        type: 'event_edited_deleted',
+        title: `${emoji} Event ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
+        body: `"${eventTitle}" has been ${actionText} by the host`,
+        scheduled_for: new Date().toISOString(),
+        data: {
+          action: action,
+          eventTitle: eventTitle
+        }
+      }))
+
+      const { error: insertError } = await supabase
+        .from('notification_queue')
+        .insert(notificationData)
+
+      if (insertError) {
+        throw insertError
       }
 
       if (__DEV__) {
         console.log(`Queued ${action} notifications for ${attendees.length} attendees for event ${eventId}`)
       }
+
+      // Note: Edge Function will be triggered automatically by the database trigger
+      // after a 2-second debounce period to allow batch inserts
     } catch (error) {
       if (__DEV__) {
         console.error(`Error queuing event ${action} notifications:`, error)
@@ -448,6 +509,11 @@ class NotificationService {
         console.error('Error removing notification token:', error)
       }
     }
+  }
+
+  // Set token directly (for loading existing tokens)
+  setToken(token: string): void {
+    this.notificationToken = token
   }
 }
 

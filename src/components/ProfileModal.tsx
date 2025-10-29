@@ -40,25 +40,40 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const [friendshipStatus, setFriendshipStatus] = useState<'none' | 'pending' | 'accepted' | 'blocked'>('none')
   const [loading, setLoading] = useState(false)
   const [showPhoneNumber, setShowPhoneNumber] = useState(false)
+  const [phoneVisibilityLoading, setPhoneVisibilityLoading] = useState(true)
 
   useEffect(() => {
     if (user && isVisible) {
       checkFriendshipStatus()
       checkPhoneVisibility()
+    } else if (!isVisible) {
+      // Reset states when modal closes
+      setShowPhoneNumber(false)
+      setPhoneVisibilityLoading(true)
     }
   }, [user, isVisible])
 
   const checkPhoneVisibility = async () => {
-    if (!user) return
+    if (!user) {
+      setPhoneVisibilityLoading(false)
+      return
+    }
+    
+    setPhoneVisibilityLoading(true)
     try {
       const { data: { user: me } } = await supabase.auth.getUser()
-      if (!me) return
+      if (!me) {
+        setPhoneVisibilityLoading(false)
+        return
+      }
 
       const shouldShow = await shouldShowPhoneNumber(user.id, me.id, isHostingEvent)
       setShowPhoneNumber(shouldShow)
     } catch (error) {
       console.error('Error checking phone visibility:', error)
       setShowPhoneNumber(false)
+    } finally {
+      setPhoneVisibilityLoading(false)
     }
   }
 
@@ -215,8 +230,20 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
               </View>
             )}
 
-            {user.phone_number && showPhoneNumber && (
-              <View style={[styles.bioSection, { marginTop: 12, backgroundColor: theme.surface }] }>
+            {/* Show loading placeholder while checking phone visibility to prevent flash */}
+            {user.phone_number && phoneVisibilityLoading && (
+              <View style={[styles.bioSection, { marginTop: 12, backgroundColor: theme.surface }]}>
+                <Text style={[styles.bioLabel, { color: theme.text }]}>Contact</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="call-outline" size={16} color={theme.textTertiary} />
+                  <View style={[styles.loadingPlaceholder, { backgroundColor: theme.divider }]} />
+                </View>
+              </View>
+            )}
+
+            {/* Only show phone number after loading completes and permission is granted */}
+            {user.phone_number && !phoneVisibilityLoading && showPhoneNumber && (
+              <View style={[styles.bioSection, { marginTop: 12, backgroundColor: theme.surface }]}>
                 <Text style={[styles.bioLabel, { color: theme.text }]}>Contact</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Ionicons name="call-outline" size={16} color={theme.text} />
@@ -369,5 +396,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  loadingPlaceholder: {
+    height: 14,
+    width: 120,
+    borderRadius: 4,
   },
 })

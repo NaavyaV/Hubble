@@ -7,17 +7,26 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "APP_ENV": "development"
+      },
       "ios": {
         "resourceClass": "m-medium"
       }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "APP_ENV": "development"
+      },
       "ios": {
         "resourceClass": "m-medium"
       }
     },
     "production": {
+      "env": {
+        "APP_ENV": "production"
+      },
       "ios": {
         "resourceClass": "m-medium",
         "autoIncrement": true
