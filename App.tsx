@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as Device from 'expo-device'
 import { Platform } from 'react-native'
 import * as Updates from 'expo-updates'
+import * as Notifications from 'expo-notifications'
 import { supabase } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
@@ -239,6 +240,7 @@ function AppContent() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const { theme } = useTheme()
+  const navigationRef = useRef<any>(null)
 
   useEffect(() => {
     // Check if user is already logged in
@@ -291,6 +293,61 @@ function AppContent() {
     )
 
     return () => subscription.unsubscribe()
+  }, [])
+
+  // Handle notification responses (when user taps on notification)
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data
+      
+      if (__DEV__) {
+        console.log('Notification tapped:', data)
+      }
+
+      // Navigate to EventDetail screen if eventId is present
+      if (data?.eventId && navigationRef.current) {
+        // Fetch event data and navigate
+        const fetchEventAndNavigate = async () => {
+          try {
+            const { data: eventData, error } = await supabase
+              .from('events')
+              .select(`
+                *,
+                host:profiles!events_host_id_fkey(id, full_name, avatar_url),
+                attendees:event_attendees(
+                  user_id,
+                  status,
+                  profiles:profiles!event_attendees_user_id_fkey(id, full_name, avatar_url)
+                )
+              `)
+              .eq('id', data.eventId)
+              .single()
+
+            if (error) {
+              console.error('Error fetching event:', error)
+              return
+            }
+
+            if (eventData && navigationRef.current) {
+              // Transform the data to match EventWithAttendees type
+              const event: EventWithAttendees = {
+                ...eventData,
+                host: eventData.host,
+                attendees: eventData.attendees || []
+              }
+
+              navigationRef.current.navigate('EventDetail', { event })
+            }
+          } catch (error) {
+            console.error('Error navigating to event:', error)
+          }
+        }
+
+        fetchEventAndNavigate()
+      }
+    })
+
+    return () => subscription.remove()
   }, [])
 
   const checkUser = async () => {
@@ -347,7 +404,7 @@ function AppContent() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator>
           {user ? (
             <>

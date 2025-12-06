@@ -22,35 +22,50 @@ import { useTheme } from '../context/ThemeContext'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
+import { PREDEFINED_TAGS } from '../constants/tags'
 
 interface CreateEventScreenProps {
   onBack: () => void
   onEventCreated: () => void
 }
 
-const predefinedTags = [
-  'Game Night',
-  'Study Session',
-  'Movie Night',
-  'Sports',
-  'Food & Dining',
-  'Music & Arts',
-  'Networking',
-  'Outdoor Activity',
-  'Workshop',
-  'Social Mixer'
-]
 
 export default function CreateEventScreen({ onBack, onEventCreated }: CreateEventScreenProps) {
   const { theme, isDark } = useTheme()
   const navigation = useNavigation()
+  const getRoundedToNextFiveMinutes = () => {
+    const d = new Date()
+    const minutes = d.getMinutes()
+    const rounded = Math.ceil(minutes / 5) * 5
+    if (rounded === 60) {
+      d.setHours(d.getHours() + 1)
+      d.setMinutes(0, 0, 0)
+    } else {
+      d.setMinutes(rounded, 0, 0)
+    }
+    return d
+  }
+  const getRoundedEndTimeFrom = (start: Date) => {
+    const d = new Date(start.getTime())
+    d.setHours(d.getHours() + 1)
+    const minutes = d.getMinutes()
+    const rounded = Math.ceil(minutes / 5) * 5
+    if (rounded === 60) {
+      d.setHours(d.getHours() + 1)
+      d.setMinutes(0, 0, 0)
+    } else {
+      d.setMinutes(rounded, 0, 0)
+    }
+    return d
+  }
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [location, setLocation] = useState('')
   const [maxAttendees, setMaxAttendees] = useState('')
   const [eventDate, setEventDate] = useState(new Date())
-  const [startTime, setStartTime] = useState(new Date())
-  const [endTime, setEndTime] = useState(new Date())
+  const initialStart = getRoundedToNextFiveMinutes()
+  const [startTime, setStartTime] = useState(initialStart)
+  const [endTime, setEndTime] = useState(getRoundedEndTimeFrom(initialStart))
   const [hasEndTime, setHasEndTime] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [privacy, setPrivacy] = useState<'public' | 'invite_only'>('public')
@@ -230,44 +245,81 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
 
       if (eventError) throw eventError
 
-      // If it's an invite-only event, create invitations for selected users
-      if (privacy === 'invite_only' && invitedUsers.length > 0) {
-        const invitations = invitedUsers.map(userId => ({
-          event_id: event.id,
-          user_id: userId,
-          invited_by: user.id
-        }))
+      // Get host's profile for custom notification text
+      const { data: hostProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .single()
 
-        const { error: inviteError } = await supabase
-          .from('event_invitations')
-          .insert(invitations)
+      const hostName = hostProfile?.full_name || 'Someone'
 
-        if (inviteError) {
-          console.error('Error creating invitations:', inviteError)
-          // Don't fail the entire event creation if invitations fail
-        } else {
-          // Send push notifications to invited users (excluding the host)
-          for (const userId of invitedUsers) {
-            // Skip notification if the user is the host
-            if (userId === user.id) {
-              continue
+      // Handle notifications for both private and public events
+      if (invitedUsers.length > 0) {
+        // Filter out the host from invited users to prevent self-notifications
+        const usersToNotify = invitedUsers.filter(userId => userId !== user.id)
+
+        // For invite-only events, create invitation records
+        if (privacy === 'invite_only') {
+          const invitations = usersToNotify.map(userId => ({
+            event_id: event.id,
+            user_id: userId,
+            invited_by: user.id
+          }))
+
+          const { error: inviteError } = await supabase
+            .from('event_invitations')
+            .insert(invitations)
+
+          if (inviteError) {
+            console.error('Error creating invitations:', inviteError)
+            // Don't fail the entire event creation if invitations fail
+          }
+        }
+
+        // Queue notifications for selected users (excluding the host)
+        if (usersToNotify.length > 0) {
+          const notificationType = 'event_invitation'
+          const notificationTitle = privacy === 'invite_only' ? 'Event Invitation' : 'New Event'
+          
+          // Create custom notification text: "X invited you to Y event"
+          const notificationBody = privacy === 'invite_only'
+            ? `${hostName} invited you to "${event.title}"`
+            : `${hostName} created a new event: "${event.title}"`
+
+          // Batch insert all notifications into the queue
+          const notificationData = usersToNotify.map(userId => ({
+            user_id: userId,
+            event_id: event.id,
+            type: notificationType,
+            title: notificationTitle,
+            body: notificationBody,
+            scheduled_for: new Date().toISOString(),
+            data: {
+              type: notificationType,
+              eventId: event.id,
+              hostId: user.id,
+              hostName: hostName,
+              privacy: privacy,
+              eventTitle: event.title
+            }
+          }))
+
+          const { error: notificationError } = await supabase
+            .from('notification_queue')
+            .insert(notificationData)
+
+          if (notificationError) {
+            console.error('Error queuing notifications:', notificationError)
+            // Don't fail the entire event creation if notifications fail
+          } else {
+            if (__DEV__) {
+              console.log(`Queued ${usersToNotify.length} notifications for event ${event.id}`)
             }
             
-            try {
-              await NotificationService.sendNotification({
-                type: 'event_invitation',
-                eventId: event.id,
-                userId: userId,
-                title: 'Event Invitation',
-                body: `You've been invited to "${event.title}" by a friend`,
-                data: {
-                  eventId: event.id,
-                  hostId: user.id
-                }
-              })
-            } catch (error) {
-              console.error('Error sending invitation notification:', error)
-            }
+            // Trigger the Edge Function to process notifications
+            // The Edge Function will be triggered automatically by the database trigger
+            // after a 2-second debounce period to allow batch inserts
           }
         }
       }
@@ -292,13 +344,15 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
           text: 'OK',
           onPress: () => {
             // Reset form
+            const roundedStart = getRoundedToNextFiveMinutes()
+            const roundedEnd = getRoundedEndTimeFrom(roundedStart)
             setTitle('')
             setDescription('')
             setLocation('')
             setMaxAttendees('')
             setEventDate(new Date())
-            setStartTime(new Date())
-            setEndTime(new Date())
+            setStartTime(roundedStart)
+            setEndTime(roundedEnd)
             setHasEndTime(false)
             setImageUri(null)
             setSelectedTags([])
@@ -329,6 +383,50 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
       >
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.form}>
+            {/* Event Title */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Event Title *</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+                placeholder="Enter event title"
+                placeholderTextColor={theme.inputPlaceholder}
+                value={title}
+                onChangeText={setTitle}
+                autoCorrect={false}
+                spellCheck={false}
+              />
+            </View>
+
+            {/* Description */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Description</Text>
+              <TextInput
+                style={[styles.input, styles.textArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+                placeholder="Enter event description"
+                placeholderTextColor={theme.inputPlaceholder}
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                numberOfLines={4}
+                autoCorrect={false}
+                spellCheck={false}
+              />
+            </View>
+
+            {/* Location */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.text }]}>Location *</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
+                placeholder="Enter event location"
+                placeholderTextColor={theme.inputPlaceholder}
+                value={location}
+                onChangeText={setLocation}
+                autoCorrect={false}
+                spellCheck={false}
+              />
+            </View>
+
             {/* Event Image */}
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Event Image (Optional)</Text>
@@ -365,24 +463,25 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
             {/* Privacy Settings */}
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
-              <View style={[styles.privacyContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+              <View style={styles.privacyButtonsContainer}>
                 <TouchableOpacity
                   style={[
-                    styles.privacyOption,
-                    { backgroundColor: theme.surface, borderBottomColor: theme.border },
-                    privacy === 'public' && { backgroundColor: theme.primaryLight }
+                    styles.privacyButton,
+                    { 
+                      backgroundColor: privacy === 'public' ? theme.primary : theme.surface, 
+                      borderColor: privacy === 'public' ? theme.primary : theme.border 
+                    }
                   ]}
                   onPress={() => setPrivacy('public')}
                 >
                   <Ionicons
-                    name={privacy === 'public' ? 'radio-button-on' : 'radio-button-off'}
+                    name={privacy === 'public' ? 'globe' : 'globe-outline'}
                     size={20}
-                    color={privacy === 'public' ? theme.primary : theme.textSecondary}
+                    color={privacy === 'public' ? theme.buttonText : theme.textSecondary}
                   />
                   <Text style={[
-                    styles.privacyText,
-                    { color: theme.text },
-                    privacy === 'public' && { color: theme.primaryDark }
+                    styles.privacyButtonText,
+                    { color: privacy === 'public' ? theme.buttonText : theme.text }
                   ]}>
                     Public
                   </Text>
@@ -390,9 +489,11 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                 
                 <TouchableOpacity
                   style={[
-                    styles.privacyOption,
-                    { backgroundColor: theme.surface },
-                    privacy === 'invite_only' && { backgroundColor: theme.primaryLight }
+                    styles.privacyButton,
+                    { 
+                      backgroundColor: privacy === 'invite_only' ? theme.primary : theme.surface, 
+                      borderColor: privacy === 'invite_only' ? theme.primary : theme.border 
+                    }
                   ]}
                   onPress={() => {
                     setPrivacy('invite_only')
@@ -400,16 +501,15 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                   }}
                 >
                   <Ionicons
-                    name={privacy === 'invite_only' ? 'radio-button-on' : 'radio-button-off'}
+                    name={privacy === 'invite_only' ? 'lock-closed' : 'lock-closed-outline'}
                     size={20}
-                    color={privacy === 'invite_only' ? theme.primary : theme.textSecondary}
+                    color={privacy === 'invite_only' ? theme.buttonText : theme.textSecondary}
                   />
                   <Text style={[
-                    styles.privacyText,
-                    { color: theme.text },
-                    privacy === 'invite_only' && { color: theme.primaryDark }
+                    styles.privacyButtonText,
+                    { color: privacy === 'invite_only' ? theme.buttonText : theme.text }
                   ]}>
-                    Invite Only
+                    Private
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -468,47 +568,6 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               </View>
             )}
 
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Event Title *</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter event title"
-                placeholderTextColor={theme.inputPlaceholder}
-                value={title}
-                onChangeText={setTitle}
-                autoCorrect={false}
-                spellCheck={false}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Description</Text>
-              <TextInput
-                style={[styles.input, styles.textArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter event description"
-                placeholderTextColor={theme.inputPlaceholder}
-                value={description}
-                onChangeText={setDescription}
-                multiline
-                numberOfLines={4}
-                autoCorrect={false}
-                spellCheck={false}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Location *</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter event location"
-                placeholderTextColor={theme.inputPlaceholder}
-                value={location}
-                onChangeText={setLocation}
-                autoCorrect={false}
-                spellCheck={false}
-              />
-            </View>
-
             {/* Event Date */}
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Date</Text>
@@ -537,38 +596,31 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               )}
             </View>
 
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
-                <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                      backgroundColor: privacy === 'invite_only' ? `${theme.inputBackground}80` : theme.inputBackground, 
-                      borderColor: privacy === 'invite_only' ? `${theme.inputBorder}80` : theme.inputBorder, 
-                      color: privacy === 'invite_only' ? `${theme.inputText}80` : theme.inputText 
-                    }
-                  ]}
-                  placeholder={privacy === 'invite_only' ? "Not needed for invite-only" : "Optional"}
-                  placeholderTextColor={privacy === 'invite_only' ? `${theme.inputPlaceholder}80` : theme.inputPlaceholder}
-                  value={privacy === 'invite_only' ? '' : maxAttendees}
-                  onChangeText={(text) => {
-                    if (privacy !== 'invite_only') {
-                      setMaxAttendees(text)
-                    }
-                  }}
-                  keyboardType="numeric"
-                  autoCorrect={false}
-                  spellCheck={false}
-                  editable={privacy !== 'invite_only'}
-                />
-                {privacy === 'invite_only' && (
-                  <Text style={[styles.disabledHint, { color: theme.textSecondary }]}>
-                    Max attendees not needed - only invited people can attend
-                  </Text>
-                )}
+            {/* Max Attendees - Only show for public events */}
+            {privacy === 'public' && (
+              <View style={styles.row}>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
+                  <TextInput
+                    style={[
+                      styles.input, 
+                      { 
+                        backgroundColor: theme.inputBackground, 
+                        borderColor: theme.inputBorder, 
+                        color: theme.inputText 
+                      }
+                    ]}
+                    placeholder="Optional"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    value={maxAttendees}
+                    onChangeText={setMaxAttendees}
+                    keyboardType="numeric"
+                    autoCorrect={false}
+                    spellCheck={false}
+                  />
+                </View>
               </View>
-            </View>
+            )}
 
             {/* Start Time */}
             <View style={styles.inputGroup}>
@@ -652,7 +704,7 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               <Text style={[styles.label, { color: theme.text }]}>Tags</Text>
               <Text style={[styles.tagsDescription, { color: theme.textSecondary }]}>Select relevant tags for your event</Text>
               <View style={styles.tagsContainer}>
-                {predefinedTags.map((tag) => (
+                {PREDEFINED_TAGS.map((tag) => (
                   <TouchableOpacity
                     key={tag}
                     style={[
@@ -777,23 +829,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  privacyContainer: {
-    borderRadius: 8,
-    borderWidth: 1,
+  privacyButtonsContainer: {
+    flexDirection: 'row',
+    gap: 12,
     marginTop: 8,
-    overflow: 'hidden',
   },
-  privacyOption: {
+  privacyButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
+    paddingVertical: 14,
+    borderRadius: 8,
+    borderWidth: 1,
   },
-  privacyText: {
+  privacyButtonText: {
     fontSize: 16,
     fontWeight: '500',
-    marginLeft: 12,
+    marginLeft: 8,
   },
   privacyDescription: {
     fontSize: 12,
