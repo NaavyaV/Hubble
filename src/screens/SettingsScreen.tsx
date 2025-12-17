@@ -7,6 +7,8 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Modal,
+  TextInput,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -20,6 +22,9 @@ export default function SettingsScreen() {
   const navigation = useNavigation()
   const { theme, themeMode, setThemeMode, isDark } = useTheme()
   const [deleting, setDeleting] = useState(false)
+  const [showEditPhoneModal, setShowEditPhoneModal] = useState(false)
+  const [editPhoneValue, setEditPhoneValue] = useState('')
+  const [savingPhone, setSavingPhone] = useState(false)
 
   const themeOptions = [
     { value: 'light' as const, label: 'Light', icon: 'sunny' },
@@ -33,6 +38,47 @@ export default function SettingsScreen() {
 
   const handlePhoneVisibilityPress = () => {
     navigation.navigate('PhoneVisibility' as never)
+  }
+
+  const openEditPhoneNumber = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        Alert.alert('Error', 'User not found')
+        return
+      }
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('phone_number')
+        .eq('id', user.id)
+        .single()
+      setEditPhoneValue(profile?.phone_number || '')
+      setShowEditPhoneModal(true)
+    } catch (e) {
+      Alert.alert('Error', 'Failed to load phone number')
+    }
+  }
+
+  const savePhoneNumber = async () => {
+    try {
+      setSavingPhone(true)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        Alert.alert('Error', 'User not found')
+        return
+      }
+      const { error } = await supabase
+        .from('profiles')
+        .update({ phone_number: editPhoneValue.trim(), updated_at: new Date().toISOString() })
+        .eq('id', user.id)
+      if (error) throw error
+      setShowEditPhoneModal(false)
+      Alert.alert('Success', 'Phone number updated')
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to update phone number')
+    } finally {
+      setSavingPhone(false)
+    }
   }
 
   const handleDeleteProfile = () => {
@@ -321,6 +367,17 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.textTertiary} />
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.settingItem} onPress={openEditPhoneNumber}>
+            <View style={styles.settingLeft}>
+              <Ionicons name="create" size={20} color={theme.textSecondary} />
+              <View style={styles.settingText}>
+                <Text style={styles.settingTitle}>Edit Phone Number</Text>
+                <Text style={styles.settingDescription}>Update the phone number on your profile</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.textTertiary} />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.section}>
@@ -383,6 +440,49 @@ export default function SettingsScreen() {
           </Text>
         </View>
       </ScrollView>
+
+      {/* Edit Phone Number Modal */}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showEditPhoneModal}
+        onRequestClose={() => setShowEditPhoneModal(false)}
+      >
+        <View style={styles.editPhoneModalContainer}>
+          <View style={styles.editPhoneCard}>
+            <Text style={styles.editPhoneTitle}>Edit Phone Number</Text>
+            <TextInput
+              style={styles.editPhoneInput}
+              placeholder="Enter phone number"
+              value={editPhoneValue}
+              onChangeText={setEditPhoneValue}
+              keyboardType="phone-pad"
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            <View style={styles.editPhoneActions}>
+              <TouchableOpacity
+                style={styles.editPhoneButton}
+                onPress={() => setShowEditPhoneModal(false)}
+                disabled={savingPhone}
+              >
+                <Text style={styles.editPhoneButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.editPhoneButton, styles.editPhonePrimary]}
+                onPress={savePhoneNumber}
+                disabled={savingPhone}
+              >
+                {savingPhone ? (
+                  <ActivityIndicator color={theme.buttonText} size="small" />
+                ) : (
+                  <Text style={[styles.editPhoneButtonText, styles.editPhonePrimaryText]}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -539,5 +639,61 @@ const createStyles = (theme: any) => StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
     lineHeight: 18,
+  },
+  editPhoneModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#00000066',
+  },
+  editPhoneCard: {
+    width: '85%',
+    backgroundColor: theme.surface,
+    borderRadius: 12,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  editPhoneTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: theme.text,
+    marginBottom: 12,
+  },
+  editPhoneInput: {
+    borderWidth: 1,
+    borderColor: theme.inputBorder,
+    backgroundColor: theme.inputBackground,
+    color: theme.inputText,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginBottom: 16,
+  },
+  editPhoneActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  editPhoneButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+  },
+  editPhonePrimary: {
+    backgroundColor: theme.buttonPrimary,
+    borderColor: theme.buttonPrimary,
+  },
+  editPhoneButtonText: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  editPhonePrimaryText: {
+    color: theme.buttonText,
   },
 })

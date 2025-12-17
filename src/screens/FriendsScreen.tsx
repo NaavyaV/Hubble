@@ -148,7 +148,9 @@ export default function FriendsScreen() {
 
       if (error) {
         console.error('Error fetching users:', error)
-        throw error
+        // Don't throw error, just log it and continue with empty array
+        setAllUsers([])
+        return
       }
       
       console.log('Fetched users:', data?.length || 0, 'users')

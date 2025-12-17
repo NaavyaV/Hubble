@@ -8,6 +8,223 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+interface NotificationQueue {
+  id: string
+  user_id: string
+  event_id: string | null
+  type: string
+  title: string
+  body: string
+  data: Record<string, any>
+  scheduled_for: string
+  retry_count?: number
+  max_retries?: number
+  next_retry_at?: string | null
+}
+
+interface NotificationPreferences {
+  push_notifications: boolean
+  event_reminders: boolean
+  going_status_updates: boolean
+  friend_requests: boolean
+  event_invitations: boolean
+  event_deletions: boolean
+}
+
+async function processNotification(
+  notification: NotificationQueue,
+  supabaseClient: any
+): Promise<{ id: string; status: string; error?: string; retry_count?: number; next_retry_at?: string }> {
+  try {
+    // Check user's notification preferences
+    const { data: preferences } = await supabaseClient
+      .from('notification_preferences')
+      .select('push_notifications, event_reminders, going_status_updates, friend_requests, event_invitations, event_deletions')
+      .eq('user_id', notification.user_id)
+      .maybeSingle()
+
+    // Check if user has this type of notification enabled
+    let notificationEnabled = true
+    if (preferences) {
+      const prefs = preferences as NotificationPreferences
+      switch (notification.type) {
+        case 'event_reminder':
+          notificationEnabled = prefs.push_notifications && prefs.event_reminders
+          break
+        case 'host_update':
+        case 'going_status_updates':
+          notificationEnabled = prefs.push_notifications && prefs.going_status_updates
+          break
+        case 'friend_request':
+          notificationEnabled = prefs.push_notifications && prefs.friend_requests
+          break
+        case 'event_invitation':
+          notificationEnabled = prefs.push_notifications && prefs.event_invitations
+          break
+        case 'event_edited_deleted':
+        case 'event_deleted':
+          notificationEnabled = prefs.push_notifications && prefs.event_deletions
+          break
+        default:
+          notificationEnabled = prefs.push_notifications
+      }
+    }
+
+    if (!notificationEnabled) {
+      console.log(`Notification disabled for user ${notification.user_id}, type: ${notification.type}`)
+      await supabaseClient
+        .from('notification_queue')
+        .delete()
+        .eq('id', notification.id)
+      return { id: notification.id, status: 'disabled' }
+    }
+
+    // Get user's notification token
+    const { data: tokenData, error: tokenError } = await supabaseClient
+      .from('notification_tokens')
+      .select('token, platform')
+      .eq('user_id', notification.user_id)
+      .limit(1)
+
+    if (tokenError) {
+      console.error(`Error fetching token for user ${notification.user_id}:`, tokenError)
+      return { id: notification.id, status: 'error', error: tokenError.message }
+    }
+
+    if (!tokenData || tokenData.length === 0 || !tokenData[0]?.token) {
+      console.log(`No token found for user ${notification.user_id}`)
+      await supabaseClient
+        .from('notification_queue')
+        .delete()
+        .eq('id', notification.id)
+      return { id: notification.id, status: 'no_token' }
+    }
+
+    const token = tokenData[0].token
+
+    // Send notification via Expo Push Notification service
+    const message = {
+      to: token,
+      sound: 'default',
+      title: notification.title,
+      body: notification.body,
+      data: {
+        type: notification.type,
+        eventId: notification.event_id,
+        userId: notification.user_id,
+        notificationId: notification.id,
+        ...notification.data,
+      },
+    }
+
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    })
+
+    if (response.ok) {
+      // Delete the notification from queue
+      await supabaseClient
+        .from('notification_queue')
+        .delete()
+        .eq('id', notification.id)
+
+      // Log the notification for audit purposes
+      await supabaseClient
+        .from('notification_log')
+        .insert({
+          user_id: notification.user_id,
+          event_id: notification.event_id,
+          type: notification.type,
+          title: notification.title,
+          body: notification.body,
+          data: notification.data,
+        })
+
+      return { id: notification.id, status: 'sent' }
+    } else {
+      const errorText = await response.text()
+      console.error(`Failed to send notification ${notification.id}:`, errorText)
+      
+      // Handle retry logic with exponential backoff
+      const currentRetryCount = notification.retry_count || 0
+      const maxRetries = notification.max_retries || 3
+      
+      if (currentRetryCount < maxRetries) {
+        // Calculate exponential backoff: 2^retry_count minutes (1, 2, 4, 8 minutes)
+        const backoffMinutes = Math.pow(2, currentRetryCount)
+        const nextRetryAt = new Date(Date.now() + (backoffMinutes * 60 * 1000))
+        
+        await supabaseClient
+          .from('notification_queue')
+          .update({
+            retry_count: currentRetryCount + 1,
+            last_attempt_at: new Date().toISOString(),
+            next_retry_at: nextRetryAt.toISOString()
+          })
+          .eq('id', notification.id)
+        
+        console.log(`Notification ${notification.id} failed, scheduled retry ${currentRetryCount + 1}/${maxRetries} in ${backoffMinutes} minutes`)
+        return { 
+          id: notification.id, 
+          status: 'retry_scheduled', 
+          retry_count: currentRetryCount + 1, 
+          next_retry_at: nextRetryAt.toISOString() 
+        }
+      } else {
+        // Max retries reached, remove from queue
+        console.log(`Notification ${notification.id} exceeded max retries (${maxRetries}), removing from queue`)
+        await supabaseClient
+          .from('notification_queue')
+          .delete()
+          .eq('id', notification.id)
+        return { id: notification.id, status: 'max_retries_exceeded' }
+      }
+    }
+  } catch (error) {
+    console.error(`Error processing notification ${notification.id}:`, error)
+    
+    // Handle retry logic for processing errors
+    const currentRetryCount = notification.retry_count || 0
+    const maxRetries = notification.max_retries || 3
+    
+    if (currentRetryCount < maxRetries) {
+      const backoffMinutes = Math.pow(2, currentRetryCount)
+      const nextRetryAt = new Date(Date.now() + (backoffMinutes * 60 * 1000))
+      
+      await supabaseClient
+        .from('notification_queue')
+        .update({
+          retry_count: currentRetryCount + 1,
+          last_attempt_at: new Date().toISOString(),
+          next_retry_at: nextRetryAt.toISOString()
+        })
+        .eq('id', notification.id)
+      
+      console.log(`Notification ${notification.id} processing error, scheduled retry ${currentRetryCount + 1}/${maxRetries} in ${backoffMinutes} minutes`)
+      return { 
+        id: notification.id, 
+        status: 'retry_scheduled', 
+        retry_count: currentRetryCount + 1, 
+        next_retry_at: nextRetryAt.toISOString() 
+      }
+    } else {
+      // Max retries reached, remove from queue
+      console.log(`Notification ${notification.id} exceeded max retries (${maxRetries}) due to processing error, removing from queue`)
+      await supabaseClient
+        .from('notification_queue')
+        .delete()
+        .eq('id', notification.id)
+      return { id: notification.id, status: 'max_retries_exceeded' }
+    }
+  }
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -18,219 +235,63 @@ serve(async (req) => {
     // Use service role key to bypass RLS for system operations
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
     
-    // Log which key we're using (without exposing the full key)
-    console.log(`Using ${serviceRoleKey ? 'SERVICE_ROLE' : 'ANON'} key for database access`)
+    if (!supabaseUrl || !serviceRoleKey) {
+      throw new Error('Missing required environment variables')
+    }
     
-    const supabaseClient = createClient(
-      supabaseUrl,
-      serviceRoleKey || anonKey,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false
-        }
+    const supabaseClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
       }
-    )
+    })
 
-    // Get pending notifications (limit 50 per batch, will process all if called multiple times)
-    const { data: notifications, error } = await supabaseClient
-      .from('notification_queue')
-      .select('*')
-      .lte('scheduled_for', new Date().toISOString())
-      .limit(50)
+    const allResults = []
+    let hasMore = true
+    const batchSize = 50
 
-    if (error) {
-      console.error('Error fetching notifications:', error)
-      return new Response(JSON.stringify({ error: error.message }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
-
-    if (!notifications || notifications.length === 0) {
-      return new Response(JSON.stringify({ message: 'No notifications to process' }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
-
-    // Process each notification
-    const results = []
-    for (const notification of notifications) {
-      try {
-        // Check user's notification preferences first
-        const { data: preferences } = await supabaseClient
-          .from('notification_preferences')
-          .select('push_notifications, event_reminders, going_status_updates, friend_requests, event_invitations, event_deletions')
-          .eq('user_id', notification.user_id)
-          .maybeSingle()
-
-        // Check if user has this type of notification enabled
-        let notificationEnabled = true
-        if (preferences) {
-          switch (notification.type) {
-            case 'event_reminder':
-              notificationEnabled = preferences.push_notifications && preferences.event_reminders
-              break
-            case 'host_update':
-            case 'going_status_updates':
-              notificationEnabled = preferences.push_notifications && preferences.going_status_updates
-              break
-            case 'friend_request':
-              notificationEnabled = preferences.push_notifications && preferences.friend_requests
-              break
-            case 'event_invitation':
-              notificationEnabled = preferences.push_notifications && preferences.event_invitations
-              break
-            case 'event_edited_deleted':
-            case 'event_deleted':
-              notificationEnabled = preferences.push_notifications && preferences.event_deletions
-              break
-            default:
-              notificationEnabled = preferences.push_notifications
-          }
-        }
-
-        if (!notificationEnabled) {
-          console.log(`Notification disabled for user ${notification.user_id}, type: ${notification.type}`)
-          // Remove from queue since we're not sending it
-          await supabaseClient
-            .from('notification_queue')
-            .delete()
-            .eq('id', notification.id)
-          results.push({ id: notification.id, status: 'disabled' })
-          continue
-        }
-
-        // Get user's notification token
-        console.log(`Fetching token for user ${notification.user_id}`)
-        const { data: tokenData, error: tokenError } = await supabaseClient
-          .from('notification_tokens')
-          .select('token, platform')
-          .eq('user_id', notification.user_id)
-          .limit(1)
-
-        if (tokenError) {
-          console.error(`Error fetching token for user ${notification.user_id}:`, tokenError)
-          console.error(`Token error details:`, JSON.stringify(tokenError, null, 2))
-          results.push({ id: notification.id, status: 'error', error: tokenError.message })
-          continue
-        }
-
-        console.log(`Token query result for user ${notification.user_id}:`, tokenData ? `Found ${tokenData.length} token(s)` : 'No result')
-
-        if (!tokenData || tokenData.length === 0 || !tokenData[0]?.token) {
-          console.log(`No token found for user ${notification.user_id}`)
-          // Remove from queue since we can't send it
-          await supabaseClient
-            .from('notification_queue')
-            .delete()
-            .eq('id', notification.id)
-          results.push({ id: notification.id, status: 'no_token' })
-          continue
-        }
-
-        const token = tokenData[0].token
-        console.log(`Using token for user ${notification.user_id}: ${token.substring(0, 20)}...`)
-
-        // Send actual notification with title and body
-        const message = {
-          to: token,
-          sound: 'default',
-          title: notification.title,
-          body: notification.body,
-          data: {
-            type: notification.type,
-            eventId: notification.event_id,
-            userId: notification.user_id,
-            notificationId: notification.id,
-            ...notification.data,
-          },
-        }
-        
-        console.log(`Sending notification to token: ${token.substring(0, 20)}...`)
-
-        const response = await fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Accept-encoding': 'gzip, deflate',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(message),
-        })
-
-        if (response.ok) {
-          // Delete the notification from queue (remove it from the table)
-          await supabaseClient
-            .from('notification_queue')
-            .delete()
-            .eq('id', notification.id)
-
-          // Log the notification for audit purposes
-          await supabaseClient
-            .from('notification_log')
-            .insert({
-              user_id: notification.user_id,
-              event_id: notification.event_id,
-              type: notification.type,
-              title: notification.title,
-              body: notification.body,
-              data: notification.data,
-            })
-
-          results.push({ id: notification.id, status: 'sent' })
-        } else {
-          console.error(`Failed to send notification ${notification.id}:`, await response.text())
-          results.push({ id: notification.id, status: 'failed' })
-        }
-      } catch (error) {
-        console.error(`Error processing notification ${notification.id}:`, error)
-        results.push({ id: notification.id, status: 'error' })
-      }
-    }
-
-    // Check if there are more notifications to process (handling batches > 50)
-    let hasMore = false
-    if (results.length === 50) {
-      // Check if there are more notifications ready to process
-      const { count } = await supabaseClient
+    // Process all notifications in batches until queue is empty
+    while (hasMore) {
+      const now = new Date().toISOString()
+      const { data: notifications, error } = await supabaseClient
         .from('notification_queue')
-        .select('*', { count: 'exact', head: true })
-        .lte('scheduled_for', new Date().toISOString())
-      
-      hasMore = (count || 0) > 0
-    }
+        .select('*')
+        .or(`scheduled_for.lte.${now},next_retry_at.lte.${now}`)
+        .limit(batchSize)
 
-    const response = {
-      message: `Processed ${results.length} notifications`,
-      results,
-      hasMore
-    }
-
-    // If there are more notifications, process them immediately (recursive processing)
-    if (hasMore) {
-      console.log('More notifications in queue, processing next batch immediately...')
-      // Process the next batch by calling the Edge Function again
-      // The Edge Function will handle up to 50 more and continue until queue is empty
-      try {
-        const selfUrl = `${supabaseUrl}/functions/v1/process-notifications`
-        await fetch(selfUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${serviceRoleKey || anonKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({}),
+      if (error) {
+        console.error('Error fetching notifications:', error)
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         })
-      } catch (error) {
-        console.error('Error triggering recursive processing:', error)
+      }
+
+      if (!notifications || notifications.length === 0) {
+        hasMore = false
+        break
+      }
+
+      // Process all notifications in this batch
+      const batchResults = await Promise.all(
+        notifications.map((notification: NotificationQueue) => 
+          processNotification(notification, supabaseClient)
+        )
+      )
+
+      allResults.push(...batchResults)
+
+      // If we got fewer than batchSize, we've processed everything
+      if (notifications.length < batchSize) {
+        hasMore = false
       }
     }
 
-    return new Response(JSON.stringify(response), {
+    return new Response(JSON.stringify({
+      message: `Processed ${allResults.length} notifications`,
+      results: allResults,
+    }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })

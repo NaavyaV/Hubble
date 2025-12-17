@@ -19,20 +19,29 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
     let iconName: keyof typeof Ionicons.glyphMap
 
     switch (routeName) {
-      case 'Events':
+      case 'MyEvents':
         iconName = focused ? 'calendar' : 'calendar-outline'
+        break
+      case 'ComingEvents':
+        iconName = focused ? 'home' : 'home-outline'
         break
       case 'Leaderboard':
         iconName = focused ? 'trophy' : 'trophy-outline'
         break
-      case 'Host':
-        iconName = focused ? 'add-circle' : 'add-circle-outline'
-        break
-      case 'Friends':
+      case 'Social':
         iconName = focused ? 'people' : 'people-outline'
         break
       case 'Profile':
         iconName = focused ? 'person' : 'person-outline'
+        break
+      case 'OrgEvents':
+        iconName = focused ? 'calendar' : 'calendar-outline'
+        break
+      case 'OrgFollowers':
+        iconName = focused ? 'people' : 'people-outline'
+        break
+      case 'OrgSettings':
+        iconName = focused ? 'settings' : 'settings-outline'
         break
       default:
         iconName = 'help-outline'
@@ -63,8 +72,8 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
       }
     }
 
-    // Special handling for Friends tab with notification badge
-    if (route.name === 'Friends') {
+    // Special handling for Social tab with notification badge
+    if (route.name === 'Social') {
       return (
         <TouchableOpacity
           key={route.key}
@@ -110,7 +119,7 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
 
   return (
     <View style={[styles.tabBar, { 
-      backgroundColor: theme.tabBarBackground,
+      backgroundColor: theme.background,
       paddingBottom: insets.bottom 
     }]}>
       <View style={styles.tabBarContent}>

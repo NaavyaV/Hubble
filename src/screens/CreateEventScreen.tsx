@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Platform,
   Image,
   Switch,
+  Modal,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -23,14 +24,18 @@ import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
 import { PREDEFINED_TAGS } from '../constants/tags'
+import { buildEventInvitationNotification, buildBatchNotifications, buildOrgEventCreatedNotification } from '../utils/notificationTemplates'
+import EventInviteScreen from './EventInviteScreen'
 
 interface CreateEventScreenProps {
   onBack: () => void
   onEventCreated: () => void
+  isOrgEvent?: boolean
+  orgId?: string
 }
 
 
-export default function CreateEventScreen({ onBack, onEventCreated }: CreateEventScreenProps) {
+export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent = false, orgId }: CreateEventScreenProps) {
   const { theme, isDark } = useTheme()
   const navigation = useNavigation()
   const getRoundedToNextFiveMinutes = () => {
@@ -68,13 +73,14 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
   const [endTime, setEndTime] = useState(getRoundedEndTimeFrom(initialStart))
   const [hasEndTime, setHasEndTime] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [privacy, setPrivacy] = useState<'public' | 'invite_only'>('public')
+  const [privacy, setPrivacy] = useState<'public' | 'invite_only'>(isOrgEvent ? 'public' : 'public')
   const [invitedUsers, setInvitedUsers] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [imageUri, setImageUri] = useState<string | null>(null)
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [showStartTimePicker, setShowStartTimePicker] = useState(false)
   const [showEndTimePicker, setShowEndTimePicker] = useState(false)
+  const [showInviteModal, setShowInviteModal] = useState(false)
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev => 
@@ -85,14 +91,12 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
   }
 
   const handleInviteUsers = () => {
-    ;(navigation as any).navigate('EventInvite', {
-      invitedUsers: invitedUsers,
-      isEditMode: false,
-      // Pass callback to update invited users when returning
-      onInvitesUpdated: (newInvitedUsers: string[]) => {
+    setShowInviteModal(true)
+  }
+
+  const handleInvitesUpdated = (newInvitedUsers: string[]) => {
         setInvitedUsers(newInvitedUsers)
-      }
-    })
+    setShowInviteModal(false)
   }
 
   const pickImage = async () => {
@@ -223,44 +227,86 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
         .eq('id', user.id)
         .single()
 
-      // Create event
-      const { data: event, error: eventError } = await supabase
-        .from('events')
-        .insert({
-          host_id: user.id,
-          college_id: profileData?.college_id || null,
-          title: title.trim(),
-          description: description.trim() || null,
-          event_date: eventDate.toISOString().split('T')[0],
-          start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
-          end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
-          location: location.trim(),
-          max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
-          image_url: imageUrl,
-          privacy: privacy,
-          tags: selectedTags.length > 0 ? selectedTags : null,
-        })
-        .select()
-        .single()
+      // Create event - use org_events table for org events, events table for personal events
+      let event
+      if (isOrgEvent && orgId) {
+        // Create org event
+        const { data: orgEvent, error: orgEventError } = await supabase
+          .from('org_events')
+          .insert({
+            org_id: orgId,
+            college_id: profileData?.college_id || null,
+            title: title.trim(),
+            description: description.trim() || null,
+            event_date: eventDate.toISOString().split('T')[0],
+            start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
+            end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+            location: location.trim(),
+            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            image_url: imageUrl,
+            privacy: 'public',
+            tags: selectedTags.length > 0 ? selectedTags : null,
+          })
+          .select()
+          .single()
 
-      if (eventError) throw eventError
+        if (orgEventError) throw orgEventError
+        event = orgEvent
+      } else {
+        // Create personal event
+        const { data: personalEvent, error: eventError } = await supabase
+          .from('events')
+          .insert({
+            host_id: user.id,
+            college_id: profileData?.college_id || null,
+            title: title.trim(),
+            description: description.trim() || null,
+            event_date: eventDate.toISOString().split('T')[0],
+            start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
+            end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+            location: location.trim(),
+            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            image_url: imageUrl,
+            privacy: privacy,
+            tags: selectedTags.length > 0 ? selectedTags : null,
+          })
+          .select()
+          .single()
 
-      // Get host's profile for custom notification text
-      const { data: hostProfile } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', user.id)
-        .single()
+        if (eventError) throw eventError
+        event = personalEvent
+      }
 
-      const hostName = hostProfile?.full_name || 'Someone'
+      // Get host's profile for custom notification text (only for personal events)
+      let hostName = 'Someone'
+      if (!isOrgEvent) {
+        const { data: hostProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .single()
+
+        hostName = hostProfile?.full_name || 'Someone'
+      } else {
+        // For org events, get org name
+        const { data: orgData } = await supabase
+          .from('organizations')
+          .select('name')
+          .eq('id', orgId)
+          .single()
+
+        hostName = orgData?.name || 'Organization'
+      }
 
       // Handle notifications for both private and public events
+      // IMPORTANT: Only send ONE notification per user using the notification template
       if (invitedUsers.length > 0) {
         // Filter out the host from invited users to prevent self-notifications
         const usersToNotify = invitedUsers.filter(userId => userId !== user.id)
 
-        // For invite-only events, create invitation records
-        if (privacy === 'invite_only') {
+        // For invite-only events, create invitation records (only for personal events)
+        // NOTE: This does NOT send notifications - notifications are sent separately below
+        if (!isOrgEvent && privacy === 'invite_only') {
           const invitations = usersToNotify.map(userId => ({
             event_id: event.id,
             user_id: userId,
@@ -278,32 +324,22 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
         }
 
         // Queue notifications for selected users (excluding the host)
+        // This is the ONLY place where invitation notifications are sent
         if (usersToNotify.length > 0) {
-          const notificationType = 'event_invitation'
-          const notificationTitle = privacy === 'invite_only' ? 'Event Invitation' : 'New Event'
-          
-          // Create custom notification text: "X invited you to Y event"
-          const notificationBody = privacy === 'invite_only'
-            ? `${hostName} invited you to "${event.title}"`
-            : `${hostName} created a new event: "${event.title}"`
-
-          // Batch insert all notifications into the queue
-          const notificationData = usersToNotify.map(userId => ({
-            user_id: userId,
-            event_id: event.id,
-            type: notificationType,
-            title: notificationTitle,
-            body: notificationBody,
-            scheduled_for: new Date().toISOString(),
-            data: {
-              type: notificationType,
+          // Use centralized notification builder - this is the single source of notification data
+          const notificationData = buildBatchNotifications(
+            usersToNotify,
+            buildEventInvitationNotification,
+            {
               eventId: event.id,
-              hostId: user.id,
               hostName: hostName,
+              eventTitle: event.title,
               privacy: privacy,
-              eventTitle: event.title
+              additionalData: {
+                hostId: user.id
+              }
             }
-          }))
+          )
 
           const { error: notificationError } = await supabase
             .from('notification_queue')
@@ -317,27 +353,88 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               console.log(`Queued ${usersToNotify.length} notifications for event ${event.id}`)
             }
             
-            // Trigger the Edge Function to process notifications
             // The Edge Function will be triggered automatically by the database trigger
             // after a 2-second debounce period to allow batch inserts
           }
         }
       }
 
-      // Automatically add host as going to their own event
-      const { error: hostAttendanceError } = await supabase
-        .from('event_attendees')
-        .insert({
-          event_id: event.id,
-          user_id: user.id,
-          status: 'going'
-        })
+      // For org events, notify all followers who have notifications enabled
+      if (isOrgEvent && orgId) {
+        try {
+          // Get all followers with notifications enabled
+          const { data: followers, error: followersError } = await supabase
+            .from('org_followers')
+            .select('user_id')
+            .eq('org_id', orgId)
+            .eq('notification_enabled', true)
 
-      if (hostAttendanceError) {
-        console.warn('Failed to add host as going:', hostAttendanceError)
-      } else {
-        console.log('Host automatically added as going to event')
+          if (followersError) {
+            console.error('Error fetching org followers:', followersError)
+          } else if (followers && followers.length > 0) {
+            // Use centralized notification builder
+            // For org events, set eventId to null to avoid foreign key constraint violation
+            // (since org events are in org_events table, not events table)
+            const notificationData = buildBatchNotifications(
+              followers.map(f => f.user_id),
+              buildOrgEventCreatedNotification,
+              {
+                eventId: null, // Set to null for org events
+                hostName: hostName,
+                eventTitle: event.title,
+                additionalData: {
+                  orgId: orgId,
+                  orgEventId: event.id // Store org event ID in data instead
+                }
+              }
+            )
+
+            const { error: notificationError } = await supabase
+              .from('notification_queue')
+              .insert(notificationData)
+
+            if (notificationError) {
+              console.error('Error queuing org event notifications:', notificationError)
+            } else {
+              if (__DEV__) {
+                console.log(`Queued ${followers.length} notifications for org event ${event.id}`)
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error notifying org followers:', error)
+          // Don't fail event creation if notification fails
+        }
       }
+
+      // Automatically add host as going to their own event (but NOT for org events)
+      // Org events don't have hosts, so skip this
+      if (!isOrgEvent) {
+        const { error: hostAttendanceError } = await supabase
+          .from('event_attendees')
+          .insert({
+            event_id: event.id,
+            user_id: user.id,
+            status: 'going'
+          })
+
+        if (hostAttendanceError) {
+          console.warn('Failed to add host as going:', hostAttendanceError)
+        } else {
+          console.log('Host automatically added as going to event')
+        }
+      }
+
+      // Schedule event reminder for all going attendees (including host)
+      // Calculate event date/time for reminder scheduling
+      const eventDateTime = new Date(event.event_date)
+      const [hours, minutes] = event.start_time.split(':').map(Number)
+      eventDateTime.setHours(hours, minutes, 0, 0)
+      
+      // Small delay to ensure host is in the database before querying attendees
+      setTimeout(async () => {
+        await NotificationService.scheduleEventReminder(event.id, event.title, eventDateTime)
+      }, 500)
 
       Alert.alert('Success', 'Event created successfully!', [
         {
@@ -375,6 +472,12 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
       {/* Slim Sticky Header */}
       <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <Text style={[styles.headerTitle, { color: theme.text }]}>Create Event</Text>
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.closeButton}
+        >
+          <Ionicons name="close" size={24} color={theme.text} />
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
@@ -460,7 +563,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               </View>
             </View>
 
-            {/* Privacy Settings */}
+            {/* Privacy Settings - Hidden for org events */}
+            {!isOrgEvent && (
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
               <View style={styles.privacyButtonsContainer}>
@@ -519,9 +623,10 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
                   : 'Only invited people can see and join this event'}
               </Text>
             </View>
+            )}
 
-            {/* Invitation Section - Only show when invite only is selected */}
-            {privacy === 'invite_only' && (
+            {/* Invitation Section - Only show when invite only is selected and not org event */}
+            {!isOrgEvent && privacy === 'invite_only' && (
               <View style={styles.inputGroup}>
                 <Text style={[styles.label, { color: theme.text }]}>Invitations</Text>
                 <TouchableOpacity
@@ -544,8 +649,8 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
               </View>
             )}
 
-            {/* Notify Friends Section - Only show when public is selected */}
-            {privacy === 'public' && (
+            {/* Notify Friends Section - Only show when public is selected and not org event */}
+            {!isOrgEvent && privacy === 'public' && (
               <View style={styles.inputGroup}>
                 <Text style={[styles.label, { color: theme.text }]}>Notify Friends</Text>
                 <TouchableOpacity
@@ -598,28 +703,28 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
 
             {/* Max Attendees - Only show for public events */}
             {privacy === 'public' && (
-              <View style={styles.row}>
-                <View style={[styles.inputGroup, styles.halfWidth]}>
-                  <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
-                  <TextInput
-                    style={[
-                      styles.input, 
-                      { 
+            <View style={styles.row}>
+              <View style={[styles.inputGroup, styles.halfWidth]}>
+                <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
+                <TextInput
+                  style={[
+                    styles.input, 
+                    { 
                         backgroundColor: theme.inputBackground, 
                         borderColor: theme.inputBorder, 
                         color: theme.inputText 
-                      }
-                    ]}
+                    }
+                  ]}
                     placeholder="Optional"
                     placeholderTextColor={theme.inputPlaceholder}
                     value={maxAttendees}
                     onChangeText={setMaxAttendees}
-                    keyboardType="numeric"
-                    autoCorrect={false}
-                    spellCheck={false}
-                  />
-                </View>
+                  keyboardType="numeric"
+                  autoCorrect={false}
+                  spellCheck={false}
+                />
               </View>
+            </View>
             )}
 
             {/* Start Time */}
@@ -742,9 +847,25 @@ export default function CreateEventScreen({ onBack, onEventCreated }: CreateEven
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Event Invite Modal */}
+      <Modal
+        visible={showInviteModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowInviteModal(false)}
+      >
+        <EventInviteScreen
+          invitedUsers={invitedUsers}
+          isEditMode={false}
+          onInvitesUpdated={handleInvitesUpdated}
+          onClose={() => setShowInviteModal(false)}
+        />
+      </Modal>
     </SafeAreaView>
   )
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -765,11 +886,17 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.1,
     shadowRadius: 4,
+    position: 'relative',
   },
   headerTitle: {
     fontSize: 20,
     fontWeight: '600',
     letterSpacing: -0.5,
+  },
+  closeButton: {
+    position: 'absolute',
+    right: 20,
+    padding: 4,
   },
   keyboardView: {
     flex: 1,

@@ -27,7 +27,6 @@ export default function EditProfileScreen({ navigation }: any) {
   const [colleges, setColleges] = useState<any[]>([])
   const [graduatingYear, setGraduatingYear] = useState('')
   const [bio, setBio] = useState('')
-  const [phoneNumber, setPhoneNumber] = useState('')
   const [profileImageUri, setProfileImageUri] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -84,7 +83,6 @@ export default function EditProfileScreen({ navigation }: any) {
           setCollegeId(profileData.college_id || '')
           setGraduatingYear(profileData.graduating_year || '')
           setBio(profileData.bio || '')
-          setPhoneNumber(profileData.phone_number || '')
           setProfileImageUri(profileData.avatar_url || null)
         }
       }
@@ -114,14 +112,6 @@ export default function EditProfileScreen({ navigation }: any) {
     } catch (error) {
       Alert.alert('Error', 'Failed to pick image')
     }
-  }
-
-  const formatUSPhone = (input: string) => {
-    const digits = (input || '').replace(/\D/g, '').slice(0, 10)
-    const len = digits.length
-    if (len <= 3) return digits
-    if (len <= 6) return `(${digits.slice(0,3)}) ${digits.slice(3)}`
-    return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`
   }
 
   const uploadProfileImage = async (uri: string) => {
@@ -174,7 +164,6 @@ export default function EditProfileScreen({ navigation }: any) {
             graduating_year: graduatingYear || null,
             bio: bio || null,
             avatar_url: avatarUrl || null,
-            phone_number: phoneNumber || null,
             updated_at: new Date().toISOString(),
           })
         if (profileError) throw profileError
@@ -309,21 +298,6 @@ export default function EditProfileScreen({ navigation }: any) {
                 })}
               </ScrollView>
               </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Phone Number</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter your phone number"
-                placeholderTextColor={theme.inputPlaceholder}
-                value={phoneNumber}
-                onChangeText={(t) => setPhoneNumber(formatUSPhone(t))}
-                keyboardType="phone-pad"
-                autoCorrect={false}
-                autoCapitalize="none"
-                maxLength={14}
-              />
-            </View>
 
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Bio</Text>

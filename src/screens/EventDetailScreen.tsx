@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect } from 'react'
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   ScrollView,
   Alert,
   Image,
+  Linking,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -14,8 +15,10 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import NotificationService from '../services/notifications'
 import ProfileModal from '../components/ProfileModal'
+import { buildHostUpdateNotification } from '../utils/notificationTemplates'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
+import { useOrgMode } from '../context/OrgModeContext'
 import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
 import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
 
@@ -43,7 +46,12 @@ type EventDetailRouteProp = RouteProp<RootStackParamList, 'EventDetail'>
 
 export default function EventDetailScreen() {
   const { theme } = useTheme()
+  const { isOrgMode } = useOrgMode()
   const navigation = useNavigation()
+  // Hide default navigation header to remove extra space
+  useLayoutEffect(() => {
+    ;(navigation as any).setOptions?.({ headerShown: false })
+  }, [navigation])
   const route = useRoute<EventDetailRouteProp>()
   const { event } = route.params
 
@@ -62,6 +70,7 @@ export default function EventDetailScreen() {
   const [selectedUser, setSelectedUser] = useState<any>(null)
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [hostProfile, setHostProfile] = useState<any>(null)
+  const [hostOrganization, setHostOrganization] = useState<any>(null)
   const [college, setCollege] = useState<any>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
@@ -77,15 +86,17 @@ export default function EventDetailScreen() {
       fetchCurrentUser()
       fetchAttendeesWithProfiles()
       fetchHostProfile()
+      fetchHostOrganization()
       fetchCollege()
     }
   }, [event?.id])
 
   useEffect(() => {
-    if (hostProfile && currentUserId) {
+    // Only check phone visibility for user hosts, not org hosts
+    if (hostProfile && currentUserId && !hostOrganization) {
       checkHostPhoneVisibility()
     }
-  }, [hostProfile, currentUserId])
+  }, [hostProfile, currentUserId, hostOrganization])
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -100,14 +111,24 @@ export default function EventDetailScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       setCurrentUserId(user?.id || null)
-      const hostStatus = user?.id === event.host_id
-      setIsHost(hostStatus)
       
-      // If user is host, automatically set them as "going"
-      if (hostStatus) {
-        setUserAttendance('going')
-        // Ensure host is added to attendees table
-        await ensureHostIsAttending()
+      // Check if this is an org event (from org_events table or has isOrgEvent flag)
+      // Org events don't have host_id, so check for that or the isOrgEvent flag
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      
+      if (!isOrgEvent) {
+        const hostStatus = user?.id === event.host_id
+        setIsHost(hostStatus)
+        
+        // If user is host, automatically set them as "going"
+        if (hostStatus) {
+          setUserAttendance('going')
+          // Ensure host is added to attendees table
+          await ensureHostIsAttending()
+        }
+      } else {
+        // For org events, user is never the host
+        setIsHost(false)
       }
     } catch (error) {
       console.error('Error fetching current user:', error)
@@ -150,9 +171,13 @@ export default function EventDetailScreen() {
     try {
       setLoading(true)
       
+      // Check if this is an org event
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+      
       // Use separate queries since the join syntax is not working
       const { data: attendeesData, error: attendeesError } = await supabase
-        .from('event_attendees')
+        .from(attendeesTable)
         .select('*')
         .eq('event_id', event.id)
 
@@ -182,9 +207,9 @@ export default function EventDetailScreen() {
       setAttendees(attendeesWithProfiles)
       setProfilesLoaded(true)
 
-      // Find current user's attendance status (only if not host)
+      // Find current user's attendance status (only if not host and not org event in org mode)
       const { data: { user } } = await supabase.auth.getUser()
-      if (user && !isHost) {
+      if (user && !isHost && !(isOrgMode && isOrgEvent)) {
         const userAttendance = attendeesWithProfiles.find(a => a.user_id === user.id)
         setUserAttendance(userAttendance?.status || null)
       }
@@ -199,6 +224,12 @@ export default function EventDetailScreen() {
 
   const fetchHostProfile = async () => {
     try {
+      // Only fetch user profile if this is not an org event
+      if ((event as any).org_id) {
+        setHostProfile(null)
+        return
+      }
+      
       const { data: profile, error } = await supabase
         .from('profiles')
         .select('id, full_name, avatar_url, bio, phone_number')
@@ -209,6 +240,27 @@ export default function EventDetailScreen() {
       setHostProfile(profile)
     } catch (error) {
       console.error('Error fetching host profile:', error)
+    }
+  }
+
+  const fetchHostOrganization = async () => {
+    try {
+      // Only fetch organization if this is an org event
+      if (!(event as any).org_id) {
+        setHostOrganization(null)
+        return
+      }
+      
+      const { data: org, error } = await supabase
+        .from('organizations')
+        .select('*')
+        .eq('id', (event as any).org_id)
+        .single()
+
+      if (error) throw error
+      setHostOrganization(org)
+    } catch (error) {
+      console.error('Error fetching host organization:', error)
     }
   }
 
@@ -278,6 +330,9 @@ export default function EventDetailScreen() {
 
       // Set up 2-minute delay for notification
       const newState = userAttendance === 'going' ? null : 'going'
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+      
       const timer = setTimeout(async () => {
         try {
           // Check current attendance state after 2 minutes
@@ -285,7 +340,7 @@ export default function EventDetailScreen() {
           if (!currentUser) return
 
           const { data: currentAttendance } = await supabase
-            .from('event_attendees')
+            .from(attendeesTable)
             .select('status')
             .eq('event_id', event.id)
             .eq('user_id', currentUser.id)
@@ -317,8 +372,12 @@ export default function EventDetailScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
+      // Check if this is an org event
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+
       const { error } = await supabase
-        .from('event_attendees')
+        .from(attendeesTable)
         .insert({
           event_id: event.id,
           user_id: user.id,
@@ -342,8 +401,12 @@ export default function EventDetailScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
+      // Check if this is an org event
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+
       const { error } = await supabase
-        .from('event_attendees')
+        .from(attendeesTable)
         .delete()
         .eq('event_id', event.id)
         .eq('user_id', user.id)
@@ -363,7 +426,66 @@ export default function EventDetailScreen() {
   const sendAttendanceChangeNotification = async (currentState: 'going' | null) => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user || !hostProfile) return
+      if (!user) return
+
+      // Check if this is an org event
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      
+      // For org events, send notification to org owner instead of host
+      if (isOrgEvent) {
+        if (!hostOrganization) return
+        
+        // Get org owner
+        const { data: orgOwner } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('org_ownership_id', hostOrganization.id)
+          .single()
+
+        if (!orgOwner || user.id === orgOwner.id) return // Don't notify if user is the org owner
+
+        // Get user's profile data for the notification
+        const { data: userProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .single()
+
+        const userName = userProfile?.full_name || 'A user'
+
+        // Use centralized notification builder
+        const notificationPayload = buildHostUpdateNotification({
+          userId: orgOwner.id,
+          eventId: event.id,
+          eventTitle: event.title,
+          userName: userName,
+          action: currentState === 'going' ? 'joined' : 'left',
+          additionalData: {
+            attendeeId: user.id
+          }
+        })
+
+        // Queue the notification instead of sending immediately
+        const { error: queueError } = await supabase
+          .from('notification_queue')
+          .insert({
+            user_id: notificationPayload.user_id,
+            event_id: notificationPayload.event_id,
+            type: notificationPayload.type,
+            title: notificationPayload.title,
+            body: notificationPayload.body,
+            scheduled_for: notificationPayload.scheduled_for,
+            data: notificationPayload.data
+          })
+
+        if (queueError) {
+          console.error('Error queuing org event host update notification:', queueError)
+        }
+        return
+      }
+
+      // For personal events, send to host
+      if (!hostProfile) return
 
       // Only send notification to the host (not to the user themselves)
       if (user.id === event.host_id) return
@@ -377,34 +499,33 @@ export default function EventDetailScreen() {
 
       const userName = userProfile?.full_name || 'A user'
 
-      if (currentState === 'going') {
-        // User is going
-        await NotificationService.sendNotification({
-          type: 'host_update',
-          eventId: event.id,
+      // Use centralized notification builder
+      const notificationPayload = buildHostUpdateNotification({
           userId: event.host_id,
-          title: 'Someone Joined Your Event',
-          body: `${userName} is now going to "${event.title}"`,
-          data: {
             eventId: event.id,
-            attendeeId: user.id,
-            action: 'joined'
+        eventTitle: event.title,
+        userName: userName,
+        action: currentState === 'going' ? 'joined' : 'left',
+        additionalData: {
+          attendeeId: user.id
           }
         })
-      } else {
-        // User is not going (removed themselves)
-        await NotificationService.sendNotification({
-          type: 'host_update',
-          eventId: event.id,
-          userId: event.host_id,
-          title: 'Someone Left Your Event',
-          body: `${userName} is no longer going to "${event.title}"`,
-          data: {
-            eventId: event.id,
-            attendeeId: user.id,
-            action: 'left'
-          }
+
+      // Queue the notification instead of sending immediately
+      const { error: queueError } = await supabase
+        .from('notification_queue')
+        .insert({
+          user_id: notificationPayload.user_id,
+          event_id: notificationPayload.event_id,
+          type: notificationPayload.type,
+          title: notificationPayload.title,
+          body: notificationPayload.body,
+          scheduled_for: notificationPayload.scheduled_for,
+          data: notificationPayload.data
         })
+
+      if (queueError) {
+        console.error('Error queuing host update notification:', queueError)
       }
     } catch (error) {
       console.error('Error sending attendance change notification:', error)
@@ -501,15 +622,17 @@ export default function EventDetailScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
+      {/* Minimal Top Bar with Back Button only */}
+      <SafeAreaView>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 2 }}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 6 }}>
+            <Ionicons name="arrow-back" size={24} color={theme.text} />
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Event Image */}
-        {event.image_url && (
-          <Image source={{ uri: event.image_url }} style={styles.eventImage} />
-        )}
-
-        {/* Event Content */}
-        <View style={styles.content}>
-          {/* College and Title */}
+        {/* Title and College ABOVE image */}
+        <View style={[styles.content, { paddingTop: 4, paddingBottom: 8 }]}>
           {college && (
             <View style={styles.collegeRow}>
               {college.logo_url && (
@@ -519,13 +642,9 @@ export default function EventDetailScreen() {
                   resizeMode="contain"
                 />
               )}
-              <Text style={[styles.collegeName, { color: theme.textSecondary }]}>
-                {college.name}
-              </Text>
+              <Text style={[styles.collegeName, { color: theme.textSecondary }]}> {college.name}</Text>
             </View>
           )}
-
-          {/* Title and Privacy */}
           <View style={styles.titleRow}>
             <Text style={[styles.eventTitle, { color: theme.text }]}>{event.title}</Text>
             {event.privacy === 'invite_only' && (
@@ -535,6 +654,15 @@ export default function EventDetailScreen() {
               </View>
             )}
           </View>
+        </View>
+
+        {/* Event Image */}
+        {event.image_url && (
+          <Image source={{ uri: event.image_url }} style={styles.eventImage} />
+        )}
+
+        {/* Event Content */}
+        <View style={styles.content}>
 
           {/* Description */}
           {event.description && (
@@ -542,35 +670,50 @@ export default function EventDetailScreen() {
           )}
 
           {/* Host Info */}
-          {hostProfile && (
+          {(hostProfile || hostOrganization) && (
             <View style={styles.hostSection}>
               <Text style={[styles.sectionTitle, { color: theme.text }]}>Hosted by</Text>
-              <TouchableOpacity 
-                style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                onPress={() => handleUserPress(hostProfile)}
-              >
-                <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
-                  {hostProfile.avatar_url ? (
-                    <Image source={{ uri: hostProfile.avatar_url }} style={styles.avatarImage} />
-                  ) : (
-                    <Ionicons name="person" size={24} color={theme.textSecondary} />
-                  )}
+              {hostOrganization ? (
+                <View style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                  <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
+                    {hostOrganization.icon ? (
+                      <Image source={{ uri: hostOrganization.icon }} style={styles.avatarImage} />
+                    ) : (
+                      <Ionicons name="business" size={24} color={theme.textSecondary} />
+                    )}
+                  </View>
+                  <View style={styles.hostNameRow}>
+                    <Text style={[styles.hostName, { color: theme.text }]}>{hostOrganization.name || 'Unknown Organization'}</Text>
+                  </View>
                 </View>
-                <View style={styles.hostNameRow}>
-                  <Text style={[styles.hostName, { color: theme.text }]}>{hostProfile.full_name || 'Unknown'}</Text>
-                  {isHost && (
-                    <View style={styles.hostBadge}>
-                      <Ionicons name="star" size={12} color="white" />
-                      <Text style={styles.hostBadgeText}>You</Text>
-                    </View>
-                  )}
-                </View>
-              </TouchableOpacity>
+              ) : hostProfile ? (
+                <TouchableOpacity 
+                  style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  onPress={() => handleUserPress(hostProfile)}
+                >
+                  <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
+                    {hostProfile.avatar_url ? (
+                      <Image source={{ uri: hostProfile.avatar_url }} style={styles.avatarImage} />
+                    ) : (
+                      <Ionicons name="person" size={24} color={theme.textSecondary} />
+                    )}
+                  </View>
+                  <View style={styles.hostNameRow}>
+                    <Text style={[styles.hostName, { color: theme.text }]}>{hostProfile.full_name || 'Unknown'}</Text>
+                    {isHost && (
+                      <View style={styles.hostBadge}>
+                        <Ionicons name="star" size={12} color="white" />
+                        <Text style={styles.hostBadgeText}>You</Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ) : null}
             </View>
           )}
 
-          {/* Event Details */}
-          <View style={[styles.detailsSection, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          {/* Event Details (no card background/border) */}
+          <View style={[styles.detailsSection, { backgroundColor: 'transparent', borderColor: 'transparent', borderWidth: 0, padding: 0 }]}>
             <View style={styles.detailRow}>
               <Ionicons name="calendar-outline" size={20} color={theme.primary} />
               <Text style={[styles.detailText, { color: theme.text }]}>{formatDate(event.event_date)}</Text>
@@ -579,7 +722,9 @@ export default function EventDetailScreen() {
             <View style={styles.detailRow}>
               <Ionicons name="time-outline" size={20} color={theme.warning} />
               <Text style={[styles.detailText, { color: theme.text }]}>
-                {formatEventTimeDisplay(event.start_time, event.end_time)}
+                {event.end_time
+                  ? `${formatTime(event.start_time)} - ${formatTime(event.end_time)}`
+                  : `${formatTime(event.start_time)}`}
               </Text>
               {event.end_time && isMidnightSpanningEvent(event.start_time, event.end_time) && (
                 <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
@@ -616,8 +761,8 @@ export default function EventDetailScreen() {
             </View>
           )}
 
-          {/* Attendance Actions */}
-          {!isHost && (
+          {/* Attendance Actions - Don't show in org mode for org events */}
+          {!isHost && !(isOrgMode && (event as any).isOrgEvent) && (
             <View style={styles.attendanceSection}>
               <Text style={[styles.sectionTitle, { color: theme.text }]}>Your Attendance</Text>
               {isEventFull() && !userAttendance ? (
@@ -655,8 +800,8 @@ export default function EventDetailScreen() {
                       </Text>
                     </TouchableOpacity>
                   </View>
-                  {/* Show loading placeholder while checking phone visibility to prevent flash */}
-                  {hostProfile?.phone_number && hostPhoneVisibilityLoading && (
+                  {/* Show loading placeholder while checking phone visibility to prevent flash (not for org events) */}
+                  {hostProfile?.phone_number && !hostOrganization && hostPhoneVisibilityLoading && (
                     <View style={styles.contactHostSection}>
                       <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
                         Or contact the host directly:
@@ -669,7 +814,7 @@ export default function EventDetailScreen() {
                   )}
 
                   {/* Only show phone number after loading completes and permission is granted */}
-                  {hostProfile?.phone_number && !hostPhoneVisibilityLoading && showHostPhone && (
+                  {hostProfile?.phone_number && !hostOrganization && !hostPhoneVisibilityLoading && showHostPhone && (
                     <View style={styles.contactHostSection}>
                       <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
                         Or contact the host directly:

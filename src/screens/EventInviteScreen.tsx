@@ -39,16 +39,33 @@ let globalSelectedUsers: string[] = []
 export const getSelectedUsers = () => globalSelectedUsers
 export const clearSelectedUsers = () => { globalSelectedUsers = [] }
 
-export default function EventInviteScreen() {
+interface EventInviteScreenProps {
+  invitedUsers?: string[]
+  isEditMode?: boolean
+  eventId?: string
+  onInvitesUpdated?: (invitedUsers: string[]) => void
+  onClose?: () => void
+}
+
+export default function EventInviteScreen(props?: EventInviteScreenProps) {
   const { theme } = useTheme()
   const navigation = useNavigation()
   const route = useRoute()
-  const { invitedUsers = [], isEditMode = false, eventId, onInvitesUpdated } = route.params as {
-    invitedUsers: string[]
-    isEditMode?: boolean
-    eventId?: string
-    onInvitesUpdated?: (invitedUsers: string[]) => void
+  
+  // Use props if provided (for modal), otherwise use route params (for navigation)
+  let routeParams: any = null
+  try {
+    routeParams = route.params
+  } catch (e) {
+    // Route might not be available in modal context
+    routeParams = null
   }
+  
+  const invitedUsers = props?.invitedUsers || routeParams?.invitedUsers || []
+  const isEditMode = props?.isEditMode || routeParams?.isEditMode || false
+  const eventId = props?.eventId || routeParams?.eventId
+  const onInvitesUpdated = props?.onInvitesUpdated || routeParams?.onInvitesUpdated
+  const handleClose = props?.onClose || (() => navigation.goBack())
 
   const [filteredFriends, setFilteredFriends] = useState<ProfileRow[]>([])
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set(invitedUsers))
@@ -169,7 +186,7 @@ export default function EventInviteScreen() {
       onInvitesUpdated(selectedArray)
     }
     
-    navigation.goBack()
+    handleClose()
   }
 
   const renderUser = ({ item }: { item: ProfileRow }) => {
@@ -257,7 +274,7 @@ export default function EventInviteScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={styles.backButton} onPress={handleClose}>
           <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>

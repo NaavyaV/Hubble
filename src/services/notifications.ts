@@ -3,9 +3,14 @@ import * as Device from 'expo-device'
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { supabase } from './supabase'
+import {
+  buildEventReminderNotification,
+  buildEventEditDeleteNotification,
+  buildBatchNotifications
+} from '../utils/notificationTemplates'
 
 // Helper function to trigger the Edge Function to process notifications
-async function triggerProcessNotifications(): Promise<void> {
+export async function triggerProcessNotifications(): Promise<void> {
   try {
     const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL
     if (!supabaseUrl) {
@@ -321,16 +326,16 @@ class NotificationService {
         return
       }
 
-      // Batch insert all reminder notifications
-      const notificationData = attendees.map(attendee => ({
-        user_id: attendee.user_id,
-        event_id: eventId,
-        type: 'event_reminder',
-        title: 'Event Starting Soon!',
-        body: `${eventTitle} starts in 15 minutes`,
-        scheduled_for: reminderTime.toISOString(),
-        data: { eventId, type: 'event_reminder' }
-      }))
+      // Batch insert all reminder notifications using centralized builder
+      const notificationData = buildBatchNotifications(
+        attendees.map(a => a.user_id),
+        buildEventReminderNotification,
+        {
+          eventId: eventId,
+          eventTitle: eventTitle,
+          scheduledFor: reminderTime
+        }
+      )
 
       const { error: insertError } = await supabase
         .from('notification_queue')
@@ -399,18 +404,28 @@ class NotificationService {
     eventId: string, 
     eventTitle: string, 
     hostId: string, 
-    action: 'edited' | 'deleted'
+    action: 'edited' | 'deleted',
+    isOrgEvent: boolean = false
   ): Promise<void> {
     try {
-      // Get all attendees for this event except the host
-      const { data: attendees, error } = await supabase
-        .from('event_attendees')
-        .select(`
-          user_id,
-          profiles!inner(full_name)
-        `)
-        .eq('event_id', eventId)
-        .neq('user_id', hostId)
+      let attendeesQuery
+      if (isOrgEvent) {
+        // For org events, fetch attendees from org_event_attendees
+        // Don't exclude anyone since orgs don't have individual hosts
+        attendeesQuery = supabase
+          .from('org_event_attendees')
+          .select('user_id')
+          .eq('event_id', eventId)
+      } else {
+        // For personal events, fetch from event_attendees and exclude host
+        attendeesQuery = supabase
+          .from('event_attendees')
+          .select('user_id')
+          .eq('event_id', eventId)
+          .neq('user_id', hostId)
+      }
+
+      const { data: attendees, error } = await attendeesQuery
 
       if (error) {
         console.error('Error fetching attendees:', error)
@@ -422,22 +437,22 @@ class NotificationService {
         return
       }
 
-      // Batch insert all notifications
-      const actionText = action === 'edited' ? 'edited' : 'deleted'
-      const emoji = action === 'edited' ? '✏️' : '🗑️'
-      
-      const notificationData = attendees.map(attendee => ({
-        user_id: attendee.user_id,
-        event_id: eventId,
-        type: 'event_edited_deleted',
-        title: `${emoji} Event ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
-        body: `"${eventTitle}" has been ${actionText} by the host`,
-        scheduled_for: new Date().toISOString(),
-        data: {
+      // Batch insert all notifications using centralized builder
+      // For org events, set event_id to null to avoid foreign key constraint violation
+      // (since org events are in org_events table, not events table)
+      const notificationData = buildBatchNotifications(
+        attendees.map(a => a.user_id),
+        buildEventEditDeleteNotification,
+        {
+          eventId: isOrgEvent ? null : eventId, // Set to null for org events
+          eventTitle: eventTitle,
           action: action,
-          eventTitle: eventTitle
+          isOrgEvent: isOrgEvent,
+          additionalData: {
+            ...(isOrgEvent ? { orgEventId: eventId } : {}) // Store org event ID in data instead
+          }
         }
-      }))
+      )
 
       const { error: insertError } = await supabase
         .from('notification_queue')

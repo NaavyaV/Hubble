@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -13,13 +13,17 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import ImageWithFallback from '../components/ImageWithFallback'
 import { useTheme } from '../context/ThemeContext'
+import { useOrgMode } from '../context/OrgModeContext'
+import { buildTestNotification } from '../utils/notificationTemplates'
 
 export default function ProfileScreen() {
   const navigation = useNavigation()
   const { theme } = useTheme()
+  const { setOrgMode, setTargetTab } = useOrgMode()
   const [user, setUser] = useState<any>(null)
   const [profile, setProfile] = useState<any>(null)
   const [college, setCollege] = useState<any>(null)
+  const [organization, setOrganization] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -54,6 +58,19 @@ export default function ProfileScreen() {
         } else {
           setProfile(profileData)
           setCollege(profileData.college)
+          
+          // Fetch organization if user owns one
+          if (profileData.org_ownership_id) {
+            const { data: orgData } = await supabase
+              .from('organizations')
+              .select('*')
+              .eq('id', profileData.org_ownership_id)
+              .single()
+            
+            if (orgData) {
+              setOrganization(orgData)
+            }
+          }
         }
       }
     } catch (error) {
@@ -88,16 +105,19 @@ export default function ProfileScreen() {
     navigation.navigate('EditProfile' as never)
   }
 
-  const handleMyEvents = () => {
-    navigation.navigate('MyEvents' as never)
-  }
-
   const handleNotifications = () => {
     navigation.navigate('NotificationSettings' as never)
   }
 
   const handleSettings = () => {
     navigation.navigate('Settings' as never)
+  }
+
+  const handleSwitchToOrgMode = () => {
+    if (organization) {
+      setTargetTab('OrgSettings')
+      setOrgMode(organization)
+    }
   }
 
   const handleTestNotification = async () => {
@@ -157,18 +177,11 @@ export default function ProfileScreen() {
       console.log('Step 4: Queuing test notification in Supabase...')
       console.log(logBorder)
       
-      const testNotificationData = {
-        user_id: user.id,
-        event_id: null,
-        type: 'event_reminder',
-        title: '🧪 Test Notification',
-        body: `Hello ${profile?.full_name || 'User'}! This is a test notification from Hubble.`,
-        scheduled_for: new Date().toISOString(), // Schedule for immediate processing
-        data: {
-          test: true,
-          timestamp: new Date().toISOString()
-        }
-      }
+      // Use centralized notification builder
+      const testNotificationData = buildTestNotification({
+        userId: user.id,
+        userName: profile?.full_name || 'User'
+      })
       
       console.log('Notification queue payload:', JSON.stringify(testNotificationData, null, 2))
       
@@ -188,9 +201,9 @@ export default function ProfileScreen() {
       console.log('Scheduled for:', queuedNotification.scheduled_for)
       console.log('Processed:', queuedNotification.processed)
       console.log(logBorder)
-      
+
       console.log('ℹ️  Notification will be processed automatically by Edge Function')
-      console.log('The database trigger will wait 2 seconds, then process all queued notifications')
+      console.log('The database trigger will process queued notifications immediately')
       console.log('Your notification should arrive shortly!')
       console.log(logBorder)
       
@@ -237,7 +250,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         {/* Compact Profile Card - Horizontal Layout */}
         <View style={styles.profileCard}>
           <View style={styles.profileLeft}>
@@ -308,11 +321,6 @@ export default function ProfileScreen() {
             <Text style={styles.menuItemArrow}>›</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.menuItem} onPress={handleMyEvents}>
-            <Text style={styles.menuItemText}>My Events</Text>
-            <Text style={styles.menuItemArrow}>›</Text>
-          </TouchableOpacity>
-
           <TouchableOpacity style={styles.menuItem} onPress={handleNotifications}>
             <Text style={styles.menuItemText}>Notifications</Text>
             <Text style={styles.menuItemArrow}>›</Text>
@@ -323,19 +331,29 @@ export default function ProfileScreen() {
             <Text style={styles.menuItemArrow}>›</Text>
           </TouchableOpacity>
         </View>
+      </ScrollView>
 
-        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
+      {/* Bottom Buttons - Fixed at bottom */}
+      <View style={[styles.bottomContainer, { backgroundColor: theme.background }]}>
+        {organization && (
+          <TouchableOpacity 
+            style={[styles.switchToOrgButton, { backgroundColor: theme.primary }]} 
+            onPress={handleSwitchToOrgMode}
+          >
+            <Text style={[styles.switchToOrgText, { color: theme.buttonText }]}>
+              Switch to {organization.name}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={[styles.testNotificationButton, { backgroundColor: theme.primary }]} onPress={handleTestNotification}>
           <Text style={[styles.testNotificationText, { color: theme.buttonText }]}>Send Test Notification</Text>
         </TouchableOpacity>
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Hubble v1.0.0</Text>
-        </View>
-      </ScrollView>
+        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   )
 }
@@ -356,6 +374,9 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 200, // Space for bottom buttons
   },
   profileCard: {
     backgroundColor: theme.card,
@@ -478,9 +499,15 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.textTertiary,
     fontWeight: 'bold',
   },
-  signOutButton: {
-    backgroundColor: theme.error,
-    marginHorizontal: 20,
+  bottomContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 20,
+    paddingBottom: 40,
+  },
+  switchToOrgButton: {
     marginBottom: 12,
     paddingVertical: 16,
     borderRadius: 12,
@@ -494,13 +521,11 @@ const createStyles = (theme: any) => StyleSheet.create({
     shadowRadius: 3.84,
     elevation: 5,
   },
-  signOutText: {
-    color: 'white',
+  switchToOrgText: {
     fontSize: 16,
     fontWeight: '600',
   },
   testNotificationButton: {
-    marginHorizontal: 20,
     marginBottom: 12,
     paddingVertical: 16,
     borderRadius: 12,
@@ -518,12 +543,23 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  footer: {
+  signOutButton: {
+    backgroundColor: theme.error,
+    paddingVertical: 16,
+    borderRadius: 12,
     alignItems: 'center',
-    paddingVertical: 20,
+    shadowColor: theme.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
-  footerText: {
-    fontSize: 12,
-    color: theme.textTertiary,
+  signOutText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 })

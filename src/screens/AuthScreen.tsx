@@ -137,14 +137,7 @@ export default function AuthScreen({ navigation }: any) {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={styles.resetPasswordButton}
-                  onPress={() => navigation.navigate('ResetPassword')}
-                >
-                  <Text style={[styles.resetPasswordButtonText, { color: theme.primary }]}>
-                    Forgot Password?
-                  </Text>
-                </TouchableOpacity>
+                {/* Forgot Password flow removed */}
               </View>
             </View>
           </ScrollView>
@@ -284,13 +277,5 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     backgroundColor: '#bdc3c7',
   },
-  resetPasswordButton: {
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  resetPasswordButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
+  
 })

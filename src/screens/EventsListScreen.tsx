@@ -22,32 +22,20 @@ import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { getEventEndDate, isEventEnded, isEventInFuture } from '../utils/eventTimeUtils'
 import GeneralPhotoGalleryScreen from './GeneralPhotoGalleryScreen'
+import { PREDEFINED_TAGS } from '../constants/tags'
 
 type EventListItem = EventWithAttendees & { goingCount: number; tags?: string[] }
 
-type FilterType = 'my_events' | 'all'
+type FilterType = 'all'
 type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
-type TimeFilterType = 'current' | 'past' | 'photo_gallery'
+type TimeFilterType = 'student' | 'org' | 'photo_gallery'
 
 interface AdvancedFilters {
   friendsOnly: boolean
   peopleGoing: boolean
-  hasCapacity: boolean
   last24Hours: boolean
   selectedTags: string[]
 }
-const predefinedTags = [
-  'Game Night',
-  'Study Session',
-  'Movie Night',
-  'Sports',
-  'Food & Dining',
-  'Music & Arts',
-  'Networking',
-  'Outdoor Activity',
-  'Workshop',
-  'Social Mixer'
-]
 
 const { height: screenHeight } = Dimensions.get('window')
 
@@ -58,9 +46,10 @@ export default function EventsListScreen() {
   const [filteredEvents, setFilteredEvents] = useState<EventListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
-  const [timeFilter, setTimeFilter] = useState<TimeFilterType>('current')
+  const [activeFilter] = useState<FilterType>('all')
+  const [timeFilter, setTimeFilter] = useState<TimeFilterType>('student')
   const [hostProfiles, setHostProfiles] = useState<Record<string, any>>({})
+  const [hostOrganizations, setHostOrganizations] = useState<Record<string, any>>({})
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userAttendances, setUserAttendances] = useState<Record<string, string>>({})
   const [userInvitations, setUserInvitations] = useState<Set<string>>(new Set())
@@ -70,11 +59,20 @@ export default function EventsListScreen() {
     const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
     friendsOnly: false,
     peopleGoing: false,
-    hasCapacity: false,
     last24Hours: false,
     selectedTags: [],
   })
   const [sortBy, setSortBy] = useState<SortType>('date_asc')
+  const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(new Set())
+
+  const toggleExpanded = (eventId: string) => {
+    setExpandedEventIds(prev => {
+      const next = new Set(prev)
+      if (next.has(eventId)) next.delete(eventId)
+      else next.add(eventId)
+      return next
+    })
+  }
 
   useEffect(() => {
     fetchEvents()
@@ -88,8 +86,8 @@ export default function EventsListScreen() {
   )
 
   useEffect(() => {
-    filterEvents(events, activeFilter)
-  }, [activeFilter, timeFilter, events, userAttendances, advancedFilters, sortBy])
+    filterEvents(events, 'all')
+  }, [timeFilter, events, userAttendances, advancedFilters, sortBy])
 
   const onRefresh = () => {
     setRefreshing(true)
@@ -126,8 +124,47 @@ export default function EventsListScreen() {
         getInvitedEventIds(user.id)
       ])
 
+      // Get events user is already attending (to exclude them)
+      const { data: userAttendancesData } = await supabase
+        .from('event_attendees')
+        .select('event_id')
+        .eq('user_id', user.id)
+        .eq('status', 'going')
+
+      const attendingEventIds = new Set((userAttendancesData || []).map(a => a.event_id))
+
+      // Also get org events user is attending (to exclude them)
+      const { data: orgUserAttendancesData } = await supabase
+        .from('org_event_attendees')
+        .select('event_id')
+        .eq('user_id', user.id)
+        .eq('status', 'going')
+
+      const attendingOrgEventIds = new Set((orgUserAttendancesData || []).map(a => a.event_id))
+
+      // Get orgs user is following to prioritize their events
+      const { data: followedOrgsData } = await supabase
+        .from('org_followers')
+        .select('org_id')
+        .eq('user_id', user.id)
+
+      const followedOrgIds = new Set((followedOrgsData || []).map(f => f.org_id))
+
+      // Get orgs user owns to keep all their events (even past ones)
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('org_ownership_id')
+        .eq('id', user.id)
+        .single()
+
+      const userOwnedOrgId = profile?.org_ownership_id || null
+      
+      if (__DEV__) {
+        console.log('User owned org ID:', userOwnedOrgId)
+      }
+
       // Run all event queries in parallel
-      const [publicEventsResult, hostedEventsResult, invitedEventsResult] = await Promise.all([
+      const [publicEventsResult, invitedEventsResult, orgEventsResult] = await Promise.all([
         supabase
           .from('events')
           .select(`
@@ -139,19 +176,7 @@ export default function EventsListScreen() {
             )
           `)
           .eq('privacy', 'public')
-          .order('event_date', { ascending: true }),
-        
-        supabase
-          .from('events')
-          .select(`
-            *,
-            attendees:event_attendees(
-              id,
-              user_id,
-              status
-            )
-          `)
-          .eq('host_id', user.id)
+          .neq('host_id', user.id) // Exclude events user is hosting
           .order('event_date', { ascending: true }),
         
         invitedEventIds.length > 0 ? supabase
@@ -166,29 +191,89 @@ export default function EventsListScreen() {
           `)
           .eq('privacy', 'invite_only')
           .in('id', invitedEventIds)
-          .order('event_date', { ascending: true }) : { data: [], error: null }
+          .neq('host_id', user.id) // Exclude events user is hosting
+          .order('event_date', { ascending: true }) : { data: [], error: null },
+        
+        // Fetch all org events from org_events table
+        supabase
+          .from('org_events')
+          .select(`
+            *,
+            attendees:org_event_attendees(
+              id,
+              user_id,
+              status
+            )
+          `)
+          .order('event_date', { ascending: true })
+          .order('start_time', { ascending: true })
       ])
 
       // Check for errors
       if (publicEventsResult.error) throw publicEventsResult.error
-      if (hostedEventsResult.error) throw hostedEventsResult.error
       if (invitedEventsResult.error) throw invitedEventsResult.error
+      if (orgEventsResult.error) throw orgEventsResult.error
 
       const publicEvents = publicEventsResult.data || []
-      const hostedEvents = hostedEventsResult.data || []
       const invitedEvents = invitedEventsResult.data || []
+      const orgEvents = (orgEventsResult.data || []).map(event => {
+        const userOwnsThisOrg = userOwnedOrgId === event.org_id
+        if (__DEV__ && userOwnsThisOrg) {
+          console.log('Found org event owned by user:', event.id, event.title, 'org_id:', event.org_id)
+        }
+        return {
+          ...event,
+          isOrgEvent: true, // Mark as org event
+          isFollowedOrg: followedOrgIds.has(event.org_id), // Mark if from followed org
+          userOwnsOrg: userOwnsThisOrg // Mark if user owns this org
+        }
+      })
+      
+      // Sort org events: followed orgs first, then others (both sorted by date)
+      orgEvents.sort((a, b) => {
+        const aFollowed = (a as any).isFollowedOrg ? 0 : 1
+        const bFollowed = (b as any).isFollowedOrg ? 0 : 1
+        if (aFollowed !== bFollowed) {
+          return aFollowed - bFollowed // Followed orgs come first
+        }
+        // If both are followed or both are not, sort by date
+        return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+      })
 
       // Combine all events and remove duplicates
-      const allEvents = [...publicEvents, ...hostedEvents, ...invitedEvents]
+      const allEvents = [...publicEvents, ...invitedEvents, ...orgEvents]
       const uniqueEvents = allEvents.filter((event, index, self) => 
         index === self.findIndex(e => e.id === event.id)
       )
 
-      // Calculate attendee counts
-      const eventsWithCounts = uniqueEvents.map(event => ({
+      // Filter out events user is already attending (both personal and org events)
+      const filteredEvents = uniqueEvents.filter(event => {
+        if ((event as any).isOrgEvent) {
+          return !attendingOrgEventIds.has(event.id)
+        }
+        return !attendingEventIds.has(event.id)
+      })
+
+      // Calculate attendee counts and filter by capacity
+      // Don't filter by timeFilter here - let filterEvents handle that
+      // This ensures all events are available for filtering
+      const eventsWithCounts = filteredEvents
+        .map(event => ({
         ...event,
         goingCount: event.attendees?.filter((a: any) => a.status === 'going').length || 0,
       }))
+        .filter(event => {
+          // Only show events that haven't reached max capacity (if defined)
+          // BUT keep all events if user owns the org (even if at capacity)
+          if ((event as any).isOrgEvent && (event as any).userOwnsOrg) {
+            return true // Keep all events user owns, regardless of capacity
+          }
+          if (event.max_attendees && event.max_attendees > 0) {
+            return event.goingCount < event.max_attendees
+          }
+          // If no max capacity, show the event
+          return true
+        })
 
       // Set events immediately for faster UI response
       setEvents(eventsWithCounts)
@@ -197,6 +282,7 @@ export default function EventsListScreen() {
       // Fetch additional data in parallel without blocking UI
       Promise.all([
         fetchHostProfiles(eventsWithCounts),
+        fetchHostOrganizations(eventsWithCounts),
         fetchAttendeeProfiles(eventsWithCounts),
         fetchEventPhotos(eventsWithCounts),
         fetchUserAttendances(eventsWithCounts),
@@ -245,7 +331,9 @@ export default function EventsListScreen() {
 
   const fetchHostProfiles = async (eventsList: EventWithAttendees[]) => {
     try {
-      const hostIds = [...new Set(eventsList.map(event => event.host_id))]
+      // Only fetch profiles for events that are NOT org events
+      const nonOrgEvents = eventsList.filter(event => !(event as any).org_id)
+      const hostIds = [...new Set(nonOrgEvents.map(event => event.host_id))]
       if (hostIds.length === 0) return
 
       const { data: profiles } = await supabase
@@ -263,6 +351,37 @@ export default function EventsListScreen() {
       }
     } catch (error) {
       console.error('Error fetching host profiles:', error)
+    }
+  }
+
+  const fetchHostOrganizations = async (eventsList: EventWithAttendees[]) => {
+    try {
+      // Fetch organizations for events that ARE org events
+      const orgEvents = eventsList.filter(event => (event as any).isOrgEvent)
+      if (orgEvents.length === 0) return
+
+      // Get unique org_ids from org events
+      const orgIds = [...new Set(orgEvents.map(event => (event as any).org_id).filter(Boolean))]
+      if (orgIds.length === 0) return
+
+      const { data: organizations } = await supabase
+        .from('organizations')
+        .select('id, name, icon, type')
+        .in('id', orgIds)
+
+      if (organizations) {
+        // Create a map: event.id -> organization
+        const orgsMap: Record<string, any> = {}
+        orgEvents.forEach(event => {
+          const org = organizations.find(o => o.id === (event as any).org_id)
+          if (org) {
+            orgsMap[event.id] = org
+          }
+        })
+        setHostOrganizations(orgsMap)
+      }
+    } catch (error) {
+      console.error('Error fetching host organizations:', error)
     }
   }
 
@@ -405,23 +524,41 @@ export default function EventsListScreen() {
     const filterEvents = (eventsList: EventListItem[], filter: FilterType) => {
     let filtered = [...eventsList]
 
-    // Apply time filter first (current vs past)
-    const now = new Date()
-    if (timeFilter === 'current') {
+    // Apply time filter first (student vs org)
+    // Note: Events are already filtered by type in fetchEvents, but we still need to filter by time
+    if (timeFilter === 'student') {
+      // Show all current personal events (not ended)
       filtered = filtered.filter(event => {
-        // Event is current if it hasn't ended yet
-        return !isEventEnded(event.event_date, event.start_time, event.end_time)
+        return !isEventEnded(event.event_date, event.start_time, event.end_time) && !(event as any).isOrgEvent
       })
-    } else if (timeFilter === 'past') {
-      // Calculate 30 days ago
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-      
+    } else if (timeFilter === 'org') {
+      // Show all org events
+      // BUT keep all events if user owns the org (including past ones)
       filtered = filtered.filter(event => {
-        const eventStart = new Date(event.event_date + ' ' + event.start_time)
-        const eventEnd = getEventEndDate(event.event_date, event.start_time, event.end_time)
-        
-        // Event must have ended and be within the last 30 days
-        return eventEnd < now && eventStart >= thirtyDaysAgo
+        if (!(event as any).isOrgEvent) return false
+        // If user owns this org, show ALL events (including past ones)
+        if ((event as any).userOwnsOrg) {
+          if (__DEV__) {
+            console.log('Keeping org event (user owns org):', event.id, event.title)
+          }
+          return true
+        }
+        // Otherwise, only show current/upcoming events
+        const isEnded = isEventEnded(event.event_date, event.start_time, event.end_time)
+        if (__DEV__ && isEnded) {
+          console.log('Filtering out ended org event:', event.id, event.title)
+        }
+        return !isEnded
+      })
+      // Preserve order: followed org events first, then others (both sorted by date)
+      filtered.sort((a, b) => {
+        const aFollowed = (a as any).isFollowedOrg ? 0 : 1
+        const bFollowed = (b as any).isFollowedOrg ? 0 : 1
+        if (aFollowed !== bFollowed) {
+          return aFollowed - bFollowed // Followed orgs come first
+        }
+        // If both are followed or both are not, sort by date
+        return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
       })
     }
 
@@ -437,10 +574,6 @@ export default function EventsListScreen() {
       filtered = filtered.filter(event => event.goingCount > 0)
     }
 
-    if (advancedFilters.hasCapacity) {
-      filtered = filtered.filter(event => event.max_attendees && event.max_attendees > 0)
-    }
-
     if (advancedFilters.last24Hours) {
       const yesterday = new Date()
       yesterday.setDate(yesterday.getDate() - 1)
@@ -454,46 +587,62 @@ export default function EventsListScreen() {
       )
     }
 
-    // Apply main filter
-    switch (filter) {
-      case 'my_events':
-        if (timeFilter === 'past') {
-          // In past events, only show events where user was going
-          filtered = filtered.filter(event => userAttendances[event.id] === 'going')
-        } else {
-          // In current events, show only going
-          filtered = filtered.filter(event => 
-            userAttendances[event.id] === 'going'
-          )
-        }
-        break
-    }
+    // Coming Events screen - no additional main filter needed
+    // Events are already filtered to exclude hosting and already attending
 
-    // Apply sorting
-    switch (sortBy) {
-      case 'date_asc':
-        filtered.sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime())
-        break
-      case 'date_desc':
-        filtered.sort((a, b) => new Date(b.event_date).getTime() - new Date(a.event_date).getTime())
-        break
-      case 'people_going':
-        filtered.sort((a, b) => b.goingCount - a.goingCount)
-        break
-      case 'recently_created':
-        filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        break
-      case 'alphabetical':
-        filtered.sort((a, b) => a.title.localeCompare(b.title))
-        break
+    // Apply sorting (but preserve followed org priority for org events)
+    if (timeFilter === 'org') {
+      // For org events, maintain followed org priority, then apply sorting within each group
+      filtered.sort((a, b) => {
+        const aFollowed = (a as any).isFollowedOrg ? 0 : 1
+        const bFollowed = (b as any).isFollowedOrg ? 0 : 1
+        if (aFollowed !== bFollowed) {
+          return aFollowed - bFollowed // Followed orgs come first
+        }
+        // Within same group (both followed or both not), apply sortBy
+        switch (sortBy) {
+          case 'date_asc':
+            return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+          case 'date_desc':
+            return new Date(b.event_date).getTime() - new Date(a.event_date).getTime()
+          case 'people_going':
+            return b.goingCount - a.goingCount
+          case 'recently_created':
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          case 'alphabetical':
+            return a.title.localeCompare(b.title)
+          default:
+            return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+        }
+      })
+    } else {
+      // For student events, apply normal sorting
+      switch (sortBy) {
+        case 'date_asc':
+          filtered.sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime())
+          break
+        case 'date_desc':
+          filtered.sort((a, b) => new Date(b.event_date).getTime() - new Date(a.event_date).getTime())
+          break
+        case 'people_going':
+          filtered.sort((a, b) => b.goingCount - a.goingCount)
+          break
+        case 'recently_created':
+          filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          break
+        case 'alphabetical':
+          filtered.sort((a, b) => a.title.localeCompare(b.title))
+          break
+      }
     }
 
     setFilteredEvents(filtered as EventListItem[])
   }
 
-  const renderPastEventCard = ({ item, hostProfile, userAttendance, isHost }: { 
+  const renderPastEventCard = ({ item, hostProfile, hostOrg, userAttendance, isHost }: { 
     item: EventListItem, 
-    hostProfile: any, 
+    hostProfile: any,
+    hostOrg: any,
     userAttendance: string | null, 
     isHost: boolean 
   }) => {
@@ -523,7 +672,7 @@ export default function EventsListScreen() {
           <View style={styles.pastEventInfo}>
             <Text style={styles.pastEventTitle}>{item.title}</Text>
             <Text style={styles.pastEventHost}>
-              Hosted by {hostProfile?.full_name || hostProfile?.username || 'Unknown'}
+              Hosted by {hostOrg ? hostOrg.name : (hostProfile?.full_name || hostProfile?.username || 'Unknown')}
             </Text>
             <Text style={styles.pastEventDate}>
               {formatDate(item.event_date)} • {formatTime(item.start_time)}
@@ -603,132 +752,100 @@ export default function EventsListScreen() {
     )
   }
 
-    const renderEventCard = ({ item }: { item: EventListItem }) => {
+  const renderEventCard = ({ item }: { item: EventListItem }) => {
     const hostProfile = hostProfiles[item.host_id]
+    // For org events, look up by event.id
+    const hostOrg = (item as any).isOrgEvent ? hostOrganizations[item.id] : null
     const userAttendance = userAttendances[item.id]
     const isInvited = userInvitations.has(item.id)
     const isHost = item.host_id === currentUserId
-
-    // Render specialized past event card
-    if (timeFilter === 'past') {
-      return renderPastEventCard({ item, hostProfile, userAttendance, isHost })
-    }
+    const isExpanded = expandedEventIds.has(item.id)
 
     return (
-      <TouchableOpacity
-        style={styles.eventCard}
-        onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
-      >
-        {/* Event Image */}
-        {item.image_url && (
-          <Image
-            source={{ uri: item.image_url }}
-            style={styles.eventImage}
-            resizeMode="cover"
-          />
+      <View style={styles.eventCard}>
+        {/* Compact header row */}
+        <TouchableOpacity
+          style={styles.compactHeader}
+          onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
+          activeOpacity={0.8}
+        >
+          <View style={styles.compactHeaderLeft}>
+            <Text style={styles.compactTitle} numberOfLines={1}>{item.title}</Text>
+            <Text style={styles.compactHost} numberOfLines={1}>
+              {hostOrg ? hostOrg.name : (hostProfile?.full_name || hostProfile?.username || 'Unknown')}
+            </Text>
+          </View>
+          <View style={styles.compactHeaderCenter}>
+            <View style={styles.compactRowLeftAligned}>
+              <Ionicons name="calendar" size={14} color="#e74c3c" />
+              <Text style={styles.compactMeta} numberOfLines={1}>{formatDate(item.event_date)}</Text>
+            </View>
+            <View style={styles.compactRowLeftAligned}>
+              <Ionicons name="time" size={14} color="#f39c12" />
+              <Text style={styles.compactMeta} numberOfLines={1}>{formatTime(item.start_time)}</Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.expandIcon}
+            onPress={() => toggleExpanded(item.id)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={theme.textSecondary} />
+          </TouchableOpacity>
+        </TouchableOpacity>
+
+        {/* Expanded content */}
+        {isExpanded && (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
+          >
+            {/* Optional image */}
+            {item.image_url && (
+              <Image
+                source={{ uri: item.image_url }}
+                style={styles.compactImage}
+                resizeMode="cover"
+              />
+            )}
+
+            {/* Description */}
+            {item.description ? (
+              <Text style={styles.compactDescription}>{item.description}</Text>
+            ) : null}
+
+            {/* Location */}
+            {item.location ? (
+              <View style={[
+                styles.compactLocationRow,
+                !item.description && { paddingTop: 10 }
+              ]}>
+                <Ionicons name="location" size={16} color="#27ae60" />
+                <Text style={styles.compactLocationText}>{item.location}</Text>
+              </View>
+            ) : null}
+
+            {/* Stats */}
+            <View style={styles.compactStatsRow}>
+              <View style={styles.compactRow}>
+                <Ionicons name="people" size={14} color="#27ae60" />
+                <Text style={styles.compactMeta}>{item.goingCount} going</Text>
+              </View>
+              {item.max_attendees ? (
+                <View style={styles.compactRow}>
+                  <Ionicons name="person-add" size={14} color="#3498db" />
+                  <Text style={styles.compactMeta}>
+                    {item.goingCount}/{item.max_attendees} spots
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </TouchableOpacity>
         )}
-
-        <View style={styles.eventContent}>
-          <View style={styles.eventHeader}>
-            <View style={styles.eventInfo}>
-              <Text style={styles.eventTitle}>{item.title}</Text>
-              <Text style={styles.eventHost}>
-                Hosted by {hostProfile?.full_name || hostProfile?.username || 'Unknown'}
-              </Text>
-            </View>
-            {isInvited && (
-              <View style={styles.invitedBadge}>
-                <Text style={styles.invitedText}>Invited</Text>
-              </View>
-            )}
-          </View>
-
-          <Text style={styles.eventDescription} numberOfLines={2}>
-            {item.description}
-          </Text>
-
-          {/* Event Tags */}
-          {item.tags && item.tags.length > 0 && (
-            <View style={styles.tagsContainer}>
-              {item.tags.slice(0, 3).map((tag, index) => (
-                <View key={index} style={styles.eventTag}>
-                  <Text style={styles.eventTagText}>{tag}</Text>
-                </View>
-              ))}
-              {item.tags.length > 3 && (
-                <View style={styles.eventTag}>
-                  <Text style={styles.eventTagText}>+{item.tags.length - 3}</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          <View style={styles.eventDetails}>
-            <View style={styles.eventDetail}>
-              <Ionicons name="calendar" size={16} color="#e74c3c" />
-              <Text style={styles.eventDetailText}>
-                {formatDate(item.event_date)}
-              </Text>
-            </View>
-            <View style={styles.eventDetail}>
-              <Ionicons name="time" size={16} color="#f39c12" />
-              <Text style={styles.eventDetailText}>
-                {formatTime(item.start_time)}
-              </Text>
-            </View>
-            <View style={styles.eventDetail}>
-              <Ionicons name="location" size={16} color="#27ae60" />
-              <Text style={styles.eventDetailText} numberOfLines={1}>
-                {item.location}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.eventStats}>
-            <View style={styles.statItem}>
-              <Ionicons name="people" size={16} color="#27ae60" />
-              <Text style={styles.statText}>{item.goingCount} going</Text>
-            </View>
-            {item.max_attendees && (
-              <View style={styles.statItem}>
-                <Ionicons name="person-add" size={16} color="#3498db" />
-                <Text style={styles.statText}>
-                  {item.goingCount}/{item.max_attendees} spots
-                </Text>
-              </View>
-            )}
-          </View>
-
-          {/* Show attendance status if user is going */}
-          {userAttendance === 'going' && (
-            <View style={styles.attendanceStatus}>
-              <Ionicons name="checkmark-circle" size={16} color="#27ae60" />
-              <Text style={styles.attendanceStatusText}>You're going</Text>
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
+      </View>
     )
   }
 
-  const renderFilterButton = (filter: FilterType, label: string) => (
-    <TouchableOpacity
-      style={[
-        styles.filterButton,
-        activeFilter === filter && styles.filterButtonActive,
-        filter === 'my_events' && activeFilter === filter && styles.myEventsButtonActive
-      ]}
-      onPress={() => setActiveFilter(filter)}
-    >
-      <Text style={[
-        styles.filterButtonText,
-        activeFilter === filter && styles.filterButtonTextActive,
-        filter === 'my_events' && activeFilter === filter && styles.myEventsTextActive
-      ]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  )
 
   const styles = createStyles(theme)
 
@@ -736,7 +853,7 @@ export default function EventsListScreen() {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading events...</Text>
+          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading events...</Text>
         </View>
       </SafeAreaView>
     )
@@ -746,96 +863,48 @@ export default function EventsListScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Unified Header with Scroll View */}
       <View style={[styles.unifiedHeader, { backgroundColor: theme.background }]}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.headerScrollContent}
-          scrollEnabled={true}
-          bounces={false}
-        >
+        <View style={[styles.tabContainer, { borderBottomColor: theme.border }]}>
           <TouchableOpacity
             style={[
-              styles.headerButton,
-              activeFilter === 'my_events' && timeFilter === 'current' && styles.headerButtonActive
+              styles.tab,
+              timeFilter === 'student' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
             ]}
             onPress={() => {
-              setTimeFilter('current')
-              setActiveFilter('my_events')
+              setTimeFilter('student')
             }}
           >
             <Text 
               style={[
-                styles.headerButtonText,
-                activeFilter === 'my_events' && timeFilter === 'current' && styles.headerButtonTextActive
+                styles.tabText,
+                { color: timeFilter === 'student' ? theme.primary : theme.textSecondary }
               ]}
             >
-              My Events
+              Student Events
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[
-              styles.headerButton,
-              timeFilter === 'current' && activeFilter === 'all' && styles.headerButtonActive
+              styles.tab,
+              timeFilter === 'org' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
             ]}
             onPress={() => {
-              setTimeFilter('current')
-              setActiveFilter('all')
+              setTimeFilter('org')
             }}
           >
             <Text 
               style={[
-                styles.headerButtonText,
-                timeFilter === 'current' && activeFilter === 'all' && styles.headerButtonTextActive
+                styles.tabText,
+                { color: timeFilter === 'org' ? theme.primary : theme.textSecondary }
               ]}
             >
-              Coming Events
+              Org Events
             </Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[
-              styles.headerButton,
-              timeFilter === 'past' && styles.headerButtonActive
-            ]}
-            onPress={() => {
-              setTimeFilter('past')
-              setActiveFilter('all')
-            }}
-          >
-            <Text 
-              style={[
-                styles.headerButtonText,
-                timeFilter === 'past' && styles.headerButtonTextActive
-              ]}
-            >
-              Past Events
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
+        </View>
         
-        {/* Floating buttons with fade effect */}
+        {/* Floating buttons without fade effect */}
         <View style={styles.floatingButtonsContainer}>
-          <LinearGradient
-            colors={[`${theme.headerBackground}00`, theme.headerBackground]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.fadeOverlay}
-          />
-          <TouchableOpacity
-            style={[
-              styles.floatingButton,
-              timeFilter === 'photo_gallery' && styles.floatingButtonDisabled
-            ]}
-            onPress={() => timeFilter !== 'photo_gallery' && setShowFilterModal(true)}
-            disabled={timeFilter === 'photo_gallery'}
-          >
-            <Ionicons 
-              name="options-outline" 
-              size={20} 
-              color={timeFilter === 'photo_gallery' ? theme.textTertiary : theme.textSecondary} 
-            />
-          </TouchableOpacity>
           <TouchableOpacity
             style={[
               styles.floatingButton,
@@ -866,7 +935,7 @@ export default function EventsListScreen() {
           style={styles.eventsFlatList}
           contentContainerStyle={[
             styles.eventsList,
-            filteredEvents.length === 0 && timeFilter === 'past' && styles.emptyStateContainer
+            filteredEvents.length === 0 && styles.emptyStateContainer
           ]}
           refreshControl={
             <RefreshControl
@@ -877,37 +946,23 @@ export default function EventsListScreen() {
             />
           }
           showsVerticalScrollIndicator={false}
+          extraData={expandedEventIds}
           ListEmptyComponent={
-            timeFilter === 'past' ? (
-              <View style={styles.pastEventsEmptyState}>
-                <Ionicons name="calendar-outline" size={48} color={theme.textSecondary} />
-                <Text style={styles.pastEventsEmptyTitle}>No Recent Events</Text>
-                <Text style={styles.pastEventsEmptyMessage}>
-                  You haven't attended any events in the past 30 days
+            timeFilter === 'org' ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
+                <Text style={[styles.emptyTitle, { color: theme.text }]}>No Org Events</Text>
+                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+                  Org events coming soon
                 </Text>
               </View>
-            ) : activeFilter === 'my_events' && timeFilter === 'current' ? (
-              <View style={styles.myEventsEmptyState}>
-                <Ionicons name="calendar-outline" size={48} color={theme.textSecondary} />
-                <Text style={styles.myEventsEmptyTitle}>No Events Yet</Text>
-                <Text style={styles.myEventsEmptyMessage}>
-                  You haven't signed up for any events yet!
-                </Text>
-              </View>
-            ) : timeFilter === 'current' && activeFilter === 'all' ? (
-              <View style={styles.comingEventsEmptyState}>
-                <Ionicons name="calendar-outline" size={48} color={theme.textSecondary} />
-                <Text style={styles.comingEventsEmptyTitle}>No Coming Events</Text>
-                <Text style={styles.comingEventsEmptyMessage}>
+            ) : timeFilter === 'student' ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
+                <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events</Text>
+                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
                   No upcoming events to show right now
                 </Text>
-                <TouchableOpacity 
-                  style={styles.createEventButton}
-                  onPress={() => (navigation as any).navigate('Host')}
-                >
-                  <Ionicons name="add" size={20} color="white" />
-                  <Text style={styles.createEventButtonText}>Create One!</Text>
-                </TouchableOpacity>
               </View>
             ) : null
           }
@@ -976,23 +1031,6 @@ export default function EventsListScreen() {
               <TouchableOpacity
                 style={[
                   styles.filterOption,
-                  advancedFilters.hasCapacity && styles.filterOptionActive
-                ]}
-                onPress={() => setAdvancedFilters(prev => ({
-                  ...prev,
-                  hasCapacity: !prev.hasCapacity
-                }))}
-              >
-                <Ionicons
-                  name={advancedFilters.hasCapacity ? 'checkbox' : 'square-outline'}
-                  size={20}
-                  color={advancedFilters.hasCapacity ? '#3498db' : '#bdc3c7'}
-                />
-                <Text style={styles.filterOptionText}>Has Capacity Limit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.filterOption,
                   advancedFilters.last24Hours && styles.filterOptionActive
                 ]}
                 onPress={() => setAdvancedFilters(prev => ({
@@ -1012,7 +1050,7 @@ export default function EventsListScreen() {
                         <View style={styles.filterSection}>
               <Text style={styles.filterSectionTitle}>Tags</Text>
               <View style={styles.tagsFilterContainer}>
-                {predefinedTags.map((tag) => (
+                {PREDEFINED_TAGS.map((tag) => (
                   <TouchableOpacity
                     key={tag}
                     style={[
@@ -1074,7 +1112,6 @@ export default function EventsListScreen() {
                 setAdvancedFilters({
                   friendsOnly: false,
                   peopleGoing: false,
-                  hasCapacity: false,
                   last24Hours: false,
                   selectedTags: [],
                 })
@@ -1122,8 +1159,28 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.background,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
     position: 'relative',
+  },
+  tabContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  headerButtonsContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    gap: 8,
   },
   headerScrollContent: {
     paddingHorizontal: 16,
@@ -1140,6 +1197,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
+  headerButtonEqual: {
+    flex: 1,
+    marginRight: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerButtonActive: {
     backgroundColor: theme.primary,
     borderColor: theme.primary,
@@ -1153,15 +1216,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: 'white',
   },
   floatingButtonsContainer: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
     flexDirection: 'row',
     alignItems: 'center',
     paddingRight: 16,
-    backgroundColor: theme.headerBackground,
-    width: 110,
     justifyContent: 'flex-end',
   },
   floatingButton: {
@@ -1249,15 +1306,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     paddingRight: 20,
     backgroundColor: theme.headerBackground,
-    width: 120,
+    width: 100,
     justifyContent: 'flex-end',
-  },
-  fadeOverlay: {
-    position: 'absolute',
-    left: -60,
-    top: 0,
-    bottom: 0,
-    width: 60,
   },
   filterIcon: {
     padding: 8,
@@ -1317,6 +1367,24 @@ const createStyles = (theme: any) => StyleSheet.create({
   emptyStateContainer: {
     flexGrow: 1,
     justifyContent: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyText: {
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 24,
+    paddingHorizontal: 32,
   },
   pastEventsEmptyState: {
     flex: 1,
@@ -1422,6 +1490,84 @@ const createStyles = (theme: any) => StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: theme.border,
+  },
+  // Compact card header
+  compactHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  compactHeaderLeft: {
+    flex: 4,
+    marginRight: 10,
+  },
+  compactHeaderCenter: {
+    width: 100,
+    alignItems: 'flex-start',
+    marginRight: 10,
+  },
+  compactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  compactRowLeftAligned: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  compactTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: theme.text,
+  },
+  compactHost: {
+    fontSize: 12,
+    color: theme.textSecondary,
+  },
+  compactMeta: {
+    fontSize: 12,
+    color: theme.textSecondary,
+    marginLeft: 6,
+    flexShrink: 1,
+  },
+  expandIcon: {
+    padding: 8,
+  },
+  compactImage: {
+    width: '100%',
+    height: 200,
+    backgroundColor: theme.surface,
+  },
+  compactDescription: {
+    fontSize: 13,
+    color: theme.textSecondary,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    lineHeight: 18,
+  },
+  compactLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    gap: 6,
+  },
+  compactLocationText: {
+    fontSize: 13,
+    color: theme.textSecondary,
+    lineHeight: 18,
+    flex: 1,
+  },
+  compactStatsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 10,
   },
   eventImage: {
     width: '100%',

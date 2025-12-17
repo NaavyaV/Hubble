@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Switch,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -18,6 +19,8 @@ import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
 import * as Notifications from 'expo-notifications'
+import notificationService from '../services/notifications'
+import * as Device from 'expo-device'
 
 interface OnboardingData {
   fullName: string
@@ -57,10 +60,57 @@ export default function OnboardingScreen({ navigation }: any) {
   const [colleges, setColleges] = useState<any[]>([])
   const [collegesLoading, setCollegesLoading] = useState(true)
   const [emailDomainError, setEmailDomainError] = useState(false)
+  const [skippedPhoneStep, setSkippedPhoneStep] = useState(false)
+
+  const isSkipAvailable = () => {
+    const step = steps[currentStep]
+    return step === 'bio' || step === 'profilePicture' || step === 'phoneNumber'
+  }
+
+  const handleSkip = () => {
+    const step = steps[currentStep]
+    if (step === 'bio') {
+      setData(prev => ({ ...prev, bio: '' }))
+      // Go to next step (profilePicture)
+      const idx = steps.indexOf('profilePicture')
+      if (idx >= 0) setCurrentStep(idx)
+      return
+    }
+    if (step === 'profilePicture') {
+      // Ensure no image and go to phone number
+      setData(prev => ({ ...prev, profileImageUri: null }))
+      const idx = steps.indexOf('phoneNumber')
+      if (idx >= 0) setCurrentStep(idx)
+      return
+    }
+    if (step === 'phoneNumber') {
+      // Clear phone and set phone privacy settings to minimal exposure, skip to notifications
+      setData(prev => ({
+        ...prev,
+        phoneNumber: '',
+        phoneVisibility: 'private',
+        phoneVisibleWhenHosting: false,
+      }))
+      setSkippedPhoneStep(true)
+      const nextIdx = steps.indexOf('notifications')
+      if (nextIdx >= 0) setCurrentStep(nextIdx)
+      return
+    }
+  }
 
   useEffect(() => {
     fetchColleges()
   }, [])
+
+  // Auto-request notification permissions when notifications step is shown
+  useEffect(() => {
+    // Step 8 is 'notifications' (0-indexed)
+    if (currentStep === 8) {
+      // Check and request permissions when step is shown
+      checkAndRequestNotificationPermissions()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep])
 
   const fetchColleges = async () => {
     try {
@@ -235,8 +285,47 @@ export default function OnboardingScreen({ navigation }: any) {
           return // Stay on current screen
         }
 
+        // Step 5: Save notification preferences
+        const notificationPreferences = {
+          user_id: authData.user.id,
+          push_notifications: data.notificationsEnabled,
+          event_reminders: data.notificationsEnabled,
+          going_status_updates: data.notificationsEnabled,
+          friend_requests: data.notificationsEnabled,
+          event_invitations: data.notificationsEnabled,
+          event_deletions: data.notificationsEnabled,
+        }
 
-        // Step 5: Navigate to verification screen with email and userId
+        const { error: prefError } = await supabase
+          .from('notification_preferences')
+          .insert(notificationPreferences)
+
+        if (prefError) {
+          // Log error but don't fail account creation
+          if (__DEV__) {
+            console.error('Error saving notification preferences:', prefError)
+          }
+        }
+
+        // Step 6: Request notification token if enabled and on a device
+        if (data.notificationsEnabled && Device.isDevice) {
+          try {
+            // Small delay to ensure preferences are saved
+            await new Promise(resolve => setTimeout(resolve, 200))
+            
+            const token = await notificationService.initialize()
+            if (token && __DEV__) {
+              console.log('Notification token obtained during onboarding:', token.substring(0, 20) + '...')
+            }
+          } catch (tokenError) {
+            // Log error but don't fail account creation
+            if (__DEV__) {
+              console.error('Error requesting notification token during onboarding:', tokenError)
+            }
+          }
+        }
+
+        // Step 7: Navigate to verification screen with email and userId
         navigation.navigate('AccountVerification', { 
           email: data.email.trim(),
           userId: authData.user.id
@@ -262,6 +351,16 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const handleBack = () => {
     if (currentStep > 0) {
+      // If we skipped phone steps and the user presses back from the step after privacy (notifications),
+      // take them directly to phone number entry
+      const stepsOrder = steps
+      if (skippedPhoneStep && stepsOrder[currentStep] === 'notifications') {
+        const phoneIdx = stepsOrder.indexOf('phoneNumber')
+        if (phoneIdx >= 0) {
+          setCurrentStep(phoneIdx)
+          return
+        }
+      }
       setCurrentStep(currentStep - 1)
     }
   }
@@ -397,21 +496,21 @@ export default function OnboardingScreen({ navigation }: any) {
     <View style={styles.stepContainer}>
       <Text style={[styles.stepTitle, { color: theme.text }]}>When do you graduate?</Text>
       <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Select your graduating year</Text>
-      <View style={styles.yearGrid}>
+      <View style={styles.yearList}>
         {graduatingYearOptions.map((year) => (
           <TouchableOpacity
             key={year}
             style={[
-              styles.yearButton,
+              styles.yearListButton,
               { backgroundColor: theme.surface, borderColor: theme.border },
               data.graduatingYear === year && { backgroundColor: theme.primary, borderColor: theme.primary }
             ]}
             onPress={() => updateData('graduatingYear', year)}
+            activeOpacity={0.8}
           >
             <Text style={[
-              styles.yearButtonText,
-              { color: theme.text },
-              data.graduatingYear === year && { color: theme.buttonText }
+              styles.yearListButtonText,
+              { color: data.graduatingYear === year ? theme.buttonText : theme.text }
             ]}>
               {year}
             </Text>
@@ -509,7 +608,7 @@ export default function OnboardingScreen({ navigation }: any) {
         spellCheck={false}
         textAlign="left"
       />
-      <Text style={[styles.privacyNote, { color: theme.textSecondary }]}>
+      <Text style={[styles.privacyNote, { color: theme.textSecondary }]}> 
         You can change your phone number privacy settings later in your profile
       </Text>
     </View>
@@ -627,6 +726,41 @@ export default function OnboardingScreen({ navigation }: any) {
     )
   }
 
+  const checkAndRequestNotificationPermissions = async () => {
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync()
+      
+      // If already granted, ensure toggle is on
+      if (existingStatus === 'granted') {
+        if (!data.notificationsEnabled) {
+          updateData('notificationsEnabled', true)
+        }
+        return true
+      }
+
+      // If undetermined or denied, request permission
+      if (existingStatus === 'undetermined') {
+        const { status } = await Notifications.requestPermissionsAsync()
+        
+        if (status === 'granted') {
+          updateData('notificationsEnabled', true)
+          return true
+        } else {
+          // Permission denied, set toggle to off
+          updateData('notificationsEnabled', false)
+          return false
+        }
+      }
+
+      // Permission was previously denied
+      updateData('notificationsEnabled', false)
+      return false
+    } catch (error) {
+      updateData('notificationsEnabled', false)
+      return false
+    }
+  }
+
   const requestNotificationPermissions = async () => {
     try {
       const { status: existingStatus } = await Notifications.getPermissionsAsync()
@@ -637,7 +771,12 @@ export default function OnboardingScreen({ navigation }: any) {
         finalStatus = status
       }
 
-      if (finalStatus !== 'granted') {
+      if (finalStatus === 'granted') {
+        updateData('notificationsEnabled', true)
+        return true
+      } else {
+        // Permission denied, ensure toggle is off
+        updateData('notificationsEnabled', false)
         Alert.alert(
           'Permission Required',
           'To receive notifications about events and friend requests, please enable notifications in your device settings.',
@@ -645,9 +784,8 @@ export default function OnboardingScreen({ navigation }: any) {
         )
         return false
       }
-
-      return true
     } catch (error) {
+      updateData('notificationsEnabled', false)
       return false
     }
   }
@@ -656,10 +794,8 @@ export default function OnboardingScreen({ navigation }: any) {
     const handleNotificationToggle = async () => {
       if (!data.notificationsEnabled) {
         // User is enabling notifications, request permissions
-        const hasPermission = await requestNotificationPermissions()
-        if (hasPermission) {
-          updateData('notificationsEnabled', true)
-        }
+        await requestNotificationPermissions()
+        // requestNotificationPermissions already handles updating the toggle state
       } else {
         // User is disabling notifications
         updateData('notificationsEnabled', false)
@@ -692,16 +828,19 @@ export default function OnboardingScreen({ navigation }: any) {
                 </Text>
               </View>
             </View>
-            <View style={[
-              styles.iosToggle,
-              { backgroundColor: data.notificationsEnabled ? theme.primary : theme.border }
-            ]}>
-              <View style={[
-                styles.iosToggleThumb,
-                { backgroundColor: theme.surface },
-                data.notificationsEnabled && styles.iosToggleThumbActive
-              ]} />
-            </View>
+            <Switch
+              value={data.notificationsEnabled}
+              onValueChange={async (val) => {
+                if (val) {
+                  await requestNotificationPermissions()
+                } else {
+                  updateData('notificationsEnabled', false)
+                }
+              }}
+              trackColor={{ false: theme.border, true: theme.primary }}
+              thumbColor={data.notificationsEnabled ? theme.buttonText : theme.textSecondary}
+              ios_backgroundColor={theme.border}
+            />
           </TouchableOpacity>
 
           <View style={[styles.notificationDetails, { borderTopColor: theme.border }]}>
@@ -891,6 +1030,15 @@ export default function OnboardingScreen({ navigation }: any) {
           >
             <Ionicons name="arrow-back" size={24} color={theme.text} />
           </TouchableOpacity>
+          {isSkipAvailable() && (
+            <TouchableOpacity 
+              style={[styles.skipTopButton, { backgroundColor: theme.buttonPrimary }]}
+              onPress={handleSkip}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.skipTopButtonText, { color: theme.buttonText }]}>Skip</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <ScrollView 
@@ -934,9 +1082,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
+    justifyContent: 'space-between',
   },
   backButton: {
     padding: 4,
+  },
+  skipTopButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  skipTopButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   content: {
     flex: 1,
@@ -1101,24 +1259,30 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   yearGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    marginTop: 20,
-    gap: 10,
+    // no longer used
   },
   yearButton: {
-    width: '30%',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    alignItems: 'center',
+    // no longer used
   },
   yearButtonText: {
+    // no longer used
+  },
+  yearList: {
+    width: '100%',
+    marginTop: 12,
+    gap: 10,
+  },
+  yearListButton: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  yearListButtonText: {
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   profileImageButton: {
     alignSelf: 'center',
