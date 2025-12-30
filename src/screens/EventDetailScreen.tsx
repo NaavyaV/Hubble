@@ -8,25 +8,29 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
+import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import NotificationService from '../services/notifications'
-import ProfileModal from '../components/ProfileModal'
+import { ProfileModal } from '../components'
 import { buildHostUpdateNotification } from '../utils/notificationTemplates'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
 import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
 import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
+import { deleteEventCompletely } from '../utils/eventDeletion'
+import EventInviteScreen from './EventInviteScreen'
+import { buildEventInvitationNotification, buildBatchNotifications } from '../utils/notificationTemplates'
 
 interface EventAttendee {
   id: string
   event_id: string
   user_id: string
-  status: 'going'
+  status: 'going' | 'maybe' | 'not_going'
   user?: {
     id?: string
     full_name?: string
@@ -64,7 +68,7 @@ export default function EventDetailScreen() {
     return []
   })
   
-  const [userAttendance, setUserAttendance] = useState<'going' | null>(null)
+  const [userAttendance, setUserAttendance] = useState<'going' | 'not_going' | null>(null)
   const [loading, setLoading] = useState(false)
   const [profilesLoaded, setProfilesLoaded] = useState(false)
   const [selectedUser, setSelectedUser] = useState<any>(null)
@@ -76,10 +80,15 @@ export default function EventDetailScreen() {
   const [isHost, setIsHost] = useState(false)
   const [showHostPhone, setShowHostPhone] = useState(false)
   const [hostPhoneVisibilityLoading, setHostPhoneVisibilityLoading] = useState(true)
+  const [isInvited, setIsInvited] = useState(false)
   const [pendingNotification, setPendingNotification] = useState<{
     timer: NodeJS.Timeout | null
     lastState: 'going' | null
   }>({ timer: null, lastState: null })
+  const [showOptionsModal, setShowOptionsModal] = useState(false)
+  const [showInviteModal, setShowInviteModal] = useState(false)
+  const [invitedUsers, setInvitedUsers] = useState<any[]>([])
+  const [notGoingAttendees, setNotGoingAttendees] = useState<EventAttendee[]>([])
 
   useEffect(() => {
     if (event && event.id) {
@@ -88,6 +97,10 @@ export default function EventDetailScreen() {
       fetchHostProfile()
       fetchHostOrganization()
       fetchCollege()
+      checkIfInvited()
+      if (event.privacy === 'invite_only') {
+        fetchInvitedUsers()
+      }
     }
   }, [event?.id])
 
@@ -205,13 +218,25 @@ export default function EventDetailScreen() {
       }))
       
       setAttendees(attendeesWithProfiles)
+      
+      // Separate not going attendees for display
+      const notGoing = attendeesWithProfiles.filter(a => a.status === 'not_going')
+      setNotGoingAttendees(notGoing)
+      
       setProfilesLoaded(true)
 
       // Find current user's attendance status (only if not host and not org event in org mode)
       const { data: { user } } = await supabase.auth.getUser()
       if (user && !isHost && !(isOrgMode && isOrgEvent)) {
         const userAttendance = attendeesWithProfiles.find(a => a.user_id === user.id)
-        setUserAttendance(userAttendance?.status || null)
+        // Set status based on attendance record
+        if (userAttendance?.status === 'going' || userAttendance?.status === 'maybe') {
+          setUserAttendance('going')
+        } else if (userAttendance?.status === 'not_going') {
+          setUserAttendance('not_going')
+        } else {
+          setUserAttendance(null)
+        }
       }
     } catch (error) {
       console.error('Error fetching attendees with profiles:', error)
@@ -299,13 +324,85 @@ export default function EventDetailScreen() {
     }
   }
 
+  const checkIfInvited = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        setIsInvited(false)
+        return
+      }
+
+      // Check if this is an org event - invitations don't apply to org events
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      if (isOrgEvent) {
+        setIsInvited(false)
+        return
+      }
+
+      const { data: invitation, error } = await supabase
+        .from('event_invitations')
+        .select('id')
+        .eq('event_id', event.id)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (error) throw error
+      setIsInvited(!!invitation)
+    } catch (error) {
+      console.error('Error checking if invited:', error)
+      setIsInvited(false)
+    }
+  }
+
+  const fetchInvitedUsers = async () => {
+    try {
+      const { data: invitations, error } = await supabase
+        .from('event_invitations')
+        .select('user_id')
+        .eq('event_id', event.id)
+
+      if (error) throw error
+
+      const invitedUserIds = (invitations || []).map(inv => inv.user_id)
+
+      if (invitedUserIds.length > 0) {
+        const { data: profiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, full_name, avatar_url')
+          .in('id', invitedUserIds)
+          .eq('otp_verified', true)
+
+        if (profilesError) throw profilesError
+        setInvitedUsers(profiles || [])
+      } else {
+        setInvitedUsers([])
+      }
+    } catch (error) {
+      console.error('Error fetching invited users:', error)
+      setInvitedUsers([])
+    }
+  }
+
   const handleAttendanceToggle = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
+      // If user is currently going, remove their attendance
+      if (userAttendance === 'going') {
+        await removeAttendance()
+        return
+      }
+
+      // If user is marked as "not going", they want to change to "going"
+      if (userAttendance === 'not_going') {
+        await addAttendance()
+        return
+      }
+
+      // User is not currently going, so add their attendance
       // Check if event is full and user is trying to go
-      if (!userAttendance && isEventFull()) {
+      if (isEventFull()) {
         Alert.alert(
           'Event Full',
           'This event has reached its maximum capacity.',
@@ -319,17 +416,11 @@ export default function EventDetailScreen() {
         clearTimeout(pendingNotification.timer)
       }
 
-      // Update attendance immediately in UI and database
-      if (userAttendance === 'going') {
-        // User is currently going, so remove their attendance (delete from database)
-        await removeAttendance()
-      } else {
-        // User is not currently going, so add their attendance
-        await addAttendance()
-      }
+      // Add attendance
+      await addAttendance()
 
       // Set up 2-minute delay for notification
-      const newState = userAttendance === 'going' ? null : 'going'
+      const newState = 'going'
       const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
       const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
       
@@ -346,7 +437,7 @@ export default function EventDetailScreen() {
             .eq('user_id', currentUser.id)
             .single()
 
-          const currentState = currentAttendance ? 'going' : null
+          const currentState = currentAttendance && (currentAttendance.status === 'going' || currentAttendance.status === 'maybe') ? 'going' : null
           
           // Only send notification if the state is different from what it was when the timer started
           if (currentState !== pendingNotification.lastState) {
@@ -376,15 +467,35 @@ export default function EventDetailScreen() {
       const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
       const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
 
-      const { error } = await supabase
+      // Check if attendance record already exists
+      const { data: existingAttendance } = await supabase
         .from(attendeesTable)
-        .insert({
-          event_id: event.id,
-          user_id: user.id,
-          status: 'going'
-        })
+        .select('id, status')
+        .eq('event_id', event.id)
+        .eq('user_id', user.id)
+        .maybeSingle()
 
-      if (error) throw error
+      if (existingAttendance) {
+        // Update existing record to 'going'
+        const { error } = await supabase
+          .from(attendeesTable)
+          .update({ status: 'going' })
+          .eq('event_id', event.id)
+          .eq('user_id', user.id)
+
+        if (error) throw error
+      } else {
+        // Create new record with 'going' status
+        const { error } = await supabase
+          .from(attendeesTable)
+          .insert({
+            event_id: event.id,
+            user_id: user.id,
+            status: 'going'
+          })
+
+        if (error) throw error
+      }
 
       setUserAttendance('going')
       
@@ -403,8 +514,85 @@ export default function EventDetailScreen() {
 
       // Check if this is an org event
       const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
-      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+      
+      // If user is invited (not org event), mark as "not going" instead of deleting
+      if (isInvited && !isOrgEvent) {
+        // Show confirmation alert
+        Alert.alert(
+          'Not Going',
+          'Are you sure you are not going to this event? The host will be notified.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Confirm',
+              style: 'destructive',
+              onPress: async () => {
+                try {
+                  const attendeesTable = 'event_attendees'
 
+                  // Check if attendance record already exists
+                  const { data: existingAttendance } = await supabase
+                    .from(attendeesTable)
+                    .select('id, status')
+                    .eq('event_id', event.id)
+                    .eq('user_id', user.id)
+                    .maybeSingle()
+
+                  if (existingAttendance) {
+                    // Update existing record to 'not_going'
+                    const { error } = await supabase
+                      .from(attendeesTable)
+                      .update({ status: 'not_going' })
+                      .eq('event_id', event.id)
+                      .eq('user_id', user.id)
+
+                    if (error) throw error
+                  } else {
+                    // Create new record with 'not_going' status
+                    const { error } = await supabase
+                      .from(attendeesTable)
+                      .insert({
+                        event_id: event.id,
+                        user_id: user.id,
+                        status: 'not_going'
+                      })
+
+                    if (error) throw error
+                  }
+
+                  setUserAttendance('not_going')
+                  
+                  // Send notification to host
+                  await sendNotGoingNotification()
+                  
+                  // Refresh attendees list
+                  await fetchAttendeesWithProfiles()
+                  
+                  // Exit the event page after confirming "not going"
+                  // Use canGoBack to check if we can navigate back, otherwise navigate to MyEvents
+                  if (navigation.canGoBack()) {
+                    navigation.goBack()
+                  } else {
+                    navigation.dispatch(
+                      CommonActions.navigate({
+                        name: 'Main',
+                        params: { screen: 'MyEvents' },
+                      })
+                    )
+                  }
+                } catch (error) {
+                  console.error('Error marking as not going:', error)
+                  Alert.alert('Error', 'Failed to mark as not going')
+                }
+              }
+            }
+          ]
+        )
+        return
+      }
+
+      // For non-invited events or org events, just delete the attendance record
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
       const { error } = await supabase
         .from(attendeesTable)
         .delete()
@@ -421,6 +609,329 @@ export default function EventDetailScreen() {
       console.error('Error removing attendance:', error)
       Alert.alert('Error', 'Failed to remove attendance')
     }
+  }
+
+  const handleNotGoing = async () => {
+    // If user is already marked as "not going", allow them to change to "going"
+    if (userAttendance === 'not_going') {
+      // User wants to mark as going - show alert confirmation
+      Alert.alert(
+        'Mark as Going',
+        'Do you want to mark yourself as going to this event?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Yes, I\'m Going',
+            onPress: async () => {
+              await addAttendance()
+            }
+          }
+        ]
+      )
+      return
+    }
+
+    // User wants to mark as "not going" - show confirmation
+    Alert.alert(
+      'Not Going',
+      'Are you sure you are not going to this event? The host will be notified.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) return
+
+              // Check if this is an org event
+              const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+              const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+
+              // Check if attendance record already exists
+              const { data: existingAttendance } = await supabase
+                .from(attendeesTable)
+                .select('id, status')
+                .eq('event_id', event.id)
+                .eq('user_id', user.id)
+                .maybeSingle()
+
+              if (existingAttendance) {
+                // Update existing record to 'not_going'
+                const { error } = await supabase
+                  .from(attendeesTable)
+                  .update({ status: 'not_going' })
+                  .eq('event_id', event.id)
+                  .eq('user_id', user.id)
+
+                if (error) throw error
+              } else {
+                // Create new record with 'not_going' status
+                const { error } = await supabase
+                  .from(attendeesTable)
+                  .insert({
+                    event_id: event.id,
+                    user_id: user.id,
+                    status: 'not_going'
+                  })
+
+                if (error) throw error
+              }
+
+              setUserAttendance('not_going')
+              
+              // Send notification to host (only for invited users and only for personal events)
+              if (isInvited && !isOrgEvent) {
+                await sendNotGoingNotification()
+              }
+              
+              // Refresh attendees list
+              await fetchAttendeesWithProfiles()
+              
+              // Exit the event page after confirming "not going"
+              // Use canGoBack to check if we can navigate back, otherwise navigate to MyEvents
+              if (navigation.canGoBack()) {
+                navigation.goBack()
+              } else {
+                navigation.dispatch(
+                  CommonActions.navigate({
+                    name: 'Main',
+                    params: { screen: 'MyEvents' },
+                  })
+                )
+              }
+            } catch (error) {
+              console.error('Error marking as not going:', error)
+              Alert.alert('Error', 'Failed to mark as not going')
+            }
+          }
+        }
+      ]
+    )
+  }
+
+  const sendNotGoingNotification = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !event.host_id || user.id === event.host_id) return
+
+      // Get user's profile data for the notification
+      const { data: userProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .single()
+
+      const userName = userProfile?.full_name || 'A user'
+
+      // Use buildHostUpdateNotification with action 'left' (we'll customize the message)
+      const notificationPayload = buildHostUpdateNotification({
+        userId: event.host_id,
+        eventId: event.id,
+        eventTitle: event.title,
+        userName: userName,
+        action: 'left',
+        additionalData: {
+          attendeeId: user.id,
+          declinedInvitation: true
+        }
+      })
+
+      // Customize the notification message for declined invitations
+      notificationPayload.title = `${userName} Declined Your Invitation`
+      notificationPayload.body = `${userName} is not going to "${event.title || 'your event'}"`
+
+      // Queue the notification
+      const { error: queueError } = await supabase
+        .from('notification_queue')
+        .insert({
+          user_id: notificationPayload.user_id,
+          event_id: notificationPayload.event_id,
+          type: notificationPayload.type,
+          title: notificationPayload.title,
+          body: notificationPayload.body,
+          scheduled_for: notificationPayload.scheduled_for,
+          data: notificationPayload.data
+        })
+
+      if (queueError) {
+        console.error('Error queuing not going notification:', queueError)
+      }
+    } catch (error) {
+      console.error('Error sending not going notification:', error)
+    }
+  }
+
+  const handleInvitesUpdated = async (newInvitedUsers: string[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !isHost) return
+
+      setShowInviteModal(false)
+
+      // Get current invited user IDs
+      const currentInvitedIds = invitedUsers.map(u => u.id)
+      
+      // Find newly added users (users in newInvitedUsers but not in currentInvitedIds)
+      const newUsers = newInvitedUsers.filter(id => !currentInvitedIds.includes(id))
+
+      if (newUsers.length === 0) {
+        // No new users to invite
+        await fetchInvitedUsers()
+        await fetchAttendeesWithProfiles()
+        return
+      }
+
+      // Filter out the host
+      const usersToInvite = newUsers.filter(userId => userId !== user.id)
+
+      if (usersToInvite.length === 0) {
+        await fetchInvitedUsers()
+        await fetchAttendeesWithProfiles()
+        return
+      }
+
+      // Create invitation records
+      const invitations = usersToInvite.map(userId => ({
+        event_id: event.id,
+        user_id: userId,
+        invited_by: user.id
+      }))
+
+      const { error: inviteError } = await supabase
+        .from('event_invitations')
+        .insert(invitations)
+
+      if (inviteError) {
+        console.error('Error creating invitations:', inviteError)
+        Alert.alert('Error', 'Failed to send invitations')
+        return
+      }
+
+      // Get host's profile for notification
+      const { data: hostProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .single()
+
+      const hostName = hostProfile?.full_name || 'Someone'
+
+      // Send notifications
+      if (event.privacy === 'invite_only') {
+        // For private events, send invitation notifications
+        const notificationData = buildBatchNotifications(
+          usersToInvite,
+          buildEventInvitationNotification,
+          {
+            eventId: event.id,
+            hostName: hostName,
+            eventTitle: event.title,
+            privacy: 'invite_only',
+            additionalData: {
+              hostId: user.id
+            }
+          }
+        )
+
+        const { error: notificationError } = await supabase
+          .from('notification_queue')
+          .insert(notificationData)
+
+        if (notificationError) {
+          console.error('Error queuing notifications:', notificationError)
+        }
+      } else {
+        // For public events, send event created notifications
+        const notificationData = buildBatchNotifications(
+          usersToInvite,
+          buildEventInvitationNotification,
+          {
+            eventId: event.id,
+            hostName: hostName,
+            eventTitle: event.title,
+            privacy: 'public',
+            additionalData: {
+              hostId: user.id
+            }
+          }
+        )
+
+        const { error: notificationError } = await supabase
+          .from('notification_queue')
+          .insert(notificationData)
+
+        if (notificationError) {
+          console.error('Error queuing notifications:', notificationError)
+        }
+      }
+
+      // Refresh the invited users list and attendees
+      await fetchInvitedUsers()
+      await fetchAttendeesWithProfiles()
+    } catch (error) {
+      console.error('Error handling invites update:', error)
+      Alert.alert('Error', 'Failed to update invitations')
+    }
+  }
+
+  const handleDeleteEvent = async () => {
+    // Only allow deletion if user is hosting this event
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user || !isHost) {
+      Alert.alert('Error', 'You can only delete events you are hosting')
+      return
+    }
+
+    // Check if this is an org event
+    const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+
+    Alert.alert(
+      'Delete Event',
+      'Are you sure you want to delete this event? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Send notifications to all attendees except host before deleting
+              await NotificationService.sendEventEditDeleteNotification(
+                event.id,
+                event.title,
+                event.host_id,
+                'deleted'
+              )
+
+              // Delete the event and ALL associated data
+              if (isOrgEvent) {
+                const { deleteOrgEventCompletely } = await import('../utils/eventDeletion')
+                await deleteOrgEventCompletely(event.id)
+              } else {
+                await deleteEventCompletely(event.id)
+              }
+
+              // Navigate back after deletion
+              if (navigation.canGoBack()) {
+                navigation.goBack()
+              } else {
+                navigation.dispatch(
+                  CommonActions.navigate({
+                    name: 'Main',
+                    params: { screen: 'MyEvents' },
+                  })
+                )
+              }
+            } catch (error) {
+              console.error('Error deleting event:', error)
+              Alert.alert('Error', 'Failed to delete event')
+            }
+          }
+        }
+      ]
+    )
   }
 
   const sendAttendanceChangeNotification = async (currentState: 'going' | null) => {
@@ -444,14 +955,25 @@ export default function EventDetailScreen() {
 
         if (!orgOwner || user.id === orgOwner.id) return // Don't notify if user is the org owner
 
-        // Get user's profile data for the notification
-        const { data: userProfile } = await supabase
+        // Get user's profile data for the notification - ensure it loads before proceeding
+        const { data: userProfile, error: profileError } = await supabase
           .from('profiles')
           .select('full_name')
           .eq('id', user.id)
           .single()
 
-        const userName = userProfile?.full_name || 'A user'
+        if (profileError) {
+          console.error('Error fetching user profile for notification:', profileError)
+          return
+        }
+
+        // Ensure we have the user name before sending notification
+        if (!userProfile?.full_name) {
+          console.warn('User profile name not available, skipping notification')
+          return
+        }
+
+        const userName = userProfile.full_name
 
         // Use centralized notification builder
         const notificationPayload = buildHostUpdateNotification({
@@ -490,26 +1012,37 @@ export default function EventDetailScreen() {
       // Only send notification to the host (not to the user themselves)
       if (user.id === event.host_id) return
 
-      // Get user's profile data for the notification
-      const { data: userProfile } = await supabase
+      // Get user's profile data for the notification - ensure it loads before proceeding
+      const { data: userProfile, error: profileError } = await supabase
         .from('profiles')
         .select('full_name')
         .eq('id', user.id)
         .single()
 
-      const userName = userProfile?.full_name || 'A user'
+      if (profileError) {
+        console.error('Error fetching user profile for notification:', profileError)
+        return
+      }
+
+      // Ensure we have the user name before sending notification
+      if (!userProfile?.full_name) {
+        console.warn('User profile name not available, skipping notification')
+        return
+      }
+
+      const userName = userProfile.full_name
 
       // Use centralized notification builder
       const notificationPayload = buildHostUpdateNotification({
-          userId: event.host_id,
-            eventId: event.id,
+        userId: event.host_id,
+        eventId: event.id,
         eventTitle: event.title,
         userName: userName,
         action: currentState === 'going' ? 'joined' : 'left',
         additionalData: {
           attendeeId: user.id
-          }
-        })
+        }
+      })
 
       // Queue the notification instead of sending immediately
       const { error: queueError } = await supabase
@@ -593,12 +1126,12 @@ export default function EventDetailScreen() {
             )}
           </View>
           <Text style={[styles.attendeeStatus, { color: theme.textSecondary }]}>
-            Going
+            {attendee.status === 'not_going' ? 'Not Going' : 'Going'}
           </Text>
         </View>
         <View style={[
           styles.statusIndicator,
-          { backgroundColor: theme.success }
+          { backgroundColor: attendee.status === 'not_going' ? theme.error : theme.success }
         ]} />
       </TouchableOpacity>
     )
@@ -622,11 +1155,14 @@ export default function EventDetailScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* Minimal Top Bar with Back Button only */}
-      <SafeAreaView>
-        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 2 }}>
+      {/* Minimal Top Bar with Back Button and Options */}
+      <SafeAreaView edges={['top']}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, paddingVertical: 0 }}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 6 }}>
             <Ionicons name="arrow-back" size={24} color={theme.text} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowOptionsModal(true)} style={{ padding: 6 }}>
+            <Ionicons name="ellipsis-horizontal" size={24} color={theme.text} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -829,31 +1365,111 @@ export default function EventDetailScreen() {
                   )}
                 </View>
               ) : (
-                <View style={styles.singleAttendanceButton}>
-                  <TouchableOpacity
-                    style={[
-                      styles.goingButton,
-                      { 
-                        backgroundColor: userAttendance === 'going' ? theme.surface : theme.primary, 
-                        borderColor: userAttendance === 'going' ? theme.border : theme.primary 
-                      }
-                    ]}
-                    onPress={handleAttendanceToggle}
-                  >
-                    <Ionicons 
-                      name={userAttendance === 'going' ? "checkmark-circle-outline" : "checkmark-circle"} 
-                      size={24} 
-                      color={userAttendance === 'going' ? theme.success : theme.buttonText} 
-                    />
-                    <Text style={[
-                      styles.goingButtonText,
-                      { 
-                        color: userAttendance === 'going' ? theme.text : theme.buttonText 
-                      }
-                    ]}>
-                      {userAttendance === 'going' ? "I'm Going (Tap to Remove)" : "I'm Going"}
-                    </Text>
-                  </TouchableOpacity>
+                <View style={styles.attendanceButtonsContainer}>
+                  {userAttendance === 'not_going' ? (
+                    // When marked as "not going", show only full-width "Not Going" button
+                    <TouchableOpacity
+                      style={[
+                        styles.notGoingButton,
+                        { 
+                          backgroundColor: theme.surface,
+                          borderColor: theme.error,
+                          width: '100%'
+                        }
+                      ]}
+                      onPress={handleNotGoing}
+                    >
+                      <Ionicons 
+                        name="close-circle" 
+                        size={24} 
+                        color={theme.error} 
+                      />
+                      <Text style={[
+                        styles.notGoingButtonText,
+                        { color: theme.error }
+                      ]}>
+                        Not Going (Tap to Mark Going)
+                      </Text>
+                    </TouchableOpacity>
+                  ) : userAttendance === 'going' ? (
+                    // When marked as "going", show only full-width "I'm Going" button (hide "Not Going")
+                    <TouchableOpacity
+                      style={[
+                        styles.goingButton,
+                        { 
+                          backgroundColor: theme.surface, 
+                          borderColor: theme.border,
+                          width: '100%'
+                        }
+                      ]}
+                      onPress={handleAttendanceToggle}
+                    >
+                      <Ionicons 
+                        name="checkmark-circle-outline" 
+                        size={24} 
+                        color={theme.success} 
+                      />
+                      <Text style={[
+                        styles.goingButtonText,
+                        { color: theme.text }
+                      ]}>
+                        I'm Going (Tap to Remove)
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    // When no status, show "I'm Going" button (and "Not Going" if invited)
+                    <>
+                      <TouchableOpacity
+                        style={[
+                          styles.goingButton,
+                          { 
+                            backgroundColor: theme.primary, 
+                            borderColor: theme.primary,
+                            flex: 1,
+                            marginRight: isInvited ? 8 : 0
+                          }
+                        ]}
+                        onPress={handleAttendanceToggle}
+                      >
+                        <Ionicons 
+                          name="checkmark-circle" 
+                          size={24} 
+                          color={theme.buttonText} 
+                        />
+                        <Text style={[
+                          styles.goingButtonText,
+                          { color: theme.buttonText }
+                        ]}>
+                          I'm Going
+                        </Text>
+                      </TouchableOpacity>
+                      {isInvited && (
+                        <TouchableOpacity
+                          style={[
+                            styles.notGoingButton,
+                            { 
+                              backgroundColor: theme.surface,
+                              borderColor: theme.error,
+                              flex: 1
+                            }
+                          ]}
+                          onPress={handleNotGoing}
+                        >
+                          <Ionicons 
+                            name="close-circle-outline" 
+                            size={24} 
+                            color={theme.error} 
+                          />
+                          <Text style={[
+                            styles.notGoingButtonText,
+                            { color: theme.error }
+                          ]}>
+                            Not Going
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  )}
                 </View>
               )}
             </View>
@@ -904,9 +1520,223 @@ export default function EventDetailScreen() {
               </View>
             )}
           </View>
+
+          {/* Not Going Section - Only for private events */}
+          {event.privacy === 'invite_only' && notGoingAttendees.length > 0 && (
+            <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, borderColor: theme.border, marginTop: 16 }]}>
+              <View style={styles.attendeesHeader}>
+                <Text style={[styles.attendeesTitle, { color: theme.text }]}>Who's Not Going</Text>
+                <View style={styles.attendeeStats}>
+                  <Text style={[styles.attendeeStatsText, { color: theme.textSecondary }]}>
+                    {notGoingAttendees.length} not going
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.attendeesList}>
+                {notGoingAttendees.map(renderAttendee)}
+              </View>
+            </View>
+          )}
+
+          {/* Invited Section - Only for private events */}
+          {event.privacy === 'invite_only' && (() => {
+            // Filter out users who are already going or not going
+            const pendingInvitedUsers = invitedUsers.filter((user) => {
+              const isGoing = attendees.some(a => a.user_id === user.id && a.status === 'going')
+              const isNotGoing = attendees.some(a => a.user_id === user.id && a.status === 'not_going')
+              return !isGoing && !isNotGoing
+            })
+            
+            if (pendingInvitedUsers.length === 0) return null
+            
+            return (
+              <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, borderColor: theme.border, marginTop: 16 }]}>
+                <View style={styles.attendeesHeader}>
+                  <Text style={[styles.attendeesTitle, { color: theme.text }]}>Who's Invited</Text>
+                  <View style={styles.attendeeStats}>
+                    <Text style={[styles.attendeeStatsText, { color: theme.textSecondary }]}>
+                      {pendingInvitedUsers.length} invited
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.attendeesList}>
+                  {pendingInvitedUsers.map((user) => (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={styles.attendeeItem}
+                      onPress={() => handleUserPress(user)}
+                    >
+                      <View style={styles.attendeeAvatar}>
+                        {user.avatar_url ? (
+                          <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
+                        ) : (
+                          <Ionicons name="person" size={24} color={theme.textSecondary} />
+                        )}
+                      </View>
+                      <View style={styles.attendeeInfo}>
+                        <Text style={[styles.attendeeName, { color: theme.text }]}>{user.full_name || 'Unknown'}</Text>
+                        <Text style={[styles.attendeeStatus, { color: theme.textSecondary }]}>Invited</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )
+          })()}
         </View>
       </View>
       </ScrollView>
+
+      {/* Options Modal */}
+      <Modal
+        visible={showOptionsModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowOptionsModal(false)}
+      >
+        <TouchableOpacity 
+          style={styles.menuOverlay}
+          activeOpacity={1}
+          onPress={() => setShowOptionsModal(false)}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+            style={[styles.menuContent, { backgroundColor: theme.card, borderColor: theme.border }]}
+          >
+            <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <Text style={[styles.menuTitle, { color: theme.text }]}>
+                {isHost ? 'Event Options' : 'Options'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowOptionsModal(false)}>
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.menuItemsContainer}>
+              {isHost ? (
+                <>
+                  {/* Edit Event - Disabled */}
+                  <TouchableOpacity
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
+                    onPress={() => {
+                      Alert.alert('Coming Soon', 'Edit event functionality will be available in a future update.')
+                    }}
+                    disabled={true}
+                  >
+                    <View style={styles.menuItemContent}>
+                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
+                        <Ionicons name="create-outline" size={22} color={theme.textSecondary} />
+                      </View>
+                      <View style={styles.menuItemTextContainer}>
+                        <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Edit Event</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Invite/Notify People - Only for personal events */}
+                  {!((event as any).isOrgEvent || (!event.host_id && (event as any).org_id)) && (
+                    <TouchableOpacity
+                      style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                      onPress={() => {
+                        setShowOptionsModal(false)
+                        setShowInviteModal(true)
+                      }}
+                    >
+                      <View style={styles.menuItemContent}>
+                        <View style={[styles.menuItemIconContainer, { backgroundColor: theme.primary + '20' }]}>
+                          <Ionicons 
+                            name={event.privacy === 'invite_only' ? "person-add-outline" : "notifications-outline"} 
+                            size={22} 
+                            color={theme.primary} 
+                          />
+                        </View>
+                        <View style={styles.menuItemTextContainer}>
+                          <Text style={[styles.menuItemTitle, { color: theme.text }]}>
+                            {event.privacy === 'invite_only' ? 'Invite People' : 'Notify People'}
+                          </Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                  
+                  {/* Delete Event */}
+                  <TouchableOpacity
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    onPress={() => {
+                      setShowOptionsModal(false)
+                      handleDeleteEvent()
+                    }}
+                  >
+                    <View style={styles.menuItemContent}>
+                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.error + '20' }]}>
+                        <Ionicons name="trash-outline" size={22} color={theme.error} />
+                      </View>
+                      <View style={styles.menuItemTextContainer}>
+                        <Text style={[styles.menuItemTitle, { color: theme.error }]}>Delete Event</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  {/* Block */}
+                  <TouchableOpacity
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
+                    onPress={() => {
+                      Alert.alert('Coming Soon', 'Block functionality will be available in a future update.')
+                    }}
+                    disabled={true}
+                  >
+                    <View style={styles.menuItemContent}>
+                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
+                        <Ionicons name="ban" size={22} color={theme.textSecondary} />
+                      </View>
+                      <View style={styles.menuItemTextContainer}>
+                        <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Block</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                  
+                  {/* Report */}
+                  <TouchableOpacity
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
+                    onPress={() => {
+                      Alert.alert('Coming Soon', 'Report functionality will be available in a future update.')
+                    }}
+                    disabled={true}
+                  >
+                    <View style={styles.menuItemContent}>
+                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
+                        <Ionicons name="flag" size={22} color={theme.textSecondary} />
+                      </View>
+                      <View style={styles.menuItemTextContainer}>
+                        <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Report</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Invite/Notify Modal */}
+      <Modal
+        visible={showInviteModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowInviteModal(false)}
+      >
+        <EventInviteScreen
+          invitedUsers={invitedUsers.map(u => u.id)}
+          isEditMode={true}
+          eventId={event.id}
+          onInvitesUpdated={handleInvitesUpdated}
+          onClose={() => setShowInviteModal(false)}
+        />
+      </Modal>
 
       {/* Profile Modal */}
       <ProfileModal
@@ -1302,6 +2132,11 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 4,
   },
+  attendanceButtonsContainer: {
+    flexDirection: 'row',
+    width: '100%',
+    marginTop: 4,
+  },
   goingButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1310,12 +2145,77 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     borderRadius: 12,
     borderWidth: 2,
-    width: '100%',
   },
   goingButtonText: {
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 8,
+  },
+  notGoingButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    borderWidth: 2,
+  },
+  notGoingButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuContent: {
+    borderRadius: 16,
+    borderWidth: 1,
+    minWidth: 280,
+    maxWidth: '90%',
+    overflow: 'hidden',
+  },
+  menuHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+  },
+  menuTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  menuItemsContainer: {
+    padding: 12,
+    gap: 8,
+  },
+  menuItemCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  menuItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+  },
+  menuItemIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  menuItemTextContainer: {
+    flex: 1,
+  },
+  menuItemTitle: {
+    fontSize: 16,
+    fontWeight: '500',
   },
 
 })

@@ -11,6 +11,7 @@ import {
   ScrollView,
   Dimensions,
   Alert,
+  Linking,
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -55,6 +56,7 @@ export default function EventsListScreen() {
   const [userInvitations, setUserInvitations] = useState<Set<string>>(new Set())
   const [friends, setFriends] = useState<Set<string>>(new Set())
   const [showFilterModal, setShowFilterModal] = useState(false)
+  const [showPhotosModal, setShowPhotosModal] = useState(false)
   const [pastEventStates, setPastEventStates] = useState<{[eventId: string]: {showAttendees: boolean, eventImages: string[]}}>({})
     const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilters>({
     friendsOnly: false,
@@ -119,6 +121,8 @@ export default function EventsListScreen() {
       setCurrentUserId(user.id)
 
       // Optimize: Run all queries in parallel for better performance
+      // NOTE: We still fetch invitedEventIds for other purposes (like filtering), 
+      // but we don't show private events on the main events page
       const [friendsResult, invitedEventIds] = await Promise.all([
         fetchFriends(user.id),
         getInvitedEventIds(user.id)
@@ -164,7 +168,9 @@ export default function EventsListScreen() {
       }
 
       // Run all event queries in parallel
-      const [publicEventsResult, invitedEventsResult, orgEventsResult] = await Promise.all([
+      // NOTE: Private events (invite_only) should NOT show on the main events page
+      // They should only appear in MyEvents tab (Invited/Hosting/Attending)
+      const [publicEventsResult, orgEventsResult] = await Promise.all([
         supabase
           .from('events')
           .select(`
@@ -178,21 +184,6 @@ export default function EventsListScreen() {
           .eq('privacy', 'public')
           .neq('host_id', user.id) // Exclude events user is hosting
           .order('event_date', { ascending: true }),
-        
-        invitedEventIds.length > 0 ? supabase
-          .from('events')
-          .select(`
-            *,
-            attendees:event_attendees(
-              id,
-              user_id,
-              status
-            )
-          `)
-          .eq('privacy', 'invite_only')
-          .in('id', invitedEventIds)
-          .neq('host_id', user.id) // Exclude events user is hosting
-          .order('event_date', { ascending: true }) : { data: [], error: null },
         
         // Fetch all org events from org_events table
         supabase
@@ -211,11 +202,9 @@ export default function EventsListScreen() {
 
       // Check for errors
       if (publicEventsResult.error) throw publicEventsResult.error
-      if (invitedEventsResult.error) throw invitedEventsResult.error
       if (orgEventsResult.error) throw orgEventsResult.error
 
       const publicEvents = publicEventsResult.data || []
-      const invitedEvents = invitedEventsResult.data || []
       const orgEvents = (orgEventsResult.data || []).map(event => {
         const userOwnsThisOrg = userOwnedOrgId === event.org_id
         if (__DEV__ && userOwnsThisOrg) {
@@ -241,17 +230,31 @@ export default function EventsListScreen() {
       })
 
       // Combine all events and remove duplicates
-      const allEvents = [...publicEvents, ...invitedEvents, ...orgEvents]
+      // NOTE: Only include public events and org events - private events are excluded
+      // Private events should only appear in MyEvents tab (Invited/Hosting/Attending)
+      const allEvents = [...publicEvents, ...orgEvents]
       const uniqueEvents = allEvents.filter((event, index, self) => 
         index === self.findIndex(e => e.id === event.id)
       )
 
       // Filter out events user is already attending (both personal and org events)
+      // Also explicitly exclude any private events (safety check)
       const filteredEvents = uniqueEvents.filter(event => {
+        // Exclude events user is already attending
         if ((event as any).isOrgEvent) {
-          return !attendingOrgEventIds.has(event.id)
+          if (attendingOrgEventIds.has(event.id)) {
+            return false
+          }
+        } else {
+          if (attendingEventIds.has(event.id)) {
+            return false
+          }
+          // Explicitly exclude private events - they should only show in MyEvents tab
+          if (event.privacy === 'invite_only') {
+            return false
+          }
         }
-        return !attendingEventIds.has(event.id)
+        return true
       })
 
       // Calculate attendee counts and filter by capacity
@@ -702,10 +705,7 @@ export default function EventsListScreen() {
           {/* Photo Gallery Button */}
           <TouchableOpacity 
             style={styles.photoGalleryButton} 
-            onPress={() => (navigation as any).navigate('EventPhotoGallery', { 
-              event: item,
-              eventImages: eventImages
-            })}
+            onPress={() => setShowPhotosModal(true)}
           >
             <Ionicons name="images" size={16} color="#3498db" />
             <Text style={styles.photoGalleryText}>Photos ({eventImages.length})</Text>
@@ -906,29 +906,22 @@ export default function EventsListScreen() {
         {/* Floating buttons without fade effect */}
         <View style={styles.floatingButtonsContainer}>
           <TouchableOpacity
-            style={[
-              styles.floatingButton,
-              timeFilter === 'photo_gallery' && styles.floatingButtonActive
-            ]}
+            style={styles.floatingButton}
             onPress={() => {
-              setTimeFilter('photo_gallery')
+              setShowPhotosModal(true)
             }}
           >
             <Ionicons 
               name="images-outline" 
               size={20} 
-              color={timeFilter === 'photo_gallery' ? theme.primary : theme.textSecondary} 
+              color={theme.textSecondary} 
             />
           </TouchableOpacity>
         </View>
       </View>
 
-      {timeFilter === 'photo_gallery' ? (
-        // Photo Gallery Content
-        <GeneralPhotoGalleryScreen />
-      ) : (
-        // Events List
-        <FlatList
+      {/* Events List */}
+      <FlatList
           data={filteredEvents}
           renderItem={renderEventCard}
           keyExtractor={(item) => item.id}
@@ -967,7 +960,6 @@ export default function EventsListScreen() {
             ) : null
           }
         />
-      )}
 
       
       
@@ -1128,6 +1120,51 @@ export default function EventsListScreen() {
             </TouchableOpacity>
           </View>
         </SafeAreaView>
+      </Modal>
+
+      {/* Photos Modal */}
+      <Modal
+        visible={showPhotosModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowPhotosModal(false)}
+      >
+        <TouchableOpacity 
+          style={styles.photosModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowPhotosModal(false)}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+            style={[styles.photosModalContent, { backgroundColor: theme.card, borderColor: theme.border }]}
+          >
+            <View style={styles.photosModalHeader}>
+              <Text style={[styles.photosModalTitle, { color: theme.text }]}>Event Photos</Text>
+              <TouchableOpacity onPress={() => setShowPhotosModal(false)}>
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.photosModalBody}>
+              <Ionicons name="cloud-upload-outline" size={64} color={theme.primary} />
+              <Text style={[styles.photosModalText, { color: theme.text }]}>
+                View and upload event photos on Google Drive
+              </Text>
+              
+              <TouchableOpacity
+                style={[styles.photosModalButton, { backgroundColor: theme.primary }]}
+                onPress={() => {
+                  Linking.openURL('https://google.com')
+                  setShowPhotosModal(false)
+                }}
+              >
+                <Ionicons name="open-outline" size={20} color="white" />
+                <Text style={styles.photosModalButtonText}>Open Google Drive</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   )
@@ -2028,5 +2065,58 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.text,
     textAlign: 'center',
     fontWeight: '500',
+  },
+  photosModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photosModalContent: {
+    width: '85%',
+    maxWidth: 400,
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  photosModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  photosModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: theme.text,
+  },
+  photosModalBody: {
+    padding: 24,
+    alignItems: 'center',
+  },
+  photosModalText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginTop: 16,
+    marginBottom: 24,
+    lineHeight: 22,
+    color: theme.text,
+  },
+  photosModalButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    gap: 8,
+  },
+  photosModalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
   },
 })

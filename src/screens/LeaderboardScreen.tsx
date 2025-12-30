@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 
 const { width: screenWidth } = Dimensions.get('window')
 

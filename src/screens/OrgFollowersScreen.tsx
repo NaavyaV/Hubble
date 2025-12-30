@@ -12,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 
 interface Follower {
   id: string

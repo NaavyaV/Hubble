@@ -3,6 +3,7 @@ import {
   View,
   Text,
   FlatList,
+  SectionList,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -12,13 +13,15 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { useNavigation } from '@react-navigation/native'
+import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
 import { formatEventTimeDisplay, isMidnightSpanningEvent, isEventEnded, isEventCurrentlyHappening, isEventInFuture } from '../utils/eventTimeUtils'
 import CreateEventScreen from './CreateEventScreen'
+import { deleteEventCompletely } from '../utils/eventDeletion'
+import { EmptyState } from '../components'
 
 type TabType = 'attending' | 'invited' | 'hosting'
 
@@ -27,6 +30,7 @@ export default function MyEventsScreen() {
   const navigation = useNavigation()
   const [attendingEvents, setAttendingEvents] = useState<(EventWithAttendees & { isHosting: boolean })[]>([])
   const [invitedEvents, setInvitedEvents] = useState<EventWithAttendees[]>([])
+  const [notGoingEvents, setNotGoingEvents] = useState<EventWithAttendees[]>([])
   const [hostingEvents, setHostingEvents] = useState<(EventWithAttendees & { isHosting: boolean })[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -102,7 +106,8 @@ export default function MyEventsScreen() {
         events: ea.org_events ? { ...ea.org_events, isOrgEvent: true } : null
       }))
 
-      // Fetch invited events (private invitations)
+      // Fetch all invited events from event_invitations (both public and private)
+      // This is now the single source of truth for all event invitations
       const { data: invitations, error: invitationsError } = await supabase
         .from('event_invitations')
         .select('event_id')
@@ -110,44 +115,34 @@ export default function MyEventsScreen() {
 
       if (invitationsError) throw invitationsError
 
-      const invitedEventIds = (invitations || []).map(inv => inv.event_id)
+      const invitedEventIds = new Set((invitations || []).map(inv => inv.event_id))
 
-      // Fetch public events user was notified about (check notification_log)
-      const { data: notifications, error: notificationsError } = await supabase
-        .from('notification_log')
-        .select('event_id')
+      // Fetch org events user was notified about
+      // Use org_followers to determine which orgs the user follows with notifications enabled
+      // Then get all events from those orgs that were created after the user started following
+      const { data: followedOrgs } = await supabase
+        .from('org_followers')
+        .select('org_id, created_at')
         .eq('user_id', user.id)
-        .eq('type', 'event_invitation')
-        .not('event_id', 'is', null)
+        .eq('notification_enabled', true)
 
-      if (notificationsError) {
-        console.error('Error fetching notifications:', notificationsError)
+      // Get org event IDs from orgs user follows (events created after following)
+      let notifiedOrgEventIds = new Set<string>()
+      if (followedOrgs && followedOrgs.length > 0) {
+        const orgIds = followedOrgs.map(f => f.org_id)
+        const { data: orgEvents } = await supabase
+          .from('org_events')
+          .select('id, org_id, created_at')
+          .in('org_id', orgIds)
+
+        if (orgEvents) {
+          // Filter events created after user started following (or all if we can't determine)
+          notifiedOrgEventIds = new Set(orgEvents.map(e => e.id))
+        }
       }
-
-      const notifiedEventIds = new Set([
-        ...invitedEventIds,
-        ...(notifications || []).map(n => n.event_id).filter(Boolean)
-      ])
-
-      // Fetch invited events (both private and public that user was notified about)
-      // Also check for org events user was notified about
-      // Note: For org events, event_id is null in notification_log (to avoid foreign key constraint)
-      // The org event ID is stored in data.orgEventId instead
-      const { data: orgNotifications } = await supabase
-        .from('notification_log')
-        .select('data')
-        .eq('user_id', user.id)
-        .eq('type', 'org_event_created')
-
-      // Extract orgEventId from the data field
-      const notifiedOrgEventIds = new Set(
-        (orgNotifications || [])
-          .map(n => n.data?.orgEventId)
-          .filter(Boolean)
-      )
       
       let invitedEventsData: any[] = []
-      if (notifiedEventIds.size > 0) {
+      if (invitedEventIds.size > 0) {
         const { data: invitedEventsResult, error: invitedEventsError } = await supabase
           .from('events')
           .select(`
@@ -158,7 +153,7 @@ export default function MyEventsScreen() {
               status
             )
           `)
-          .in('id', Array.from(notifiedEventIds))
+          .in('id', Array.from(invitedEventIds))
           .neq('host_id', user.id) // Exclude events user is hosting
           .order('event_date', { ascending: true })
           .order('start_time', { ascending: true })
@@ -208,16 +203,50 @@ export default function MyEventsScreen() {
           }
         })
 
-      // Process invited events - filter by max capacity and exclude already attending
+      // Fetch events user marked as "not going"
+      const { data: notGoingAttendeesData, error: notGoingError } = await supabase
+        .from('event_attendees')
+        .select(`
+          event_id,
+          status,
+          events:events!event_attendees_event_id_fkey(
+            *,
+            attendees:event_attendees(
+              id,
+              user_id,
+              status
+            )
+          )
+        `)
+        .eq('user_id', user.id)
+        .eq('status', 'not_going')
+
+      if (notGoingError) throw notGoingError
+
+      const notGoingEventsData = (notGoingAttendeesData || [])
+        .map((ea: any) => ea.events)
+        .filter((event: any) => event && !event.isOrgEvent)
+        .map((event: any) => {
+          const attendees = event.attendees || []
+          const attendeeCount = attendees.filter((a: any) => a.status === 'going').length || 0
+          return {
+            ...event,
+            attendees: attendees,
+            attendee_count: attendeeCount
+          }
+        })
+
+      // Process invited events - filter by max capacity and exclude already attending, hosting, or not going
       // Only include personal events (exclude org events from invited tab)
       const allInvitedEvents = [...invitedEventsData]
       const attendingEventIds = new Set(attendingEventsList.map(e => e.id))
       const hostingEventIds = new Set(hostingEventsList.map(e => e.id))
+      const notGoingEventIds = new Set(notGoingEventsData.map((e: any) => e.id))
       
       const invitedEventsList = allInvitedEvents
         .filter((event: any) => {
-          // Exclude events user is already attending or hosting
-          if (attendingEventIds.has(event.id) || hostingEventIds.has(event.id)) {
+          // Exclude events user is already attending, hosting, or marked as not going
+          if (attendingEventIds.has(event.id) || hostingEventIds.has(event.id) || notGoingEventIds.has(event.id)) {
             return false
           }
           
@@ -242,7 +271,8 @@ export default function MyEventsScreen() {
       const allHostIds = new Set([
         ...hostingEventsList.filter(e => !(e as any).isOrgEvent).map(e => e.host_id),
         ...attendingEventsList.filter(e => !(e as any).isOrgEvent).map(e => e.host_id),
-        ...invitedEventsList.filter((e: any) => !e.isOrgEvent).map((e: any) => e.host_id)
+        ...invitedEventsList.filter((e: any) => !e.isOrgEvent).map((e: any) => e.host_id),
+        ...notGoingEventsData.filter((e: any) => !e.isOrgEvent).map((e: any) => e.host_id)
       ])
 
       const allOrgIds = new Set([
@@ -318,6 +348,19 @@ export default function MyEventsScreen() {
           }
         }
       }))
+      setNotGoingEvents(notGoingEventsData.map((event: any) => {
+        if (event.isOrgEvent) {
+          return {
+            ...event,
+            org: orgsMap[event.org_id] || null
+          }
+        } else {
+          return {
+            ...event,
+            host: profilesMap[event.host_id] || null
+          }
+        }
+      }))
     } catch (error) {
       console.error('Error fetching my events:', error)
     } finally {
@@ -329,6 +372,122 @@ export default function MyEventsScreen() {
   useEffect(() => {
     fetchMyEvents()
   }, [])
+
+  // Set up real-time subscriptions for constant refreshing
+  useEffect(() => {
+    let eventsChannel: any = null
+    let attendeesChannel: any = null
+    let orgAttendeesChannel: any = null
+    let invitationsChannel: any = null
+    let notGoingChannel: any = null
+
+    const setupSubscriptions = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      // Subscribe to events table changes (for hosting events)
+      eventsChannel = supabase
+        .channel('my-events-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'events',
+            filter: `host_id=eq.${user.id}`
+          },
+          () => {
+            fetchMyEvents()
+          }
+        )
+        .subscribe()
+
+      // Subscribe to event_attendees changes (for attending events)
+      attendeesChannel = supabase
+        .channel('my-attending-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'event_attendees',
+            filter: `user_id=eq.${user.id}`
+          },
+          () => {
+            fetchMyEvents()
+          }
+        )
+        .subscribe()
+
+      // Subscribe to org_event_attendees changes (for org attending events)
+      orgAttendeesChannel = supabase
+        .channel('my-org-attending-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'org_event_attendees',
+            filter: `user_id=eq.${user.id}`
+          },
+          () => {
+            fetchMyEvents()
+          }
+        )
+        .subscribe()
+
+      // Subscribe to event_invitations changes (for invited events)
+      invitationsChannel = supabase
+        .channel('my-invitations-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'event_invitations',
+            filter: `user_id=eq.${user.id}`
+          },
+          () => {
+            fetchMyEvents()
+          }
+        )
+        .subscribe()
+
+      // Subscribe to event_attendees changes for "not going" status
+      notGoingChannel = supabase
+        .channel('my-not-going-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'event_attendees',
+            filter: `user_id=eq.${user.id}`
+          },
+          () => {
+            fetchMyEvents()
+          }
+        )
+        .subscribe()
+    }
+
+    setupSubscriptions()
+
+    return () => {
+      if (eventsChannel) supabase.removeChannel(eventsChannel)
+      if (attendeesChannel) supabase.removeChannel(attendeesChannel)
+      if (orgAttendeesChannel) supabase.removeChannel(orgAttendeesChannel)
+      if (invitationsChannel) supabase.removeChannel(invitationsChannel)
+      if (notGoingChannel) supabase.removeChannel(notGoingChannel)
+    }
+  }, [])
+
+  // Refresh when screen is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchMyEvents()
+    }, [])
+  )
 
   const onRefresh = () => {
     setRefreshing(true)
@@ -370,12 +529,8 @@ export default function MyEventsScreen() {
                 'deleted'
               )
 
-              const { error } = await supabase
-                .from('events')
-                .delete()
-                .eq('id', eventId)
-
-              if (error) throw error
+              // Delete the event and ALL associated data (attendees, invitations, photos, images, notifications, etc.)
+              await deleteEventCompletely(eventId)
 
               setHostingEvents(hostingEvents.filter(event => event.id !== eventId))
               Alert.alert('Success', 'Event deleted successfully')
@@ -412,7 +567,11 @@ export default function MyEventsScreen() {
       case 'attending':
         return attendingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
       case 'invited':
-        return invitedEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
+        // Return invited events and not going events as separate sections data
+        return {
+          invited: invitedEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)),
+          notGoing: notGoingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
+        }
       case 'hosting':
         return hostingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
       default:
@@ -477,15 +636,6 @@ export default function MyEventsScreen() {
             </View>
           </View>
           <View style={styles.compactHeaderRight}>
-            {isHosting && (
-              <TouchableOpacity
-                style={styles.deleteButton}
-                onPress={() => handleDeleteEvent(item.id)}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="trash-outline" size={18} color={theme.error} />
-              </TouchableOpacity>
-            )}
             <TouchableOpacity
               style={styles.expandIcon}
               onPress={() => toggleExpanded(item.id)}
@@ -558,14 +708,60 @@ export default function MyEventsScreen() {
     )
   }
 
-  const currentTabEvents = getCurrentTabEvents()
+  const currentTabEventsData = getCurrentTabEvents()
+  const currentTabEvents = activeTab === 'invited' ? 
+    (currentTabEventsData as any).invited || [] :
+    (Array.isArray(currentTabEventsData) ? currentTabEventsData : [])
 
   const handleCreateEvent = () => {
     setShowCreateModal(true)
   }
 
-  const handleEventCreated = () => {
+  const handleEventCreated = async (createdEvent?: any) => {
     setShowCreateModal(false)
+    
+    // If event data is provided, add it immediately to hosting events
+    if (createdEvent && !createdEvent.isOrgEvent) {
+      // Fetch full event data with attendees
+      const { data: fullEventData, error } = await supabase
+        .from('events')
+        .select(`
+          *,
+          attendees:event_attendees(
+            id,
+            user_id,
+            status
+          )
+        `)
+        .eq('id', createdEvent.id)
+        .single()
+
+      if (!error && fullEventData) {
+        const newEvent: EventWithAttendees & { isHosting: boolean } = {
+          ...fullEventData,
+          attendees: fullEventData.attendees || [],
+          isHosting: true
+        }
+        
+        // Add to hosting events immediately
+        setHostingEvents(prev => {
+          // Check if event already exists to avoid duplicates
+          if (prev.some(e => e.id === newEvent.id)) {
+            return prev.map(e => e.id === newEvent.id ? newEvent : e)
+          }
+          return [...prev, newEvent].sort((a, b) => {
+            const dateA = new Date(`${a.event_date}T${a.start_time}`)
+            const dateB = new Date(`${b.event_date}T${b.start_time}`)
+            return dateA.getTime() - dateB.getTime()
+          })
+        })
+        
+        // Switch to hosting tab to show the new event
+        setActiveTab('hosting')
+      }
+    }
+    
+    // Always refresh to ensure everything is up to date
     fetchMyEvents()
   }
 
@@ -581,12 +777,19 @@ export default function MyEventsScreen() {
           ]}
           onPress={() => setActiveTab('attending')}
         >
-          <Text style={[
-            styles.tabText,
-            { color: activeTab === 'attending' ? theme.primary : theme.textSecondary }
-          ]}>
-            Attending
-          </Text>
+          <View style={styles.tabContent}>
+            <Text style={[
+              styles.tabText,
+              { color: activeTab === 'attending' ? theme.primary : theme.textSecondary }
+            ]}>
+              Attending
+            </Text>
+            <View style={[styles.countBadge, { backgroundColor: theme.border }]}>
+              <Text style={[styles.countText, { color: theme.textSecondary }]}>
+                {attendingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)).length}
+              </Text>
+            </View>
+          </View>
         </TouchableOpacity>
         <TouchableOpacity
           style={[
@@ -595,12 +798,19 @@ export default function MyEventsScreen() {
           ]}
           onPress={() => setActiveTab('invited')}
         >
-          <Text style={[
-            styles.tabText,
-            { color: activeTab === 'invited' ? theme.primary : theme.textSecondary }
-          ]}>
-            Invited
-          </Text>
+          <View style={styles.tabContent}>
+            <Text style={[
+              styles.tabText,
+              { color: activeTab === 'invited' ? theme.primary : theme.textSecondary }
+            ]}>
+              Invited
+            </Text>
+            <View style={[styles.countBadge, { backgroundColor: theme.border }]}>
+              <Text style={[styles.countText, { color: theme.textSecondary }]}>
+                {invitedEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)).length}
+              </Text>
+            </View>
+          </View>
         </TouchableOpacity>
         <TouchableOpacity
           style={[
@@ -609,45 +819,121 @@ export default function MyEventsScreen() {
           ]}
           onPress={() => setActiveTab('hosting')}
         >
-          <Text style={[
-            styles.tabText,
-            { color: activeTab === 'hosting' ? theme.primary : theme.textSecondary }
-          ]}>
-            Hosting
-          </Text>
+          <View style={styles.tabContent}>
+            <Text style={[
+              styles.tabText,
+              { color: activeTab === 'hosting' ? theme.primary : theme.textSecondary }
+            ]}>
+              Hosting
+            </Text>
+            <View style={[styles.countBadge, { backgroundColor: theme.border }]}>
+              <Text style={[styles.countText, { color: theme.textSecondary }]}>
+                {hostingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)).length}
+              </Text>
+            </View>
+          </View>
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={currentTabEvents}
-        keyExtractor={(item) => item.id}
-        renderItem={renderEvent}
-        contentContainerStyle={styles.eventsList}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[theme.primary]}
-            tintColor={theme.primary}
-          />
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: theme.text }]}>
-              {activeTab === 'attending' ? 'No Events' : activeTab === 'invited' ? 'No Invitations' : 'No Hosting Events'}
-            </Text>
-            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-              {activeTab === 'attending' 
+      {activeTab === 'invited' ? (
+        (() => {
+          const invitedList = currentTabEvents || []
+          const notGoingList = (currentTabEventsData as any).notGoing || []
+          const hasInvitedEvents = invitedList.length > 0
+          const hasNotGoingEvents = notGoingList.length > 0
+          
+          // If no events at all, show empty state
+          if (!hasInvitedEvents && !hasNotGoingEvents) {
+            return (
+              <FlatList
+                data={[]}
+                keyExtractor={() => 'empty'}
+                renderItem={() => null}
+                contentContainerStyle={styles.eventsList}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    colors={[theme.primary]}
+                    tintColor={theme.primary}
+                  />
+                }
+                ListEmptyComponent={
+                  <EmptyState
+                    icon="calendar-outline"
+                    title="No Invitations"
+                    message="You don't have any event invitations right now."
+                  />
+                }
+              />
+            )
+          }
+          
+          // Otherwise show SectionList with sections
+          return (
+            <SectionList
+              sections={[
+                ...(hasInvitedEvents ? [{
+                  title: 'Pending',
+                  data: invitedList,
+                }] : []),
+                ...(hasNotGoingEvents ? [{
+                  title: 'Not Going',
+                  data: notGoingList,
+                }] : [])
+              ]}
+              keyExtractor={(item) => item.id}
+              renderItem={renderEvent}
+              renderSectionHeader={({ section }) => {
+                if (section.data.length === 0) return null
+                return (
+                  <View style={[styles.sectionHeader, { backgroundColor: theme.background }]}>
+                    <Text style={[styles.sectionHeaderText, { color: theme.textSecondary }]}>
+                      {section.title}
+                    </Text>
+                  </View>
+                )
+              }}
+              contentContainerStyle={styles.eventsList}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={[theme.primary]}
+                  tintColor={theme.primary}
+                />
+              }
+            />
+          )
+        })()
+      ) : (
+        <FlatList
+          data={currentTabEvents}
+          keyExtractor={(item) => item.id}
+          renderItem={renderEvent}
+          contentContainerStyle={styles.eventsList}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="calendar-outline"
+              title={activeTab === 'attending' ? 'No Events' : 'No Hosting Events'}
+              message={activeTab === 'attending' 
                 ? "You're not attending any upcoming events."
-                : activeTab === 'invited'
-                ? "You don't have any event invitations right now."
                 : "You're not hosting any upcoming events. Tap the + button to create one!"}
-            </Text>
-          </View>
-        }
-      />
+            />
+          }
+        />
+      )}
 
       {/* Create Button - Only show on hosting tab */}
       {activeTab === 'hosting' && (
@@ -874,8 +1160,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  tabContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   tabText: {
     fontSize: 16,
+    fontWeight: '600',
+  },
+  countBadge: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countText: {
+    fontSize: 12,
     fontWeight: '600',
   },
   createButton: {
@@ -908,5 +1210,16 @@ const styles = StyleSheet.create({
   hostingBadgeText: {
     fontSize: 10,
     fontWeight: '600',
+  },
+  sectionHeader: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    paddingTop: 16,
+  },
+  sectionHeaderText: {
+    fontSize: 14,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
 })

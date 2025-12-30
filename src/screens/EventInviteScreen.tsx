@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 import { useTheme } from '../context/ThemeContext'
 
 interface ProfileRow {
@@ -73,15 +73,51 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
   const [friendships, setFriendships] = useState<FriendshipRow[]>([])
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
+  const [fetchedInvitedUsers, setFetchedInvitedUsers] = useState<string[]>([])
 
   useEffect(() => {
     fetchFriends()
-  }, [])
+    // If in edit mode and eventId is provided, fetch invited users from event_invitations
+    if (isEditMode && eventId && invitedUsers.length === 0) {
+      fetchInvitedUsers()
+    } else {
+      setFetchedInvitedUsers(invitedUsers)
+      setSelectedUsers(new Set(invitedUsers))
+    }
+  }, [isEditMode, eventId])
+
+  useEffect(() => {
+    // Update selected users when fetched invited users change
+    if (fetchedInvitedUsers.length > 0) {
+      setSelectedUsers(new Set(fetchedInvitedUsers))
+    }
+  }, [fetchedInvitedUsers])
 
   useEffect(() => {
     filterFriends()
   }, [query, friends])
 
+
+  const fetchInvitedUsers = async () => {
+    try {
+      if (!eventId) return
+
+      const { data: invitations, error } = await supabase
+        .from('event_invitations')
+        .select('user_id')
+        .eq('event_id', eventId)
+
+      if (error) {
+        console.error('Error fetching invited users:', error)
+        return
+      }
+
+      const invitedUserIds = (invitations || []).map(inv => inv.user_id)
+      setFetchedInvitedUsers(invitedUserIds)
+    } catch (error) {
+      console.error('Error fetching invited users:', error)
+    }
+  }
 
   const fetchFriends = async () => {
     try {
@@ -139,7 +175,9 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
 
   const toggleUserSelection = (userId: string) => {
     // In edit mode, don't allow removing already invited users
-    if (isEditMode && invitedUsers.includes(userId)) {
+    // Check both props and fetched invited users
+    const allInvitedUsers = [...invitedUsers, ...fetchedInvitedUsers]
+    if (isEditMode && allInvitedUsers.includes(userId)) {
       Alert.alert(
         'Cannot Remove',
         'You cannot remove people who are already invited to the event.',
@@ -191,7 +229,8 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
 
   const renderUser = ({ item }: { item: ProfileRow }) => {
     const isSelected = selectedUsers.has(item.id)
-    const isAlreadyInvited = isEditMode && invitedUsers.includes(item.id)
+    const allInvitedUsers = [...invitedUsers, ...fetchedInvitedUsers]
+    const isAlreadyInvited = isEditMode && allInvitedUsers.includes(item.id)
     const isFriend = friends.some(friend => friend.id === item.id)
 
     return (
@@ -342,14 +381,25 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
         )}
       </View>
 
-      {/* Floating Done Button */}
+      {/* Floating Invite Button */}
       <View style={[styles.floatingButtonContainer, { backgroundColor: theme.background }]}>
-        <TouchableOpacity 
-          style={[styles.floatingDoneButton, { backgroundColor: theme.primary }]} 
-          onPress={handleDone}
-        >
-          <Text style={styles.floatingDoneButtonText}>Done</Text>
-        </TouchableOpacity>
+        {(() => {
+          // Calculate number of new people to invite (excluding already invited)
+          const allInvitedUsers = [...invitedUsers, ...fetchedInvitedUsers]
+          const newInviteCount = Array.from(selectedUsers).filter(id => !allInvitedUsers.includes(id)).length
+          const buttonText = newInviteCount === 0 
+            ? 'Done' 
+            : `Invite ${newInviteCount} ${newInviteCount === 1 ? 'person' : 'people'}`
+          
+          return (
+            <TouchableOpacity 
+              style={[styles.floatingDoneButton, { backgroundColor: theme.primary }]} 
+              onPress={handleDone}
+            >
+              <Text style={styles.floatingDoneButtonText}>{buttonText}</Text>
+            </TouchableOpacity>
+          )
+        })()}
       </View>
     </SafeAreaView>
   )

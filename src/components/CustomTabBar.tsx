@@ -9,9 +9,10 @@ interface CustomTabBarProps {
   descriptors: any
   navigation: any
   pendingCount: number
+  eventInvitationsCount: number
 }
 
-export default function CustomTabBar({ state, descriptors, navigation, pendingCount }: CustomTabBarProps) {
+export default function CustomTabBar({ state, descriptors, navigation, pendingCount, eventInvitationsCount }: CustomTabBarProps) {
   const { theme } = useTheme()
   const insets = useSafeAreaInsets()
 
@@ -100,6 +101,34 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
       )
     }
 
+    // Special handling for MyEvents tab with notification badge
+    if (route.name === 'MyEvents') {
+      return (
+        <TouchableOpacity
+          key={route.key}
+          onPress={onPress}
+          style={styles.tabItem}
+        >
+          <View style={{ position: 'relative' }}>
+            {getTabIcon(route.name, isFocused)}
+            {eventInvitationsCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {eventInvitationsCount > 9 ? '9+' : eventInvitationsCount}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={[
+            styles.tabLabel,
+            { color: isFocused ? theme.tabBarActive : theme.tabBarInactive }
+          ]}>
+            {label}
+          </Text>
+        </TouchableOpacity>
+      )
+    }
+
     return (
       <TouchableOpacity
         key={route.key}
@@ -158,18 +187,19 @@ const styles = StyleSheet.create({
   },
   badge: {
     position: 'absolute',
-    top: -8,
-    right: -8,
+    top: -6,
+    right: -6,
     backgroundColor: '#e74c3c',
     borderRadius: 10,
-    minWidth: 20,
-    height: 20,
+    minWidth: 18,
+    height: 18,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 4,
   },
   badgeText: {
     color: 'white',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: 'bold',
   },
 })

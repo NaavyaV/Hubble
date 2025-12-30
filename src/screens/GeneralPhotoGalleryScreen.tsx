@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 import { cleanupCorruptedImages } from '../utils/imageUtils'
 
 interface PhotoWithEvent {

@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
 import { buildTestNotification } from '../utils/notificationTemplates'

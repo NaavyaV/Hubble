@@ -12,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 
 export default function OrgSettingsScreen() {
   const { theme } = useTheme()

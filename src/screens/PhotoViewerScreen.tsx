@@ -12,7 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import { useTheme } from '../context/ThemeContext'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 
 interface PhotoViewerScreenProps {
   photo: {

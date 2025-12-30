@@ -1,11 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Alert, Image, Modal } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, SectionList, Alert, Image, Modal } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
-import ProfileModal from '../components/ProfileModal'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ProfileModal, ImageWithFallback, OrgDetailModal } from '../components'
 import { useTheme } from '../context/ThemeContext'
 import { Organization } from '../context/OrgModeContext'
 
@@ -90,6 +89,43 @@ export default function SocialScreen() {
         fetchFollowedOrgs()
         // Clear recently followed orgs when switching tabs to apply proper filtering
         setRecentlyFollowedOrgs(new Set())
+      }
+      
+      // Set up real-time subscription for friendships changes to update badges
+      const channel = supabase
+        .channel('social-friendships-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'friendships',
+            filter: `user_id=eq.${me}`
+          },
+          () => {
+            if (activeTab === 'friends') {
+              fetchFriendships(me)
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'friendships',
+            filter: `friend_id=eq.${me}`
+          },
+          () => {
+            if (activeTab === 'friends') {
+              fetchFriendships(me)
+            }
+          }
+        )
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(channel)
       }
     }, [me, activeTab])
   )
@@ -397,33 +433,59 @@ export default function SocialScreen() {
   }
 
   const rejectFriendRequest = async (friendshipId: string) => {
-    try {
-      const { error } = await supabase
-        .from('friendships')
-        .delete()
-        .eq('id', friendshipId)
+    Alert.alert(
+      'Reject Friend Request',
+      'Are you sure you want to reject this friend request?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reject',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('friendships')
+                .delete()
+                .eq('id', friendshipId)
 
-      if (error) throw error
-      await fetchFriendships(me!)
-    } catch (error) {
-      console.error('Error rejecting friend request:', error)
-      Alert.alert('Error', 'Failed to reject friend request')
-    }
+              if (error) throw error
+              await fetchFriendships(me!)
+            } catch (error) {
+              console.error('Error rejecting friend request:', error)
+              Alert.alert('Error', 'Failed to reject friend request')
+            }
+          }
+        }
+      ]
+    )
   }
 
   const cancelFriendRequest = async (friendshipId: string) => {
-    try {
-      const { error } = await supabase
-        .from('friendships')
-        .delete()
-        .eq('id', friendshipId)
+    Alert.alert(
+      'Cancel Friend Request',
+      'Are you sure you want to cancel this friend request?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Cancel Request',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('friendships')
+                .delete()
+                .eq('id', friendshipId)
 
-      if (error) throw error
-      await fetchFriendships(me!)
-    } catch (error) {
-      console.error('Error canceling friend request:', error)
-      Alert.alert('Error', 'Failed to cancel friend request')
-    }
+              if (error) throw error
+              await fetchFriendships(me!)
+            } catch (error) {
+              console.error('Error canceling friend request:', error)
+              Alert.alert('Error', 'Failed to cancel friend request')
+            }
+          }
+        }
+      ]
+    )
   }
 
   const removeFriend = async (friendId: string) => {
@@ -477,10 +539,8 @@ export default function SocialScreen() {
           !pendingIds.has(user.id)
         )
       case 'pending':
-        // Show pending requests
-        const pendingIncoming = incoming.map(f => incomingProfiles[f.user_id]).filter(Boolean) as ProfileRow[]
-        const pendingOutgoing = outgoing.map(f => outgoingProfiles[f.friend_id]).filter(Boolean) as ProfileRow[]
-        return [...pendingIncoming, ...pendingOutgoing]
+        // Return empty array - we'll handle pending requests separately with sections
+        return []
       case 'friends':
         return acceptedFriends
       default:
@@ -563,9 +623,6 @@ export default function SocialScreen() {
           <Text style={[styles.name, { color: theme.text }]}>
             {item.full_name || item.phone_number || 'Unknown'}
           </Text>
-          {item.major && (
-            <Text style={[styles.meta, { color: theme.textSecondary }]}>{item.major}</Text>
-          )}
           {status === 'accepted' && isRecentlyAccepted && (
             <View style={[styles.badge, { backgroundColor: theme.success + '20' }]}>
               <Text style={[styles.badgeText, { color: theme.success }]}>New Friend!</Text>
@@ -784,12 +841,21 @@ export default function SocialScreen() {
             ]}
             onPress={() => setFriendsSubTab('pending')}
           >
-            <Text style={[
-              styles.subTabButtonText,
-              { color: friendsSubTab === 'pending' ? theme.buttonText : theme.textSecondary }
-            ]}>
-              Pending
-            </Text>
+            <View style={styles.subTabButtonContent}>
+              <Text style={[
+                styles.subTabButtonText,
+                { color: friendsSubTab === 'pending' ? theme.buttonText : theme.textSecondary }
+              ]}>
+                Pending
+              </Text>
+              {incoming.length > 0 && (
+                <View style={[styles.pendingBadge, { backgroundColor: '#e74c3c' }]}>
+                  <Text style={styles.pendingBadgeText}>
+                    {incoming.length > 9 ? '9+' : incoming.length}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             style={[
@@ -876,23 +942,68 @@ export default function SocialScreen() {
 
       {/* Content */}
       {activeTab === 'friends' ? (
-        <FlatList
-          data={getFriendsData()}
-          renderItem={renderFriend}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="people-outline" size={64} color={theme.textTertiary} />
-              <Text style={[styles.emptyText, { color: theme.text }]}>
-                {query ? 'No users found' : 
-                 friendsSubTab === 'people' ? 'No users to discover' :
-                 friendsSubTab === 'pending' ? 'No pending requests' :
-                 'No friends yet'}
-              </Text>
-            </View>
-          }
-        />
+        friendsSubTab === 'pending' ? (
+          <SectionList
+            sections={[
+              {
+                title: 'Incoming',
+                data: query 
+                  ? incoming.map(f => incomingProfiles[f.user_id]).filter(Boolean).filter((profile: ProfileRow) => 
+                      profile.full_name?.toLowerCase().includes(query.toLowerCase()) ||
+                      profile.phone_number?.includes(query)
+                    ) as ProfileRow[]
+                  : incoming.map(f => incomingProfiles[f.user_id]).filter(Boolean) as ProfileRow[]
+              },
+              {
+                title: 'Outgoing',
+                data: query
+                  ? outgoing.map(f => outgoingProfiles[f.friend_id]).filter(Boolean).filter((profile: ProfileRow) =>
+                      profile.full_name?.toLowerCase().includes(query.toLowerCase()) ||
+                      profile.phone_number?.includes(query)
+                    ) as ProfileRow[]
+                  : outgoing.map(f => outgoingProfiles[f.friend_id]).filter(Boolean) as ProfileRow[]
+              }
+            ]}
+            renderItem={renderFriend}
+            renderSectionHeader={({ section }) => {
+              if (section.data.length === 0) return null
+              return (
+                <View style={[styles.sectionHeader, { backgroundColor: theme.background }]}>
+                  <Text style={[styles.sectionHeaderText, { color: theme.textSecondary }]}>
+                    {section.title}
+                  </Text>
+                </View>
+              )
+            }}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.list}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Ionicons name="people-outline" size={64} color={theme.textTertiary} />
+                <Text style={[styles.emptyText, { color: theme.text }]}>
+                  {query ? 'No pending requests found' : 'No pending requests'}
+                </Text>
+              </View>
+            }
+          />
+        ) : (
+          <FlatList
+            data={getFriendsData()}
+            renderItem={renderFriend}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.list}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Ionicons name="people-outline" size={64} color={theme.textTertiary} />
+                <Text style={[styles.emptyText, { color: theme.text }]}>
+                  {query ? 'No users found' : 
+                   friendsSubTab === 'people' ? 'No users to discover' :
+                   'No friends yet'}
+                </Text>
+              </View>
+            }
+          />
+        )
       ) : (
         <FlatList
           data={getOrgsData()}
@@ -939,7 +1050,7 @@ export default function SocialScreen() {
               
               <View style={styles.menuItemsContainer}>
                 <TouchableOpacity
-                  style={[styles.menuItem, { borderBottomWidth: 1, borderBottomColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
                   onPress={() => {
                     const friend = allUsers.find(u => u.id === friendMenuVisible)
                     if (friend) {
@@ -948,30 +1059,48 @@ export default function SocialScreen() {
                     }
                   }}
                 >
-                  <Ionicons name="person-remove" size={20} color={theme.error} />
-                  <Text style={[styles.menuItemText, { color: theme.error }]}>Unfriend</Text>
+                  <View style={styles.menuItemContent}>
+                    <View style={[styles.menuItemIconContainer, { backgroundColor: theme.error + '20' }]}>
+                      <Ionicons name="person-remove" size={22} color={theme.error} />
+                    </View>
+                    <View style={styles.menuItemTextContainer}>
+                      <Text style={[styles.menuItemTitle, { color: theme.text }]}>Unfriend</Text>
+                    </View>
+                  </View>
                 </TouchableOpacity>
                 
                 <TouchableOpacity
-                  style={[styles.menuItem, { borderBottomWidth: 1, borderBottomColor: theme.border, opacity: 0.5 }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
                   onPress={() => {
                     Alert.alert('Coming Soon', 'Block functionality will be available in a future update.')
                   }}
                   disabled={true}
                 >
-                  <Ionicons name="ban" size={20} color={theme.textSecondary} />
-                  <Text style={[styles.menuItemText, { color: theme.textSecondary }]}>Block</Text>
+                  <View style={styles.menuItemContent}>
+                    <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
+                      <Ionicons name="ban" size={22} color={theme.textSecondary} />
+                    </View>
+                    <View style={styles.menuItemTextContainer}>
+                      <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Block</Text>
+                    </View>
+                  </View>
                 </TouchableOpacity>
                 
                 <TouchableOpacity
-                  style={[styles.menuItem, { opacity: 0.5 }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
                   onPress={() => {
                     Alert.alert('Coming Soon', 'Report functionality will be available in a future update.')
                   }}
                   disabled={true}
                 >
-                  <Ionicons name="flag" size={20} color={theme.textSecondary} />
-                  <Text style={[styles.menuItemText, { color: theme.textSecondary }]}>Report</Text>
+                  <View style={styles.menuItemContent}>
+                    <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
+                      <Ionicons name="flag" size={22} color={theme.textSecondary} />
+                    </View>
+                    <View style={styles.menuItemTextContainer}>
+                      <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Report</Text>
+                    </View>
+                  </View>
                 </TouchableOpacity>
               </View>
             </TouchableOpacity>
@@ -1002,130 +1131,6 @@ export default function SocialScreen() {
         />
       )}
     </SafeAreaView>
-  )
-}
-
-
-// Org Detail Modal Component
-function OrgDetailModal({
-  org,
-  visible,
-  onClose,
-  isFollowing,
-  notificationsEnabled,
-  onFollow,
-  onUnfollow,
-  onToggleNotifications
-}: {
-  org: Organization
-  visible: boolean
-  onClose: () => void
-  isFollowing: boolean
-  notificationsEnabled: boolean
-  onFollow: () => void
-  onUnfollow: () => void
-  onToggleNotifications: () => void
-}) {
-  const { theme } = useTheme()
-
-  if (!visible) return null
-
-  return (
-    <Modal
-      visible={visible}
-      transparent={true}
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <TouchableOpacity 
-        style={styles.modalOverlay}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <TouchableOpacity 
-          activeOpacity={1}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>{org.name}</Text>
-              <TouchableOpacity onPress={onClose}>
-                <Ionicons name="close" size={24} color={theme.text} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalBody}>
-              {org.icon ? (
-                <ImageWithFallback
-                  source={{ uri: org.icon }}
-                  style={styles.modalAvatar}
-                  fallbackIcon="business"
-                  fallbackText={org.name.charAt(0).toUpperCase()}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.modalAvatar, { backgroundColor: theme.primary }]}>
-                  <Ionicons name="business" size={40} color="white" />
-                </View>
-              )}
-
-              <Text style={[styles.modalType, { color: theme.textSecondary }]}>{org.type}</Text>
-
-              {org.description && (
-                <Text style={[styles.modalDescription, { color: theme.text }]}>
-                  {org.description}
-                </Text>
-              )}
-
-              <View style={styles.modalActions}>
-                {isFollowing ? (
-                  <>
-                    <TouchableOpacity
-                      style={[
-                        styles.modalButton,
-                        { 
-                          backgroundColor: notificationsEnabled ? theme.primary : theme.surface,
-                          borderWidth: notificationsEnabled ? 0 : 1,
-                          borderColor: theme.border
-                        }
-                      ]}
-                      onPress={onToggleNotifications}
-                    >
-                      <Ionicons 
-                        name={notificationsEnabled ? "notifications" : "notifications-off"} 
-                        size={20} 
-                        color={notificationsEnabled ? theme.buttonText : theme.textSecondary} 
-                      />
-                      <Text style={[
-                        styles.modalButtonText,
-                        { color: notificationsEnabled ? theme.buttonText : theme.textSecondary }
-                      ]}>
-                        {notificationsEnabled ? 'Notifications On' : 'Notifications Off'}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.modalButton, { backgroundColor: theme.error }]}
-                      onPress={onUnfollow}
-                    >
-                      <Ionicons name="person-remove" size={20} color="white" />
-                      <Text style={[styles.modalButtonText, { color: 'white' }]}>Unfollow</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: theme.primary }]}
-                    onPress={onFollow}
-                  >
-                    <Ionicons name="person-add" size={20} color={theme.buttonText} />
-                    <Text style={[styles.modalButtonText, { color: theme.buttonText }]}>Follow</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    </Modal>
   )
 }
 
@@ -1172,10 +1177,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  subTabButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  pendingBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 5,
+  },
+  pendingBadgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
   sectionHeader: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    paddingTop: 16,
+    paddingVertical: 8,
+    paddingTop: 4,
   },
   sectionHeaderText: {
     fontSize: 14,
@@ -1208,9 +1231,10 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderRadius: 12,
-    marginBottom: 12,
+    marginBottom: 8,
     borderWidth: 1,
   },
   orgCardContainer: {
@@ -1263,9 +1287,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1275,9 +1299,8 @@ const styles = StyleSheet.create({
     color: 'white',
   },
   name: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
-    marginBottom: 4,
   },
   meta: {
     fontSize: 14,
@@ -1314,70 +1337,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginTop: 16,
   },
-  modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '90%',
-    maxWidth: 400,
-    borderRadius: 16,
-    padding: 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-  },
-  modalBody: {
-    alignItems: 'center',
-  },
-  modalAvatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalType: {
-    fontSize: 14,
-    marginBottom: 16,
-  },
-  modalDescription: {
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 20,
-  },
-  modalActions: {
-    width: '100%',
-    gap: 12,
-  },
-  modalButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    gap: 8,
-  },
-  modalButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
   menuOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1403,18 +1362,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   menuItemsContainer: {
-    paddingVertical: 8,
+    padding: 12,
+    gap: 8,
   },
-  menuItem: {
+  menuItemCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  menuItemContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    gap: 12,
+    padding: 14,
   },
-  menuItemText: {
-    fontSize: 16,
-    fontWeight: '500',
+  menuItemIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  menuItemTextContainer: {
     flex: 1,
+  },
+  menuItemTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  menuItemSubtitle: {
+    fontSize: 13,
   },
 })
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { NavigationContainer, CommonActions } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -14,6 +14,7 @@ import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
 import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 import { OrgModeProvider, useOrgMode } from './src/context/OrgModeContext'
+import { isEventEnded } from './src/utils/eventTimeUtils'
 
 // Import screens
 import AuthScreen from './src/screens/AuthScreen'
@@ -39,7 +40,7 @@ import OrgEventsScreen from './src/screens/OrgEventsScreen'
 import OrgFollowersScreen from './src/screens/OrgFollowersScreen'
 import OrgSettingsScreen from './src/screens/OrgSettingsScreen'
 import OrgEditScreen from './src/screens/OrgEditScreen'
-import CustomTabBar from './src/components/CustomTabBar'
+import { CustomTabBar } from './src/components'
 
 type RootStackParamList = {
   Auth: undefined
@@ -80,20 +81,37 @@ function MainTabNavigator() {
   const { theme } = useTheme()
   const { isOrgMode, targetTab, setTargetTab } = useOrgMode()
   const [pendingCount, setPendingCount] = useState(0)
+  const [eventInvitationsCount, setEventInvitationsCount] = useState(0)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
 
   useEffect(() => {
-    // Initialize notifications when user is logged in
+    // Initialize notifications ONLY after app has loaded and user exists
+    // This runs after MainTabNavigator mounts, which means app has booted
     const initializeNotifications = async () => {
       try {
-        // Add a small delay to ensure the app is fully loaded
-        await new Promise(resolve => setTimeout(resolve, 500))
+        // Wait for app to fully load before initializing notifications
+        await new Promise(resolve => setTimeout(resolve, 1000))
         
         // Get current user
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
+        if (!currentUser) {
           if (__DEV__) {
             console.log('No user found, skipping notification initialization')
+          }
+          return
+        }
+
+        // Check if OTP is verified before initializing notifications
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('otp_verified')
+          .eq('id', currentUser.id)
+          .maybeSingle()
+
+        // Only initialize if OTP is verified (user is fully authenticated)
+        if (!profile?.otp_verified) {
+          if (__DEV__) {
+            console.log('OTP not verified, skipping notification initialization')
           }
           return
         }
@@ -103,7 +121,7 @@ function MainTabNavigator() {
         const { data: existingPrefs, error: prefError } = await supabase
           .from('notification_preferences')
           .select('push_notifications')
-          .eq('user_id', user.id)
+          .eq('user_id', currentUser.id)
           .maybeSingle()
 
         if (prefError && prefError.code !== 'PGRST116') {
@@ -120,7 +138,7 @@ function MainTabNavigator() {
           }
           
           const defaultPreferences = {
-            user_id: user.id,
+            user_id: currentUser.id,
             push_notifications: true,
             event_reminders: true,
             going_status_updates: true,
@@ -131,7 +149,9 @@ function MainTabNavigator() {
 
           const { data: newPrefs, error: createPrefError } = await supabase
             .from('notification_preferences')
-            .insert(defaultPreferences)
+            .upsert(defaultPreferences, {
+              onConflict: 'user_id'
+            })
             .select('push_notifications')
             .single()
 
@@ -159,7 +179,7 @@ function MainTabNavigator() {
         const { data: existingToken, error: tokenError } = await supabase
           .from('notification_tokens')
           .select('token')
-          .eq('user_id', user.id)
+          .eq('user_id', currentUser.id)
           .eq('platform', Platform.OS)
           .maybeSingle()
 
@@ -220,13 +240,13 @@ function MainTabNavigator() {
 
   useEffect(() => {
     if (!currentUserId) return
-
-    // Get pending friend request count
-    const getPendingCount = async () => {
+    
+    // Function to refresh pending count
+    const refreshPendingCount = async () => {
       try {
         const { count } = await supabase
           .from('friendships')
-          .select('*', { count: 'exact' })
+          .select('*', { count: 'exact', head: true })
           .eq('friend_id', currentUserId)
           .eq('status', 'pending')
         
@@ -235,15 +255,205 @@ function MainTabNavigator() {
         console.error('Error getting pending count:', error)
       }
     }
+    
+    // Initial refresh
+    refreshPendingCount()
+    
+    // Set up real-time subscription for friendships changes
+    // Listen for changes where current user is the recipient (friend_id)
+    const channel = supabase
+      .channel(`friendships-changes-${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'friendships',
+          filter: `friend_id=eq.${currentUserId}`
+        },
+        (payload) => {
+          // Refresh count when friendships change
+          refreshPendingCount()
+        }
+      )
+      .subscribe()
 
-    getPendingCount()
+    // Also set up a fallback: refresh every 30 seconds as backup (in case realtime has issues)
+    const intervalId = setInterval(() => {
+      refreshPendingCount()
+    }, 30000)
+
+    return () => {
+      supabase.removeChannel(channel)
+      clearInterval(intervalId)
+    }
   }, [currentUserId])
+
+  // Function to refresh event invitations count
+  const refreshEventInvitationsCount = useCallback(async () => {
+    if (!currentUserId) return
+    
+    try {
+      // Get all invitations for the user
+      const { data: invitations, error: invitationsError } = await supabase
+        .from('event_invitations')
+        .select('event_id')
+        .eq('user_id', currentUserId)
+
+      if (invitationsError) throw invitationsError
+
+      if (!invitations || invitations.length === 0) {
+        setEventInvitationsCount(0)
+        return
+      }
+
+      const invitedEventIds = invitations.map(inv => inv.event_id)
+
+      if (invitedEventIds.length === 0) {
+        setEventInvitationsCount(0)
+        return
+      }
+
+      // Fetch the events to filter out ended events and events user is hosting
+      const { data: events, error: eventsError } = await supabase
+        .from('events')
+        .select('id, event_date, start_time, end_time, host_id')
+        .in('id', invitedEventIds)
+        .neq('host_id', currentUserId) // Exclude events user is hosting
+
+      if (eventsError) throw eventsError
+
+      if (!events || events.length === 0) {
+        setEventInvitationsCount(0)
+        return
+      }
+
+      // Fetch events user marked as "not going" to exclude them
+      const { data: notGoingAttendances, error: notGoingError } = await supabase
+        .from('event_attendees')
+        .select('event_id')
+        .eq('user_id', currentUserId)
+        .eq('status', 'not_going')
+        .in('event_id', invitedEventIds)
+
+      if (notGoingError) throw notGoingError
+
+      const notGoingEventIds = new Set((notGoingAttendances || []).map(a => a.event_id))
+
+      // Fetch events user is already attending to exclude them (matches Invited tab logic)
+      const { data: attendingData, error: attendingError } = await supabase
+        .from('event_attendees')
+        .select('event_id')
+        .eq('user_id', currentUserId)
+        .eq('status', 'going')
+        .in('event_id', invitedEventIds)
+
+      if (attendingError) throw attendingError
+
+      const attendingEventIds = new Set((attendingData || []).map(a => a.event_id))
+
+      // Filter out ended events, events user marked as "not going", and events user is already attending
+      // This matches the count shown next to "Invited" tab in MyEventsScreen
+      const pendingInvitations = events.filter(event => {
+        // Exclude ended events
+        if (isEventEnded(event.event_date, event.start_time, event.end_time || undefined)) {
+          return false
+        }
+        // Exclude events user marked as "not going"
+        if (notGoingEventIds.has(event.id)) {
+          return false
+        }
+        // Exclude events user is already attending
+        if (attendingEventIds.has(event.id)) {
+          return false
+        }
+        return true
+      })
+
+      setEventInvitationsCount(pendingInvitations.length)
+    } catch (error) {
+      console.error('Error getting event invitations count:', error)
+    }
+  }, [currentUserId])
+
+  // Set up event invitations count tracking
+  useEffect(() => {
+    if (!currentUserId) return
+    
+    // Initial refresh
+    refreshEventInvitationsCount()
+    
+    // Set up real-time subscription for event_invitations changes
+    const channel = supabase
+      .channel(`event-invitations-changes-${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'event_invitations',
+          filter: `user_id=eq.${currentUserId}`
+        },
+        () => {
+          // Refresh count when invitations change
+          refreshEventInvitationsCount()
+        }
+      )
+      .subscribe()
+
+    // Also subscribe to events table changes to handle event updates (e.g., events ending)
+    const eventsChannel = supabase
+      .channel(`events-changes-for-invitations-${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'events'
+        },
+        () => {
+          // Refresh count when events change (could affect whether invitations are pending)
+          refreshEventInvitationsCount()
+        }
+      )
+      .subscribe()
+
+    // Subscribe to event_attendees changes to track when user marks events as "not going"
+    const attendeesChannel = supabase
+      .channel(`event-attendees-changes-for-invitations-${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'event_attendees',
+          filter: `user_id=eq.${currentUserId}`
+        },
+        () => {
+          // Refresh count when attendance status changes (e.g., user marks as "not going")
+          refreshEventInvitationsCount()
+        }
+      )
+      .subscribe()
+
+    // Also set up a fallback: refresh every 30 seconds as backup (in case realtime has issues)
+    const intervalId = setInterval(() => {
+      refreshEventInvitationsCount()
+    }, 30000)
+
+    return () => {
+      supabase.removeChannel(channel)
+      supabase.removeChannel(eventsChannel)
+      supabase.removeChannel(attendeesChannel)
+      clearInterval(intervalId)
+    }
+  }, [currentUserId, refreshEventInvitationsCount])
 
   // Show org mode tabs if in org mode
   if (isOrgMode) {
     // Use targetTab if set, otherwise default to OrgEvents
-    const initialRoute = targetTab && ['OrgEvents', 'OrgFollowers', 'OrgSettings'].includes(targetTab) 
-      ? targetTab 
+    const initialRoute: keyof MainTabParamList = targetTab && ['OrgEvents', 'OrgFollowers', 'OrgSettings'].includes(targetTab) 
+      ? (targetTab as keyof MainTabParamList)
       : 'OrgEvents'
     
     // Clear targetTab after using it
@@ -254,7 +464,7 @@ function MainTabNavigator() {
     return (
       <Tab.Navigator
         initialRouteName={initialRoute}
-        tabBar={(props) => <CustomTabBar {...props} pendingCount={0} />}
+        tabBar={(props) => <CustomTabBar {...props} pendingCount={0} eventInvitationsCount={0} />}
         screenOptions={{
           headerShown: false,
         }}
@@ -280,8 +490,8 @@ function MainTabNavigator() {
 
   // Show regular tabs if not in org mode
   // Use targetTab if set, otherwise default to ComingEvents
-  const initialRoute = targetTab && ['Leaderboard', 'MyEvents', 'ComingEvents', 'Social', 'Profile'].includes(targetTab)
-    ? targetTab
+  const initialRoute: keyof MainTabParamList = targetTab && ['Leaderboard', 'MyEvents', 'ComingEvents', 'Social', 'Profile'].includes(targetTab)
+    ? (targetTab as keyof MainTabParamList)
     : 'ComingEvents'
   
   // Clear targetTab after using it
@@ -290,23 +500,29 @@ function MainTabNavigator() {
   }
   
   return (
-    <Tab.Navigator
-      initialRouteName={initialRoute}
-      tabBar={(props) => <CustomTabBar {...props} pendingCount={pendingCount} />}
-      screenOptions={{
-        headerShown: false,
-      }}
-    >
-      <Tab.Screen
-        name="Leaderboard"
-        component={LeaderboardScreen}
-        options={{ title: 'Leaders' }}
-      />
-      <Tab.Screen
-        name="MyEvents"
-        component={MyEventsScreen}
-        options={{ title: 'My Events' }}
-      />
+      <Tab.Navigator
+        initialRouteName={initialRoute}
+        tabBar={(props) => <CustomTabBar {...props} pendingCount={pendingCount} eventInvitationsCount={eventInvitationsCount} />}
+        screenOptions={{
+          headerShown: false,
+        }}
+      >
+        <Tab.Screen
+          name="Leaderboard"
+          component={LeaderboardScreen}
+          options={{ title: 'Leaders' }}
+        />
+        <Tab.Screen
+          name="MyEvents"
+          component={MyEventsScreen}
+          options={{ title: 'My Events' }}
+          listeners={{
+            focus: async () => {
+              // Refresh event invitations count when MyEvents tab is focused
+              refreshEventInvitationsCount()
+            }
+          }}
+        />
       <Tab.Screen
         name="ComingEvents"
         component={EventsListScreen}
@@ -316,6 +532,24 @@ function MainTabNavigator() {
         name="Social"
         component={SocialScreen}
         options={{ title: 'Social' }}
+        listeners={{
+          focus: async () => {
+            // Refresh pending count when Social tab is focused
+            if (currentUserId) {
+              try {
+                const { count } = await supabase
+                  .from('friendships')
+                  .select('*', { count: 'exact', head: true })
+                  .eq('friend_id', currentUserId)
+                  .eq('status', 'pending')
+                
+                setPendingCount(count || 0)
+              } catch (error) {
+                console.error('Error refreshing pending count:', error)
+              }
+            }
+          }
+        }}
       />
       <Tab.Screen
         name="Profile"
@@ -329,56 +563,132 @@ function MainTabNavigator() {
 function AppContent() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [otpChecked, setOtpChecked] = useState(false)
   const { theme } = useTheme()
   const navigationRef = useRef<any>(null)
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const hasSetLoadingFalseRef = useRef(false)
+  const pendingNotificationRef = useRef<any>(null)
+  const notificationHandledRef = useRef(false)
+
+  // Fail-safe loading timeout - ensures app never gets stuck
+  useEffect(() => {
+    loadingTimeoutRef.current = setTimeout(() => {
+      if (!hasSetLoadingFalseRef.current) {
+        if (__DEV__) {
+          console.warn('Loading timeout reached - forcing loading to false')
+        }
+        setLoading(false)
+        hasSetLoadingFalseRef.current = true
+      }
+    }, 3000) // 3 second timeout
+
+    return () => {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Safe function to set loading to false (only once)
+  const safeSetLoadingFalse = () => {
+    if (!hasSetLoadingFalseRef.current) {
+      hasSetLoadingFalseRef.current = true
+      setLoading(false)
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current)
+        loadingTimeoutRef.current = null
+      }
+    }
+  }
 
   useEffect(() => {
-    // Check if user is already logged in
-    checkUser()
-
-    // Listen for auth changes
+    // Single source of truth: ONLY use onAuthStateChange for auth state
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (__DEV__) {
           console.log('Auth state change:', { event, session: session ? 'exists' : 'none' })
-          console.log('User email confirmed:', session?.user?.email_confirmed_at)
         }
         
         if (session?.user) {
-          // Add a small delay to allow profile updates to complete
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          // Immediately set user and stop loading - don't block on profile checks
+          setUser(session.user as User)
+          safeSetLoadingFalse()
           
-          // Check if user has completed OTP verification
-          const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('otp_verified')
-            .eq('id', session.user.id)
-            .single()
-          
-          if (__DEV__) {
-            console.log('Profile query result:', { profile, profileError })
-            console.log('OTP verified:', profile?.otp_verified)
+          // Check OTP verification asynchronously AFTER auth is set (non-blocking)
+          // This allows the app to boot even if profile query fails
+          const checkOtpVerification = async () => {
+            try {
+              // Wait a bit for navigation to be ready
+              await new Promise(resolve => setTimeout(resolve, 300))
+              
+              const { data: profile, error: profileError } = await supabase
+                .from('profiles')
+                .select('otp_verified')
+                .eq('id', session.user.id)
+                .maybeSingle()
+              
+              if (__DEV__) {
+                console.log('OTP check result:', { otp_verified: profile?.otp_verified, error: profileError })
+              }
+              
+              // If OTP is not verified, redirect to verification screen (non-blocking)
+              if (!profile?.otp_verified) {
+                if (__DEV__) {
+                  console.log('OTP not verified - redirecting to verification screen')
+                }
+                setUser(null) // Clear user to show auth flow
+                setOtpChecked(true)
+                
+                // Navigate to verification screen - wait for navigation to be ready
+                const maxAttempts = 20
+                let attempts = 0
+                const tryNavigate = () => {
+                  attempts++
+                  if (navigationRef.current) {
+                    try {
+                      navigationRef.current.dispatch(
+                        CommonActions.navigate({
+                          name: 'AccountVerification',
+                          params: {
+                            email: session.user.email || '',
+                            userId: session.user.id,
+                          },
+                        })
+                      )
+                    } catch (navError) {
+                      if (__DEV__) {
+                        console.error('Navigation error:', navError)
+                      }
+                      if (attempts < maxAttempts) {
+                        setTimeout(tryNavigate, 100)
+                      }
+                    }
+                  } else if (attempts < maxAttempts) {
+                    setTimeout(tryNavigate, 100)
+                  }
+                }
+                tryNavigate()
+              } else {
+                setOtpChecked(true)
+              }
+            } catch (error) {
+              if (__DEV__) {
+                console.error('Error checking OTP verification:', error)
+              }
+              // Don't block app if profile check fails - user is already set
+              setOtpChecked(true)
+            }
           }
           
-          // Only allow access if OTP is verified
-          if (profile?.otp_verified) {
-            if (__DEV__) {
-              console.log('Setting user as authenticated - OTP verified')
-            }
-            setUser(session.user as User)
-          } else {
-            if (__DEV__) {
-              console.log('User OTP not verified, staying in unauthenticated flow')
-            }
-            setUser(null)
-          }
+          // Run OTP check asynchronously (non-blocking)
+          checkOtpVerification()
         } else {
-          if (__DEV__) {
-            console.log('No session, setting user to null')
-          }
+          // No session - clear user and stop loading immediately
           setUser(null)
+          setOtpChecked(true)
+          safeSetLoadingFalse()
         }
-        setLoading(false)
       }
     )
 
@@ -400,12 +710,31 @@ function AppContent() {
     )
   }
 
+  // Check for initial notification when app opens (runs immediately, even before auth)
+  useEffect(() => {
+    const checkInitialNotification = async () => {
+      try {
+        const response = await Notifications.getLastNotificationResponseAsync()
+        if (response) {
+          pendingNotificationRef.current = response.notification.request.content.data
+          if (__DEV__) {
+            console.log('Stored pending notification on app open:', JSON.stringify(pendingNotificationRef.current, null, 2))
+          }
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.error('Error checking initial notification:', error)
+        }
+      }
+    }
+    
+    checkInitialNotification()
+  }, [])
+
   // Handle notification responses (when user taps on notification)
   useEffect(() => {
-    if (!user) return // Don't handle notifications if user is not authenticated
-
     // Helper function to navigate to event detail
-    const navigateToEventDetail = async (eventId: string | null | undefined) => {
+    const navigateToEventDetail = async (eventId: string | null | undefined, isOrgEvent: boolean = false) => {
       if (!eventId) {
         if (__DEV__) {
           console.log('No eventId in notification data')
@@ -440,22 +769,46 @@ function AppContent() {
 
       try {
         if (__DEV__) {
-          console.log('Fetching event for navigation:', eventId)
+          console.log(`Fetching ${isOrgEvent ? 'org ' : ''}event for navigation:`, eventId)
         }
 
-        const { data: eventData, error } = await supabase
-          .from('events')
-          .select(`
-            *,
-            host:profiles!events_host_id_fkey(id, full_name, avatar_url),
-            attendees:event_attendees(
-              user_id,
-              status,
-              profiles:profiles!event_attendees_user_id_fkey(id, full_name, avatar_url)
-            )
-          `)
-          .eq('id', eventId)
-          .single()
+        let eventData, error
+
+        if (isOrgEvent) {
+          // Fetch org event
+          const result = await supabase
+            .from('org_events')
+            .select(`
+              *,
+              org:organizations!org_events_org_id_fkey(id, name, icon),
+              attendees:org_event_attendees(
+                user_id,
+                status,
+                profiles:profiles!org_event_attendees_user_id_fkey(id, full_name, avatar_url)
+              )
+            `)
+            .eq('id', eventId)
+            .single()
+          eventData = result.data
+          error = result.error
+        } else {
+          // Fetch regular event
+          const result = await supabase
+            .from('events')
+            .select(`
+              *,
+              host:profiles!events_host_id_fkey(id, full_name, avatar_url),
+              attendees:event_attendees(
+                user_id,
+                status,
+                profiles:profiles!event_attendees_user_id_fkey(id, full_name, avatar_url)
+              )
+            `)
+            .eq('id', eventId)
+            .single()
+          eventData = result.data
+          error = result.error
+        }
 
         if (error) {
           console.error('Error fetching event:', error)
@@ -466,7 +819,7 @@ function AppContent() {
                 CommonActions.navigate({
                   name: 'Main',
                   params: {
-                    screen: 'ComingEvents',
+                    screen: isOrgEvent ? 'OrgEvents' : 'ComingEvents',
                   },
                 })
               )
@@ -479,12 +832,14 @@ function AppContent() {
           // Transform the data to match EventWithAttendees type
           const event: EventWithAttendees = {
             ...eventData,
-            host: eventData.host,
-            attendees: eventData.attendees || []
+            host: isOrgEvent ? undefined : eventData.host,
+            attendees: eventData.attendees || [],
+            // Add isOrgEvent flag for EventDetailScreen to recognize it
+            ...(isOrgEvent ? { isOrgEvent: true } : {})
           }
 
           if (__DEV__) {
-            console.log('Navigating to event detail:', event.id)
+            console.log(`Navigating to ${isOrgEvent ? 'org ' : ''}event detail:`, event.id)
           }
 
           // Navigate to EventDetail screen
@@ -503,7 +858,7 @@ function AppContent() {
             CommonActions.navigate({
               name: 'Main',
               params: {
-                screen: 'ComingEvents',
+                screen: isOrgEvent ? 'OrgEvents' : 'ComingEvents',
               },
             })
           )
@@ -511,74 +866,35 @@ function AppContent() {
       }
     }
 
-    // Handle initial notification when app opens from notification
-    const handleInitialNotification = async () => {
-      const response = await Notifications.getLastNotificationResponseAsync()
-      if (response) {
-        const data = response.notification.request.content.data
-        
-        if (__DEV__) {
-          console.log('Initial notification on app open:', JSON.stringify(data, null, 2))
-        }
-
-        // Wait a bit for navigation to be ready
-        setTimeout(() => {
-          // Handle test notifications - navigate to Leaderboard tab
-          if (data?.test === true || data?.screen === 'Leaderboard') {
-            if (navigationRef.current) {
-              navigationRef.current.dispatch(
-                CommonActions.navigate({
-                  name: 'Main',
-                  params: { screen: 'Leaderboard' },
-                })
-              )
-            }
-            return
-          }
-
-          // Handle friend request notifications
-          if (data?.type === 'friend_request') {
-            if (navigationRef.current) {
-              navigationRef.current.dispatch(
-                CommonActions.navigate({
-                  name: 'Main',
-                  params: { screen: 'Social' },
-                })
-              )
-            }
-            return
-          }
-
-          // Handle event-related notifications
-          const eventId: string | null = (data?.eventId as string) || (data?.event_id as string) || null
-          if (eventId) {
-            navigateToEventDetail(eventId)
-            return
-          }
-
-          // Default: Navigate to Events list
-          if (navigationRef.current) {
-            navigationRef.current.dispatch(
-              CommonActions.navigate({
-                name: 'Main',
-                params: { screen: 'ComingEvents' },
-              })
-            )
-          }
-        }, 1000) // Increased delay to ensure navigation is ready
-      }
-    }
-
-    // Check for initial notification
-    handleInitialNotification()
-
-    // Handle notification responses when app is already running
-    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const data = response.notification.request.content.data
+    // Handle pending notification (from cold start) or current notification
+    const handleNotification = async (data: any, isPending = false) => {
+      if (!data) return
       
       if (__DEV__) {
-        console.log('Notification tapped:', JSON.stringify(data, null, 2))
+        console.log(`Handling ${isPending ? 'pending' : 'current'} notification:`, JSON.stringify(data, null, 2))
       }
+
+      // Wait for navigation to be ready and user to be authenticated
+      const waitForReady = async (maxAttempts = 30) => {
+        for (let i = 0; i < maxAttempts; i++) {
+          if (navigationRef.current && user && !loading && otpChecked) {
+            return true
+          }
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+        return false
+      }
+
+      const isReady = await waitForReady()
+      if (!isReady) {
+        if (__DEV__) {
+          console.warn('Navigation not ready after waiting, skipping notification handling')
+        }
+        return
+      }
+
+      // Additional small delay to ensure navigation is fully initialized
+      await new Promise(resolve => setTimeout(resolve, 300))
 
       // Handle test notifications - navigate to Leaderboard tab
       if (data?.test === true || data?.screen === 'Leaderboard') {
@@ -590,30 +906,35 @@ function AppContent() {
             })
           )
         }
+        notificationHandledRef.current = true
         return
       }
 
-      // Handle friend request notifications - navigate to Friends tab
+      // Handle friend request notifications
       if (data?.type === 'friend_request') {
         if (navigationRef.current) {
           navigationRef.current.dispatch(
             CommonActions.navigate({
               name: 'Main',
-              params: { screen: 'Friends' },
+              params: { screen: 'Social' },
             })
           )
         }
+        notificationHandledRef.current = true
         return
       }
 
-      // Handle event-related notifications - navigate to EventDetail
-      const eventId: string | null = (data?.eventId as string) || (data?.event_id as string) || null
+      // Handle event-related notifications
+      const eventId: string | null = (data?.eventId as string) || (data?.event_id as string) || (data?.orgEventId as string) || null
+      const isOrgEvent: boolean = data?.isOrgEvent === true || !!data?.orgEventId
+      
       if (eventId) {
-        navigateToEventDetail(eventId)
+        await navigateToEventDetail(eventId, isOrgEvent)
+        notificationHandledRef.current = true
         return
       }
 
-      // Default: Navigate to Events list for any other notification type
+      // Default: Navigate to Events list
       if (navigationRef.current) {
         navigationRef.current.dispatch(
           CommonActions.navigate({
@@ -622,52 +943,180 @@ function AppContent() {
           })
         )
       }
+      notificationHandledRef.current = true
+    }
+
+    // Handle notification responses when app is already running
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data
+      
+      if (__DEV__) {
+        console.log('Notification tapped (app running):', JSON.stringify(data, null, 2))
+      }
+
+      // Only handle if user is authenticated
+      if (user && !loading && otpChecked) {
+        handleNotification(data, false)
+      } else {
+        // Store for later if not ready
+        pendingNotificationRef.current = data
+        if (__DEV__) {
+          console.log('User not ready, storing notification for later')
+        }
+      }
     })
 
     return () => subscription.remove()
-  }, [user])
+  }, [user, loading, otpChecked])
 
-  const checkUser = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (__DEV__) {
-        console.log('Checking user:', user ? 'exists' : 'none')
-        console.log('User email confirmed:', user?.email_confirmed_at)
-      }
-      
-      if (user) {
-        // Check if user has completed OTP verification
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('otp_verified')
-          .eq('id', user.id)
-          .single()
-        
-        if (__DEV__) {
-          console.log('OTP verified:', profile?.otp_verified)
-        }
-        
-        // Only allow access if OTP is verified
-        if (profile?.otp_verified) {
-          if (__DEV__) {
-            console.log('Setting user as authenticated - OTP verified')
+  // Handle pending notification when user becomes authenticated (from cold start)
+  useEffect(() => {
+    if (pendingNotificationRef.current && !notificationHandledRef.current && user && !loading && otpChecked) {
+      // Small delay to ensure navigation is ready
+      const timer = setTimeout(() => {
+        if (navigationRef.current && pendingNotificationRef.current) {
+          const data = pendingNotificationRef.current
+          
+          // Use the same handleNotification logic but we need to call it
+          // Since handleNotification is in the other useEffect, we'll handle it here
+          const handlePendingNotification = async () => {
+            // Wait for navigation to be fully ready
+            await new Promise(resolve => setTimeout(resolve, 300))
+            
+            // Handle test notifications
+            if (data?.test === true || data?.screen === 'Leaderboard') {
+              navigationRef.current?.dispatch(
+                CommonActions.navigate({
+                  name: 'Main',
+                  params: { screen: 'Leaderboard' },
+                })
+              )
+              notificationHandledRef.current = true
+              pendingNotificationRef.current = null
+              return
+            }
+
+            // Handle friend request notifications
+            if (data?.type === 'friend_request') {
+              navigationRef.current?.dispatch(
+                CommonActions.navigate({
+                  name: 'Main',
+                  params: { screen: 'Social' },
+                })
+              )
+              notificationHandledRef.current = true
+              pendingNotificationRef.current = null
+              return
+            }
+
+            // Handle event-related notifications
+            const eventId: string | null = (data?.eventId as string) || (data?.event_id as string) || (data?.orgEventId as string) || null
+            const isOrgEvent: boolean = data?.isOrgEvent === true || !!data?.orgEventId
+            
+            if (eventId) {
+              try {
+                let eventData, error
+
+                if (isOrgEvent) {
+                  // Fetch org event
+                  const result = await supabase
+                    .from('org_events')
+                    .select(`
+                      *,
+                      org:organizations!org_events_org_id_fkey(id, name, icon),
+                      attendees:org_event_attendees(
+                        user_id,
+                        status,
+                        profiles:profiles!org_event_attendees_user_id_fkey(id, full_name, avatar_url)
+                      )
+                    `)
+                    .eq('id', eventId)
+                    .single()
+                  eventData = result.data
+                  error = result.error
+                } else {
+                  // Fetch regular event
+                  const result = await supabase
+                    .from('events')
+                    .select(`
+                      *,
+                      host:profiles!events_host_id_fkey(id, full_name, avatar_url),
+                      attendees:event_attendees(
+                        user_id,
+                        status,
+                        profiles:profiles!event_attendees_user_id_fkey(id, full_name, avatar_url)
+                      )
+                    `)
+                    .eq('id', eventId)
+                    .single()
+                  eventData = result.data
+                  error = result.error
+                }
+
+                if (error) {
+                  console.error('Error fetching event:', error)
+                  if (error.code === 'PGRST116') {
+                    navigationRef.current?.dispatch(
+                      CommonActions.navigate({
+                        name: 'Main',
+                        params: { screen: isOrgEvent ? 'OrgEvents' : 'ComingEvents' },
+                      })
+                    )
+                  }
+                  notificationHandledRef.current = true
+                  pendingNotificationRef.current = null
+                  return
+                }
+
+                if (eventData && navigationRef.current) {
+                  const event: EventWithAttendees = {
+                    ...eventData,
+                    host: isOrgEvent ? undefined : eventData.host,
+                    attendees: eventData.attendees || [],
+                    // Add isOrgEvent flag for EventDetailScreen to recognize it
+                    ...(isOrgEvent ? { isOrgEvent: true } : {})
+                  }
+
+                  navigationRef.current.dispatch(
+                    CommonActions.navigate({
+                      name: 'EventDetail',
+                      params: { event },
+                    })
+                  )
+                }
+              } catch (error) {
+                console.error('Error navigating to event:', error)
+                navigationRef.current?.dispatch(
+                  CommonActions.navigate({
+                    name: 'Main',
+                    params: { screen: isOrgEvent ? 'OrgEvents' : 'ComingEvents' },
+                  })
+                )
+              }
+              notificationHandledRef.current = true
+              pendingNotificationRef.current = null
+              return
+            }
+
+            // Default: Navigate to Events list
+            navigationRef.current?.dispatch(
+              CommonActions.navigate({
+                name: 'Main',
+                params: { screen: 'ComingEvents' },
+              })
+            )
+            notificationHandledRef.current = true
+            pendingNotificationRef.current = null
           }
-          setUser(user as User)
-        } else {
-          if (__DEV__) {
-            console.log('User OTP not verified, staying in unauthenticated flow')
-          }
-          setUser(null)
+          
+          handlePendingNotification()
         }
-      }
-    } catch (error) {
-      if (__DEV__) {
-        console.error('Error checking user:', error)
-      }
-    } finally {
-      setLoading(false)
+      }, 500)
+
+      return () => clearTimeout(timer)
     }
-  }
+  }, [user, loading, otpChecked])
+
 
   if (loading) {
     return (
@@ -898,37 +1347,39 @@ function AppContent() {
     )
   }
 export default function App() {
+  // Expo Updates must not block startup - run AFTER initial render with delay
   useEffect(() => {
-    async function checkForUpdates() {
-      try {
-        // Only check for updates in production builds with Updates enabled
-        if (__DEV__) {
-          return
-        }
-
-        // Check if Updates is available and enabled
-        if (!Updates.isEnabled || !Updates.checkForUpdateAsync) {
-          return
-        }
-
-        const update = await Updates.checkForUpdateAsync()
-        if (update.isAvailable) {
-          console.log('Update available, fetching...')
-          await Updates.fetchUpdateAsync()
-          console.log('Update fetched, reloading...')
-          // reload to apply update immediately
-          await Updates.reloadAsync()
-        }
-      } catch (e) {
-        console.log('EAS update check failed:', e)
-        // Don't let update check errors break the app
-      }
-    }
-
-    // Check for updates after a short delay to ensure app is registered
+    // Wait for app to fully load before checking for updates
+    // This ensures updates never block startup or interfere with loading state
     const timer = setTimeout(() => {
+      async function checkForUpdates() {
+        try {
+          // Only check for updates in production builds with Updates enabled
+          if (__DEV__) {
+            return
+          }
+
+          // Check if Updates is available and enabled
+          if (!Updates.isEnabled || !Updates.checkForUpdateAsync) {
+            return
+          }
+
+          const update = await Updates.checkForUpdateAsync()
+          if (update.isAvailable) {
+            console.log('Update available, fetching...')
+            await Updates.fetchUpdateAsync()
+            console.log('Update fetched, reloading...')
+            // reload to apply update immediately
+            await Updates.reloadAsync()
+          }
+        } catch (e) {
+          console.log('EAS update check failed:', e)
+          // Don't let update check errors break the app
+        }
+      }
+
       checkForUpdates()
-    }, 1000)
+    }, 8000) // 8 second delay - ensures app has fully booted
 
     return () => clearTimeout(timer)
   }, [])

@@ -40,10 +40,13 @@ export interface NotificationBuilderParams {
 export function buildEventInvitationNotification(params: NotificationBuilderParams): NotificationPayload {
   const { userId, eventId, hostName, eventTitle, privacy = 'public' } = params
   
-  const title = privacy === 'invite_only' ? 'Event Invitation' : 'New Event'
+  // Use the body message as the title (remove the "Event Invitation" title)
   const body = privacy === 'invite_only'
     ? `${hostName || 'Someone'} invited you to "${eventTitle || 'an event'}"`
     : `${hostName || 'Someone'} created a new event: "${eventTitle || 'an event'}"`
+  
+  // Use the body as the title (no separate "Event Invitation" title)
+  const title = body
 
   return {
     user_id: userId,
@@ -119,12 +122,15 @@ export function buildHostUpdateNotification(params: NotificationBuilderParams): 
   const { userId, eventId, eventTitle, userName, action = 'joined' } = params
   
   const displayName = userName || 'Someone'
-  const title = action === 'joined' 
-    ? `${displayName} Joined Your Event` 
-    : `${displayName} Left Your Event`
+  const eventName = eventTitle || 'an event'
+  
+  // Format: "X is going to Y" for joined, "X is no longer going to Y" for left
   const body = action === 'joined'
-    ? `${displayName} is now going to "${eventTitle || 'your event'}"`
-    : `${displayName} is no longer going to "${eventTitle || 'your event'}"`
+    ? `${displayName} is going to "${eventName}"`
+    : `${displayName} is not going to "${eventName}"`
+  
+  // Use the body as the title for consistency
+  const title = body
 
   return {
     user_id: userId,
@@ -199,7 +205,7 @@ export function buildGoingStatusUpdateNotification(params: NotificationBuilderPa
     : 'Friend Left Event'
   const body = action === 'joined'
     ? `${userName || 'A friend'} is now going to "${eventTitle || 'an event'}"`
-    : `${userName || 'A friend'} is no longer going to "${eventTitle || 'an event'}"`
+    : `${userName || 'A friend'} is not going to "${eventTitle || 'an event'}"`
 
   return {
     user_id: userId,

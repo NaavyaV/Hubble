@@ -17,7 +17,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket } from '../utils/upload'
-import ImageWithFallback from '../components/ImageWithFallback'
+import { ImageWithFallback } from '../components'
 
 interface EventPhotoGalleryScreenProps {
   event: any
