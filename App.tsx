@@ -3,11 +3,24 @@ import { NavigationContainer, CommonActions } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { View, Text, TouchableOpacity } from 'react-native'
+import { View, Text, TouchableOpacity, Image } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as Device from 'expo-device'
 import { Platform } from 'react-native'
-import * as Updates from 'expo-updates'
+// Import Updates with error handling for development builds
+// Use dynamic import to avoid errors when native module isn't available
+let Updates: typeof import('expo-updates') | null = null
+try {
+  const updatesModule = require('expo-updates')
+  // Check if the module actually has the expected exports
+  if (updatesModule && typeof updatesModule.isEnabled !== 'undefined') {
+    Updates = updatesModule
+  }
+} catch (e) {
+  // Updates not available in development or when native module isn't linked
+  // This is expected in development builds and simulators
+  Updates = null
+}
 import * as Notifications from 'expo-notifications'
 import { supabase } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
@@ -36,10 +49,13 @@ import GeneralPhotoGalleryScreen from './src/screens/GeneralPhotoGalleryScreen'
 import LeaderboardScreen from './src/screens/LeaderboardScreen'
 import AccountVerificationScreen from './src/screens/AccountVerificationScreen'
 import ResetPasswordScreen from './src/screens/ResetPasswordScreen'
+import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen'
 import OrgEventsScreen from './src/screens/OrgEventsScreen'
 import OrgFollowersScreen from './src/screens/OrgFollowersScreen'
 import OrgSettingsScreen from './src/screens/OrgSettingsScreen'
 import OrgEditScreen from './src/screens/OrgEditScreen'
+import LegalDocumentsScreen from './src/screens/LegalDocumentsScreen'
+import LegalDocumentViewerScreen from './src/screens/LegalDocumentViewerScreen'
 import { CustomTabBar } from './src/components'
 
 type RootStackParamList = {
@@ -47,6 +63,7 @@ type RootStackParamList = {
   Onboarding: undefined
   AccountVerification: { email: string; userId?: string }
   ResetPassword: undefined
+  ForgotPassword: { email?: string } | undefined
   Main: undefined
   EventDetail: { event: EventWithAttendees }
   EditProfile: undefined
@@ -56,6 +73,8 @@ type RootStackParamList = {
   Settings: undefined
   NotificationSettings: undefined
   PhoneVisibility: undefined
+  LegalDocuments: undefined
+  LegalDocumentViewer: { documentType: 'privacy' | 'terms' | 'guidelines' }
   EventPhotoGallery: { event: any, eventImages: string[] }
   PhotoViewer: { photo: any, event: any, hostProfile: any }
   GeneralPhotoGallery: undefined
@@ -96,7 +115,7 @@ function MainTabNavigator() {
         const { data: { user: currentUser } } = await supabase.auth.getUser()
         if (!currentUser) {
           if (__DEV__) {
-            console.log('No user found, skipping notification initialization')
+            console.log('App.tsx: ','No user found, skipping notification initialization')
           }
           return
         }
@@ -111,7 +130,7 @@ function MainTabNavigator() {
         // Only initialize if OTP is verified (user is fully authenticated)
         if (!profile?.otp_verified) {
           if (__DEV__) {
-            console.log('OTP not verified, skipping notification initialization')
+            console.log('App.tsx: ','OTP not verified, skipping notification initialization')
           }
           return
         }
@@ -126,7 +145,7 @@ function MainTabNavigator() {
 
         if (prefError && prefError.code !== 'PGRST116') {
           if (__DEV__) {
-            console.error('Error fetching notification preferences:', prefError)
+            console.error('App.tsx: ','Error fetching notification preferences:', prefError)
           }
           return
         }
@@ -134,7 +153,7 @@ function MainTabNavigator() {
         // If no preferences exist, create default preferences (all enabled)
         if (!existingPrefs) {
           if (__DEV__) {
-            console.log('No notification preferences found, creating defaults...')
+            console.log('App.tsx: ','No notification preferences found, creating defaults...')
           }
           
           const defaultPreferences = {
@@ -157,7 +176,7 @@ function MainTabNavigator() {
 
           if (createPrefError) {
             if (__DEV__) {
-              console.error('Error creating default notification preferences:', createPrefError)
+              console.error('App.tsx: ','Error creating default notification preferences:', createPrefError)
             }
             return
           }
@@ -170,7 +189,7 @@ function MainTabNavigator() {
         // If push_notifications is false, skip initialization
         if (!preferences || !preferences.push_notifications) {
           if (__DEV__) {
-            console.log('Push notifications disabled in preferences')
+            console.log('App.tsx: ','Push notifications disabled in preferences')
           }
           return
         }
@@ -185,7 +204,7 @@ function MainTabNavigator() {
 
         if (tokenError) {
           if (__DEV__) {
-            console.error('Error checking existing token:', tokenError)
+            console.error('App.tsx: ','Error checking existing token:', tokenError)
           }
           return
         }
@@ -193,29 +212,29 @@ function MainTabNavigator() {
         // If user has preferences enabled but no token, initialize notifications
         if (!existingToken || !existingToken.token) {
           if (__DEV__) {
-            console.log('Notification preferences enabled but no token found, initializing...')
+            console.log('App.tsx: ','Notification preferences enabled but no token found, initializing...')
           }
           
           const token = await notificationService.initialize()
           if (token) {
             if (__DEV__) {
-              console.log('Notifications initialized successfully and token saved')
+              console.log('App.tsx: ','Notifications initialized successfully and token saved')
             }
           } else {
             if (__DEV__) {
-              console.log('Failed to initialize notifications (permission may have been denied)')
+              console.log('App.tsx: ','Failed to initialize notifications (permission may have been denied)')
             }
           }
         } else {
           if (__DEV__) {
-            console.log('Notification token already exists, skipping initialization')
+            console.log('App.tsx: ','Notification token already exists, skipping initialization')
           }
           // Update the service with existing token
           notificationService.setToken(existingToken.token)
         }
       } catch (error) {
         if (__DEV__) {
-          console.error('Error initializing notifications:', error)
+          console.error('App.tsx: ','Error initializing notifications:', error)
         }
         // Don't let notification errors crash the app
       }
@@ -252,7 +271,7 @@ function MainTabNavigator() {
         
         setPendingCount(count || 0)
       } catch (error) {
-        console.error('Error getting pending count:', error)
+        console.error('App.tsx: ','Error getting pending count:', error)
       }
     }
     
@@ -545,7 +564,7 @@ function MainTabNavigator() {
                 
                 setPendingCount(count || 0)
               } catch (error) {
-                console.error('Error refreshing pending count:', error)
+                console.error('App.tsx: ','Error refreshing pending count:', error)
               }
             }
           }
@@ -572,16 +591,20 @@ function AppContent() {
   const notificationHandledRef = useRef(false)
 
   // Fail-safe loading timeout - ensures app never gets stuck
+  // Use longer timeout for simulators which may be slower
   useEffect(() => {
+    const isSimulator = !Device.isDevice
+    const timeoutDuration = isSimulator ? 8000 : 5000 // 8s for simulator, 5s for device
+    
     loadingTimeoutRef.current = setTimeout(() => {
       if (!hasSetLoadingFalseRef.current) {
         if (__DEV__) {
-          console.warn('Loading timeout reached - forcing loading to false')
+          console.warn('App.tsx: ',`Loading timeout reached (${timeoutDuration}ms) - forcing loading to false`)
         }
         setLoading(false)
         hasSetLoadingFalseRef.current = true
       }
-    }, 3000) // 3 second timeout
+    }, timeoutDuration)
 
     return () => {
       if (loadingTimeoutRef.current) {
@@ -602,98 +625,222 @@ function AppContent() {
     }
   }
 
+  // Check initial session state immediately on mount
   useEffect(() => {
-    // Single source of truth: ONLY use onAuthStateChange for auth state
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+    const checkInitialSession = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession()
+        
         if (__DEV__) {
-          console.log('Auth state change:', { event, session: session ? 'exists' : 'none' })
+          console.log('App.tsx: Initial session check:', { session: session ? 'exists' : 'none' })
         }
         
         if (session?.user) {
-          // Immediately set user and stop loading - don't block on profile checks
-          setUser(session.user as User)
-          safeSetLoadingFalse()
-          
-          // Check OTP verification asynchronously AFTER auth is set (non-blocking)
-          // This allows the app to boot even if profile query fails
+          // Check OTP verification status
           const checkOtpVerification = async () => {
             try {
-              // Wait a bit for navigation to be ready
-              await new Promise(resolve => setTimeout(resolve, 300))
-              
-              const { data: profile, error: profileError } = await supabase
+              const { data: profile } = await supabase
                 .from('profiles')
                 .select('otp_verified')
                 .eq('id', session.user.id)
                 .maybeSingle()
               
               if (__DEV__) {
-                console.log('OTP check result:', { otp_verified: profile?.otp_verified, error: profileError })
+                console.log('App.tsx: Initial OTP check:', { otp_verified: profile?.otp_verified, profileExists: !!profile })
               }
               
-              // If OTP is not verified, redirect to verification screen (non-blocking)
-              if (!profile?.otp_verified) {
-                if (__DEV__) {
-                  console.log('OTP not verified - redirecting to verification screen')
-                }
-                setUser(null) // Clear user to show auth flow
-                setOtpChecked(true)
+              // Handle profile doesn't exist case
+              if (!profile) {
+                const userCreatedAt = new Date(session.user.created_at)
+                const now = new Date()
+                const minutesSinceCreation = (now.getTime() - userCreatedAt.getTime()) / (1000 * 60)
                 
-                // Navigate to verification screen - wait for navigation to be ready
-                const maxAttempts = 20
-                let attempts = 0
-                const tryNavigate = () => {
-                  attempts++
-                  if (navigationRef.current) {
-                    try {
-                      navigationRef.current.dispatch(
-                        CommonActions.navigate({
-                          name: 'AccountVerification',
-                          params: {
-                            email: session.user.email || '',
-                            userId: session.user.id,
-                          },
-                        })
-                      )
-                    } catch (navError) {
-                      if (__DEV__) {
-                        console.error('Navigation error:', navError)
-                      }
-                      if (attempts < maxAttempts) {
-                        setTimeout(tryNavigate, 100)
-                      }
-                    }
-                  } else if (attempts < maxAttempts) {
-                    setTimeout(tryNavigate, 100)
+                if (minutesSinceCreation < 5) {
+                  // User was just created - likely in onboarding
+                  if (__DEV__) {
+                    console.log('App.tsx: Profile does not exist but user was just created - showing auth flow')
                   }
+                  setUser(null)
+                } else {
+                  // User was created more than 5 minutes ago but no profile - sign out
+                  if (__DEV__) {
+                    console.log('App.tsx: Profile does not exist - user was deleted, signing out')
+                  }
+                  await supabase.auth.signOut()
+                  setUser(null)
                 }
-                tryNavigate()
-              } else {
                 setOtpChecked(true)
+                safeSetLoadingFalse()
+                return
               }
+              
+              // Set user state based on OTP verification status
+              if (profile.otp_verified) {
+                if (__DEV__) {
+                  console.log('App.tsx: Initial session: OTP VERIFIED - setting user state')
+                }
+                setUser(session.user as User)
+              } else {
+                if (__DEV__) {
+                  console.log('App.tsx: Initial session: OTP not verified - showing auth flow')
+                }
+                setUser(null)
+              }
+              
+              setOtpChecked(true)
+              safeSetLoadingFalse()
             } catch (error) {
               if (__DEV__) {
-                console.error('Error checking OTP verification:', error)
+                console.error('App.tsx: Error checking initial OTP verification:', error)
               }
-              // Don't block app if profile check fails - user is already set
+              setUser(null)
               setOtpChecked(true)
+              safeSetLoadingFalse()
             }
           }
           
-          // Run OTP check asynchronously (non-blocking)
-          checkOtpVerification()
+          await checkOtpVerification()
         } else {
-          // No session - clear user and stop loading immediately
+          // No initial session
+          if (__DEV__) {
+            console.log('App.tsx: No initial session found')
+          }
           setUser(null)
           setOtpChecked(true)
           safeSetLoadingFalse()
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.error('App.tsx: Error checking initial session:', error)
+        }
+        setUser(null)
+        setOtpChecked(true)
+        safeSetLoadingFalse()
+      }
+    }
+    
+    checkInitialSession()
+  }, [])
+
+  // Single source of truth: onAuthStateChange checks OTP verification and sets user state
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        // if (__DEV__) {
+        //   console.log('App.tsx: Auth state change:', { event, session: session ? 'exists' : 'none' })
+        // }
+        
+        // Skip INITIAL_SESSION - already handled on mount
+        if (event === 'INITIAL_SESSION') {
+          return
+        }
+        
+        if (session?.user) {
+          // Single function to check OTP verification status
+          const checkOtpVerification = async () => {
+            try {
+              const { data: profile } = await supabase
+                .from('profiles')
+                .select('otp_verified')
+                .eq('id', session.user.id)
+                .maybeSingle()
+              
+              // Handle profile doesn't exist
+              if (!profile) {
+                const userCreatedAt = new Date(session.user.created_at)
+                const now = new Date()
+                const minutesSinceCreation = (now.getTime() - userCreatedAt.getTime()) / (1000 * 60)
+                
+                if (minutesSinceCreation < 5) {
+                  // User was just created - likely in onboarding
+                  setUser(null)
+                } else {
+                  // User was created more than 5 minutes ago but no profile - sign out
+                  await supabase.auth.signOut()
+                  setUser(null)
+                }
+                return
+              }
+              
+              // Set user state based on OTP verification - this drives navigation via state
+              if (profile.otp_verified) {
+                setUser(session.user as User)
+              } else {
+                setUser(null)
+              }
+            } catch (error) {
+              // if (__DEV__) {
+              //   console.error('App.tsx: Error checking OTP verification:', error)
+              // }
+              setUser(null)
+            }
+          }
+          
+          // For TOKEN_REFRESHED events, add a small delay to ensure profile update is committed
+          if (event === 'TOKEN_REFRESHED') {
+            // Wait 200ms to ensure database write is committed
+            setTimeout(async () => {
+              await checkOtpVerification()
+            }, 200)
+          } else {
+            await checkOtpVerification()
+          }
+        } else {
+          // No session - clear user state
+          setUser(null)
         }
       }
     )
 
     return () => subscription.unsubscribe()
   }, [])
+
+  // Listen for profile changes to detect when otp_verified becomes true
+  useEffect(() => {
+    if (!otpChecked) return // Wait until initial check is complete
+    
+    let profileChannel: any = null
+    
+    const setupProfileSubscription = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.user) {
+        return
+      }
+      
+      // Subscribe to profile changes for the current user (backup if TOKEN_REFRESHED doesn't fire)
+      profileChannel = supabase
+        .channel(`profile-changes-${session.user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'profiles',
+            filter: `id=eq.${session.user.id}`
+          },
+          async (payload) => {
+            // Check if otp_verified changed to true
+            const newData = payload.new as { otp_verified?: boolean }
+            if (newData.otp_verified === true) {
+              // Get current session to ensure we have the latest user
+              const { data: { session: currentSession } } = await supabase.auth.getSession()
+              if (currentSession?.user) {
+                setUser(currentSession.user as User)
+              }
+            }
+          }
+        )
+        .subscribe()
+    }
+    
+    setupProfileSubscription()
+    
+    return () => {
+      if (profileChannel) {
+        supabase.removeChannel(profileChannel)
+      }
+    }
+  }, [otpChecked])
 
   // Helper function to navigate to a tab screen
   const navigateToTab = (tabName: string) => {
@@ -718,12 +865,12 @@ function AppContent() {
         if (response) {
           pendingNotificationRef.current = response.notification.request.content.data
           if (__DEV__) {
-            console.log('Stored pending notification on app open:', JSON.stringify(pendingNotificationRef.current, null, 2))
+            console.log('App.tsx: ','Stored pending notification on app open:', JSON.stringify(pendingNotificationRef.current, null, 2))
           }
         }
       } catch (error) {
         if (__DEV__) {
-          console.error('Error checking initial notification:', error)
+          console.error('App.tsx: ','Error checking initial notification:', error)
         }
       }
     }
@@ -737,7 +884,7 @@ function AppContent() {
     const navigateToEventDetail = async (eventId: string | null | undefined, isOrgEvent: boolean = false) => {
       if (!eventId) {
         if (__DEV__) {
-          console.log('No eventId in notification data')
+          console.log('App.tsx: ','No eventId in notification data')
         }
         return
       }
@@ -762,14 +909,14 @@ function AppContent() {
 
       if (!navigationRef.current) {
         if (__DEV__) {
-          console.error('Navigation ref not available')
+          console.error('App.tsx: ','Navigation ref not available')
         }
         return
       }
 
       try {
         if (__DEV__) {
-          console.log(`Fetching ${isOrgEvent ? 'org ' : ''}event for navigation:`, eventId)
+          console.log('App.tsx: ',`Fetching ${isOrgEvent ? 'org ' : ''}event for navigation:`, eventId)
         }
 
         let eventData, error
@@ -793,25 +940,62 @@ function AppContent() {
           error = result.error
         } else {
           // Fetch regular event
+          // Note: host_id and user_id reference auth.users, not profiles directly
+          // So we fetch the event and attendees first, then get profiles separately
           const result = await supabase
             .from('events')
             .select(`
               *,
-              host:profiles!events_host_id_fkey(id, full_name, avatar_url),
               attendees:event_attendees(
                 user_id,
-                status,
-                profiles:profiles!event_attendees_user_id_fkey(id, full_name, avatar_url)
+                status
               )
             `)
             .eq('id', eventId)
             .single()
+          
           eventData = result.data
           error = result.error
+          
+          // If event was fetched successfully, fetch host and attendee profiles separately
+          if (eventData && !error) {
+            // Fetch host profile if host_id exists
+            if (eventData.host_id) {
+              const { data: hostProfile } = await supabase
+                .from('profiles')
+                .select('id, full_name, avatar_url')
+                .eq('id', eventData.host_id)
+                .single()
+              
+              if (hostProfile) {
+                eventData.host = hostProfile
+              }
+            }
+            
+            // Fetch attendee profiles if there are attendees
+            if (eventData.attendees && eventData.attendees.length > 0) {
+              const attendeeUserIds = eventData.attendees.map((a: any) => a.user_id).filter(Boolean)
+              if (attendeeUserIds.length > 0) {
+                const { data: attendeeProfiles } = await supabase
+                  .from('profiles')
+                  .select('id, full_name, avatar_url')
+                  .in('id', attendeeUserIds)
+                
+                if (attendeeProfiles) {
+                  // Map profiles to attendees
+                  const profileMap = new Map(attendeeProfiles.map((p: any) => [p.id, p]))
+                  eventData.attendees = eventData.attendees.map((attendee: any) => ({
+                    ...attendee,
+                    profiles: profileMap.get(attendee.user_id) || null
+                  }))
+                }
+              }
+            }
+          }
         }
 
         if (error) {
-          console.error('Error fetching event:', error)
+          console.error('App.tsx: ','Error fetching event:', error)
           // If event doesn't exist (e.g., deleted), navigate to Events list
           if (error.code === 'PGRST116') {
             if (navigationRef.current) {
@@ -839,7 +1023,7 @@ function AppContent() {
           }
 
           if (__DEV__) {
-            console.log(`Navigating to ${isOrgEvent ? 'org ' : ''}event detail:`, event.id)
+            console.log('App.tsx: ',`Navigating to ${isOrgEvent ? 'org ' : ''}event detail:`, event.id)
           }
 
           // Navigate to EventDetail screen
@@ -851,7 +1035,7 @@ function AppContent() {
           )
         }
       } catch (error) {
-        console.error('Error navigating to event:', error)
+        console.error('App.tsx: ','Error navigating to event:', error)
         // Fallback to Events list if navigation fails
         if (navigationRef.current) {
           navigationRef.current.dispatch(
@@ -871,7 +1055,7 @@ function AppContent() {
       if (!data) return
       
       if (__DEV__) {
-        console.log(`Handling ${isPending ? 'pending' : 'current'} notification:`, JSON.stringify(data, null, 2))
+        console.log('App.tsx: ',`Handling ${isPending ? 'pending' : 'current'} notification:`, JSON.stringify(data, null, 2))
       }
 
       // Wait for navigation to be ready and user to be authenticated
@@ -888,7 +1072,7 @@ function AppContent() {
       const isReady = await waitForReady()
       if (!isReady) {
         if (__DEV__) {
-          console.warn('Navigation not ready after waiting, skipping notification handling')
+          console.warn('App.tsx: ','Navigation not ready after waiting, skipping notification handling')
         }
         return
       }
@@ -951,7 +1135,7 @@ function AppContent() {
       const data = response.notification.request.content.data
       
       if (__DEV__) {
-        console.log('Notification tapped (app running):', JSON.stringify(data, null, 2))
+        console.log('App.tsx: ','Notification tapped (app running):', JSON.stringify(data, null, 2))
       }
 
       // Only handle if user is authenticated
@@ -961,7 +1145,7 @@ function AppContent() {
         // Store for later if not ready
         pendingNotificationRef.current = data
         if (__DEV__) {
-          console.log('User not ready, storing notification for later')
+          console.log('App.tsx: ','User not ready, storing notification for later')
         }
       }
     })
@@ -1036,25 +1220,62 @@ function AppContent() {
                   error = result.error
                 } else {
                   // Fetch regular event
+                  // Note: host_id and user_id reference auth.users, not profiles directly
+                  // So we fetch the event and attendees first, then get profiles separately
                   const result = await supabase
                     .from('events')
                     .select(`
                       *,
-                      host:profiles!events_host_id_fkey(id, full_name, avatar_url),
                       attendees:event_attendees(
                         user_id,
-                        status,
-                        profiles:profiles!event_attendees_user_id_fkey(id, full_name, avatar_url)
+                        status
                       )
                     `)
                     .eq('id', eventId)
                     .single()
+                  
                   eventData = result.data
                   error = result.error
+                  
+                  // If event was fetched successfully, fetch host and attendee profiles separately
+                  if (eventData && !error) {
+                    // Fetch host profile if host_id exists
+                    if (eventData.host_id) {
+                      const { data: hostProfile } = await supabase
+                        .from('profiles')
+                        .select('id, full_name, avatar_url')
+                        .eq('id', eventData.host_id)
+                        .single()
+                      
+                      if (hostProfile) {
+                        eventData.host = hostProfile
+                      }
+                    }
+                    
+                    // Fetch attendee profiles if there are attendees
+                    if (eventData.attendees && eventData.attendees.length > 0) {
+                      const attendeeUserIds = eventData.attendees.map((a: any) => a.user_id).filter(Boolean)
+                      if (attendeeUserIds.length > 0) {
+                        const { data: attendeeProfiles } = await supabase
+                          .from('profiles')
+                          .select('id, full_name, avatar_url')
+                          .in('id', attendeeUserIds)
+                        
+                        if (attendeeProfiles) {
+                          // Map profiles to attendees
+                          const profileMap = new Map(attendeeProfiles.map((p: any) => [p.id, p]))
+                          eventData.attendees = eventData.attendees.map((attendee: any) => ({
+                            ...attendee,
+                            profiles: profileMap.get(attendee.user_id) || null
+                          }))
+                        }
+                      }
+                    }
+                  }
                 }
 
                 if (error) {
-                  console.error('Error fetching event:', error)
+                  console.error('App.tsx: ','Error fetching event:', error)
                   if (error.code === 'PGRST116') {
                     navigationRef.current?.dispatch(
                       CommonActions.navigate({
@@ -1085,7 +1306,7 @@ function AppContent() {
                   )
                 }
               } catch (error) {
-                console.error('Error navigating to event:', error)
+                console.error('App.tsx: ','Error navigating to event:', error)
                 navigationRef.current?.dispatch(
                   CommonActions.navigate({
                     name: 'Main',
@@ -1117,8 +1338,46 @@ function AppContent() {
     }
   }, [user, loading, otpChecked])
 
+  // Explicitly navigate to Main when user becomes authenticated
+  useEffect(() => {
+    if (!otpChecked || loading) return // Wait until initial checks are complete
+    if (!user) return // Only navigate when user exists
 
-  if (loading) {
+    const navigateToMain = () => {
+      if (!navigationRef.current) {
+        // Navigation not ready yet, try again after a short delay
+        setTimeout(navigateToMain, 100)
+        return
+      }
+
+      try {
+        const navState = navigationRef.current.getState()
+        const currentRoute = navState?.routes?.[navState?.index || 0]
+        
+        // Only navigate if we're not already on Main stack
+        if (currentRoute?.name !== 'Main') {
+          // Reset navigation stack to Main
+          navigationRef.current.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [{ name: 'Main' }],
+            })
+          )
+        }
+      } catch (error) {
+        // Navigation state might not be available yet, try again after a delay
+        setTimeout(navigateToMain, 100)
+      }
+    }
+
+    // Small delay to ensure state updates have propagated
+    const timer = setTimeout(navigateToMain, 50)
+    
+    return () => clearTimeout(timer)
+  }, [user, otpChecked, loading])
+
+  // Show splash screen while loading or OTP check not complete
+  if (loading || !otpChecked) {
     return (
       <SafeAreaProvider>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.background }}>
@@ -1288,6 +1547,20 @@ function AppContent() {
                 }}
               />
               <Stack.Screen
+                name="LegalDocuments"
+                component={LegalDocumentsScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="LegalDocumentViewer"
+                component={LegalDocumentViewerScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
                 name="EventPhotoGallery"
                 component={EventPhotoGalleryScreen}
                 options={{
@@ -1326,6 +1599,13 @@ function AppContent() {
                 }}
               />
               <Stack.Screen 
+                name="ForgotPassword" 
+                component={ForgotPasswordScreen}
+                options={{
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen 
                 name="Onboarding" 
                 component={OnboardingScreen as any}
                 options={{
@@ -1347,6 +1627,22 @@ function AppContent() {
     )
   }
 export default function App() {
+  // Preload splash icon image immediately when app starts to prevent loading delay
+  useEffect(() => {
+    const preloadSplashIcon = async () => {
+      try {
+        const splashIconSource = require('./assets/splash-icon.png')
+        const resolvedSource = Image.resolveAssetSource(splashIconSource)
+        if (resolvedSource?.uri) {
+          await Image.prefetch(resolvedSource.uri)
+        }
+      } catch (error) {
+        // Silent fail - image will still load normally via require()
+      }
+    }
+    preloadSplashIcon()
+  }, [])
+
   // Expo Updates must not block startup - run AFTER initial render with delay
   useEffect(() => {
     // Wait for app to fully load before checking for updates
@@ -1359,6 +1655,11 @@ export default function App() {
             return
           }
 
+          // Check if Updates module is available
+          if (!Updates) {
+            return
+          }
+
           // Check if Updates is available and enabled
           if (!Updates.isEnabled || !Updates.checkForUpdateAsync) {
             return
@@ -1366,14 +1667,14 @@ export default function App() {
 
           const update = await Updates.checkForUpdateAsync()
           if (update.isAvailable) {
-            console.log('Update available, fetching...')
+            console.log('App.tsx: ','Update available, fetching...')
             await Updates.fetchUpdateAsync()
-            console.log('Update fetched, reloading...')
+            console.log('App.tsx: ','Update fetched, reloading...')
             // reload to apply update immediately
             await Updates.reloadAsync()
           }
         } catch (e) {
-          console.log('EAS update check failed:', e)
+          console.log('App.tsx: ','EAS update check failed:', e)
           // Don't let update check errors break the app
         }
       }

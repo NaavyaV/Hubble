@@ -9,17 +9,22 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
+  Animated,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { RouteProp } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
+import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 
 type RootStackParamList = {
   AccountVerification: { 
     email: string
     userId?: string
+    isPasswordReset?: boolean
     onboardingData?: {
       full_name: string
       college_id: string
@@ -41,7 +46,7 @@ interface AccountVerificationScreenProps {
 }
 
 export default function AccountVerificationScreen({ navigation, route }: AccountVerificationScreenProps) {
-  const { email, userId, onboardingData } = route.params
+  const { email, userId, isPasswordReset, onboardingData } = route.params
   const { theme } = useTheme()
   const [otp, setOtp] = useState('')
   const [loading, setLoading] = useState(false)
@@ -50,8 +55,11 @@ export default function AccountVerificationScreen({ navigation, route }: Account
   const [rateLimitTime, setRateLimitTime] = useState(0)
   const [countdown, setCountdown] = useState(0)
   const [verificationComplete, setVerificationComplete] = useState(false)
+  const [isOtpFocused, setIsOtpFocused] = useState(false)
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const inputRefs = useRef<TextInput[]>([])
+  const otpInputRef = useRef<TextInput | null>(null)
+  const cursorOpacity = useRef(new Animated.Value(1)).current
+  const isUpdatingProfileRef = useRef(false) // Prevent race conditions with auth state change
 
   // Countdown timer for rate limiting
   useEffect(() => {
@@ -64,54 +72,213 @@ export default function AccountVerificationScreen({ navigation, route }: Account
     return () => clearInterval(interval)
   }, [countdown])
 
-  // Send OTP on component mount only if not rate limited
+  // Send OTP on component mount only if not rate limited and not already verified
+  // Skip auto-send for password reset flow - OTP was already sent from ForgotPasswordScreen
   useEffect(() => {
-    if (rateLimitTime === 0) {
-      sendOTP()
+    let mounted = true
+    
+    // Check if user is already verified to prevent unnecessary OTP sends
+    const checkIfAlreadyVerified = async () => {
+      if (userId) {
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('otp_verified')
+            .eq('id', userId)
+            .maybeSingle()
+          
+          if (profile?.otp_verified && mounted) {
+            // if (__DEV__) {
+            //   console.log('AccountVerificationScreen.tsx: ','User already verified - skipping OTP send')
+            // }
+            setVerificationComplete(true)
+            setOtpSent(true)
+            return true
+          }
+        } catch (error) {
+          // if (__DEV__) {
+          //   console.error('AccountVerificationScreen.tsx: ','Error checking verification status:', error)
+          // }
+        }
+      }
+      return false
     }
+
+    const initOTP = async () => {
+      const alreadyVerified = await checkIfAlreadyVerified()
+      if (alreadyVerified || !mounted) {
+        return
+      }
+
+      if (rateLimitTime === 0 && !isPasswordReset && !verificationComplete) {
+        // Only auto-send for account verification (onboarding) flow
+        // For password reset, OTP is already sent from ForgotPasswordScreen
+        // Send OTP silently on mount (don't show alert)
+        // If it fails due to rate limiting, handle it gracefully
+        sendOTP(true) // Pass true to indicate this is an auto-send (silent)
+      } else if (isPasswordReset) {
+        // For password reset, OTP was already sent - just mark as sent
+        setOtpSent(true)
+      }
+    }
+
+    initOTP()
+    
+    return () => {
+      mounted = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Listen for auth state changes to handle OTP verification
+  // Auto-focus OTP input when component mounts
+  useEffect(() => {
+    // Small delay to ensure the input is rendered
+    const timer = setTimeout(() => {
+      otpInputRef.current?.focus()
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [])
+
+  // Cursor blinking animation
+  useEffect(() => {
+    if (isOtpFocused && otp.length < 6) {
+      const animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(cursorOpacity, {
+            toValue: 0,
+            duration: 500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(cursorOpacity, {
+            toValue: 1,
+            duration: 500,
+            useNativeDriver: true,
+          }),
+        ])
+      )
+      animation.start()
+      return () => animation.stop()
+    } else {
+      cursorOpacity.setValue(1)
+    }
+  }, [isOtpFocused, otp.length])
+
+
+  // Listen for auth state changes to process pending onboarding data
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('Auth state change in verification screen:', { event, session: session ? 'exists' : 'none' })
+        // if (__DEV__) {
+        //   console.log('AccountVerificationScreen.tsx: Auth state change:', { event, session: session ? 'exists' : 'none' })
+        // }
         
-        if (event === 'SIGNED_IN' && session?.user) {
-          console.log('User signed in after OTP - updating otp_verified to true')
-          
-          // Stop all loading states and clear OTP
-          setLoading(false)
-          setOtp('')
-          setVerificationComplete(true)
-          
-          // Clear any pending timeout
-          if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current)
-            timeoutRef.current = null
+        if (event === 'SIGNED_IN' && session?.user && !isPasswordReset) {
+          // Skip processing pending data if profile update is in progress
+          if (isUpdatingProfileRef.current) {
+            return
           }
           
-          // Update profile to mark OTP as verified
+          // Wait a moment for handleVerifyOTP to complete the profile update
+          await new Promise(resolve => setTimeout(resolve, 1000))
+
+          // Process pending onboarding data (notification preferences, org follows, profile image)
           try {
-            const { error: updateError } = await supabase
-              .from('profiles')
-              .update({ 
-                otp_verified: true,
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', session.user.id)
-            
-            if (updateError) {
-              console.error('Error updating otp_verified:', updateError)
-            } else {
-              console.log('Profile updated successfully - OTP verified')
+            const { data: { user: currentUser } } = await supabase.auth.getUser()
+            if (!currentUser) {
+              return
             }
-          } catch (error) {
-            console.error('Error updating profile:', error)
+            
+            // Step 1: Create notification preferences if stored in metadata
+            if (currentUser.user_metadata?.pending_notification_preferences) {
+              const prefs = currentUser.user_metadata.pending_notification_preferences
+              const notificationPreferences = {
+                user_id: session.user.id,
+                push_notifications: prefs.push_notifications,
+                event_reminders: prefs.event_reminders,
+                going_status_updates: prefs.going_status_updates,
+                friend_requests: prefs.friend_requests,
+                event_invitations: prefs.event_invitations,
+                event_deletions: prefs.event_deletions,
+              }
+              
+              const { error: prefError } = await supabase
+                .from('notification_preferences')
+                .upsert(notificationPreferences, { onConflict: 'user_id' })
+              
+              if (!prefError) {
+                await supabase.auth.updateUser({
+                  data: { pending_notification_preferences: null }
+                })
+              }
+            }
+            
+            // Step 2: Process pending org follows
+            if (currentUser.user_metadata?.pending_org_follows) {
+              const pendingFollows = currentUser.user_metadata.pending_org_follows as Array<{
+                org_id: string
+                notification_enabled: boolean
+              }>
+
+              if (pendingFollows && pendingFollows.length > 0) {
+                const orgFollowsData = pendingFollows.map(follow => ({
+                  user_id: session.user.id,
+                  org_id: follow.org_id,
+                  notification_enabled: follow.notification_enabled !== false
+                }))
+
+                const { error: followsError } = await supabase
+                  .from('org_followers')
+                  .insert(orgFollowsData)
+
+                if (!followsError) {
+                  await supabase.auth.updateUser({
+                    data: { pending_org_follows: null }
+                  })
+                }
+              }
+            }
+            
+            // Step 3: Process pending profile image upload
+            if (currentUser.user_metadata?.pending_profile_image_uri) {
+              const imageUri = currentUser.user_metadata.pending_profile_image_uri as string
+              
+              try {
+                const fileExt = imageUri.split('.').pop()?.toLowerCase() || 'jpg'
+                const fileName = `profile-${session.user.id}-${Date.now()}.${fileExt}`
+                const filePath = `profile-images/${fileName}`
+                const contentType = guessContentTypeFromUri(imageUri)
+                
+                const avatarUrl = await uploadBytesToBucket({
+                  bucket: 'profile-images',
+                  filePath,
+                  uri: imageUri,
+                  contentType,
+                })
+                
+                if (avatarUrl) {
+                  await supabase
+                    .from('profiles')
+                    .update({ avatar_url: avatarUrl })
+                    .eq('id', session.user.id)
+                  
+                  await supabase.auth.updateUser({
+                    data: { pending_profile_image_uri: null }
+                  })
+                }
+              } catch (imageUploadError: any) {
+                // if (__DEV__) {
+                //   console.error('AccountVerificationScreen.tsx: Error uploading pending profile image:', imageUploadError)
+                // }
+              }
+            }
+          } catch (pendingDataError) {
+            // if (__DEV__) {
+            //   console.error('AccountVerificationScreen.tsx: Error processing pending onboarding data:', pendingDataError)
+            // }
           }
           
-          // App.tsx auth listener will handle navigation automatically
-          console.log('OTP verification complete - App.tsx will handle navigation')
+          // App.tsx will automatically detect the verified user via onAuthStateChange
+          // and set user state, which triggers navigation via re-render
         }
       }
     )
@@ -119,105 +286,98 @@ export default function AccountVerificationScreen({ navigation, route }: Account
     return () => {
       subscription.unsubscribe()
     }
-  }, [])
+  }, [isPasswordReset])
 
 
 
-  const sendOTP = async () => {
+  const sendOTP = async (isAutoSend: boolean = false) => {
     if (countdown > 0) {
-      Alert.alert(
-        'Please Wait',
-        `Please wait ${countdown} seconds before requesting a new code.`,
-        [{ text: 'OK' }]
-      )
-      return
-    }
-
-    // Validate email domain before sending OTP
-    try {
-      console.log('Validating email domain for:', email)
-      const { data: isValidDomain, error: domainError } = await supabase
-        .rpc('validate_email_domain', { email_to_check: email })
-      
-      if (domainError) {
-        console.error('Error validating email domain:', domainError)
-        Alert.alert('Error', 'Unable to validate email domain. Please try again.')
-        return
-      }
-      
-      if (!isValidDomain) {
+      if (!isAutoSend) {
         Alert.alert(
-          'Invalid Email Domain',
-          'Please use your college email address to create an account.',
+          'Please Wait',
+          `Please wait ${countdown} seconds before requesting a new code.`,
           [{ text: 'OK' }]
         )
-        return
       }
-      
-      console.log('Email domain validation passed')
-    } catch (error) {
-      console.error('Error validating email domain:', error)
-      Alert.alert('Error', 'Unable to validate email domain. Please try again.')
       return
     }
+
+    // Skip email domain validation to speed up OTP sending
+    // Email domain is already validated during signup/onboarding
+    // For password reset, we trust the email is valid since user already has an account
 
     setResendingEmail(true)
     try {
-      console.log('Sending OTP to:', email)
-      
-      const { data, error } = await supabase.auth.signInWithOtp({
+      // Send OTP - use signInWithOtp for both password reset and account verification
+      // This sends an OTP email (not a link) when the email template includes {{ .Token }}
+      const result = await supabase.auth.signInWithOtp({
         email: email,
         options: {
-          shouldCreateUser: true
+          shouldCreateUser: !isPasswordReset // Only create user for account verification, not password reset
         }
       })
-
-      console.log('OTP send response:', { data, error })
+      const { data, error } = result
 
       if (error) {
-        console.error('OTP send error:', error)
-        
-        // Handle rate limiting
+        // Handle rate limiting - show friendly message instead of error
         if (error.message.includes('For security purposes, you can only request this after')) {
           const match = error.message.match(/(\d+) seconds/)
           if (match) {
             const seconds = parseInt(match[1])
             setRateLimitTime(seconds)
             setCountdown(seconds)
-            Alert.alert(
-              'Please Wait',
-              `For security purposes, you can only request a new code after ${seconds} seconds.`,
-              [{ text: 'OK' }]
-            )
+            // If this is an auto-send (on mount), OTP was already sent - just set state
+            // Otherwise show the wait message
+            if (isAutoSend) {
+              // OTP was already sent from previous screen, just inform user to wait
+              setOtpSent(true)
+              // Don't log error or show alert for auto-send rate limit - OTP was already sent
+            } else {
+              Alert.alert(
+                'Please Wait',
+                `For security purposes, you can only request a new code after ${seconds} seconds.`,
+                [{ text: 'OK' }]
+              )
+            }
           } else {
+            if (isAutoSend) {
+              setOtpSent(true)
+            } else {
+              Alert.alert(
+                'Rate Limited',
+                'Please wait a moment before requesting a new verification code.',
+                [{ text: 'OK' }]
+              )
+            }
+          }
+        } else {
+          // For other errors, show alert only if not auto-send
+          if (!isAutoSend) {
             Alert.alert(
-              'Rate Limited',
-              'Please wait a moment before requesting a new verification code.',
+              'Error',
+              `Failed to send verification code: ${error.message}`,
               [{ text: 'OK' }]
             )
           }
-        } else {
-          Alert.alert(
-            'Error',
-            `Failed to send verification code: ${error.message}`,
-            [{ text: 'OK' }]
-          )
         }
       } else {
-        console.log('OTP sent successfully!')
         setOtpSent(true)
         setRateLimitTime(60) // Set 60 second rate limit
         setCountdown(60)
-        
-        
-        Alert.alert(
-          'Verification Code Sent',
-          'A 6-digit verification code has been sent to your email address.',
-          [{ text: 'OK' }]
-        )
+        // Don't show alert on initial send - it's expected
+        // Only show alert when user manually resends
+        if (resendingEmail) {
+          Alert.alert(
+            'Verification Code Sent',
+            'A 6-digit verification code has been sent to your email address.',
+            [{ text: 'OK' }]
+          )
+        }
       }
     } catch (error: any) {
-      console.error('Unexpected error sending OTP:', error)
+      // if (__DEV__) {
+      //   console.error('AccountVerificationScreen.tsx: ','Unexpected error sending OTP:', error)
+      // }
       Alert.alert(
         'Error',
         `An unexpected error occurred: ${error.message || 'Unknown error'}`,
@@ -235,15 +395,22 @@ export default function AccountVerificationScreen({ navigation, route }: Account
     }
 
     if (verificationComplete) {
-      console.log('Verification already complete, ignoring request')
+      // if (__DEV__) {
+      //   console.log('AccountVerificationScreen.tsx: ','Verification already complete, ignoring request')
+      // }
       return
     }
 
+    // Dismiss keyboard when verifying
+    Keyboard.dismiss()
+    
     setLoading(true)
     
     // Add timeout to prevent hanging
     timeoutRef.current = setTimeout(() => {
-      console.log('OTP verification timed out')
+      // if (__DEV__) {
+      //   console.log('AccountVerificationScreen.tsx: ','OTP verification timed out')
+      // }
       setLoading(false)
       Alert.alert(
         'Timeout',
@@ -253,48 +420,123 @@ export default function AccountVerificationScreen({ navigation, route }: Account
     }, 10000) // 10 second timeout
 
     try {
-      console.log('Verifying OTP:', otp)
-
+      // Use recovery type for password reset, email type for account verification
+      const otpType = isPasswordReset ? 'recovery' : 'email'
+      
       const { data, error } = await supabase.auth.verifyOtp({
         email: email,
         token: otp,
-        type: 'email'
+        type: otpType
       })
 
-      console.log('OTP verification response:', { data, error })
-
       if (error) {
-        console.error('OTP verification error:', error)
-        
-        // Handle different error types with gentle messages
+        // Show error in alert, not console
+        let errorMessage = 'Unable to verify the code. Please try again or request a new one.'
+        let errorTitle = 'Verification Failed'
         
         if (error.message.includes('invalid') || error.message.includes('Invalid') || 
                    error.message.includes('incorrect') || error.message.includes('wrong')) {
-          Alert.alert(
-            'Incorrect Code',
-            'The verification code you entered is incorrect. Please try again.',
-            [{ text: 'OK' }]
-          )
-        } else if (error.message.includes('Token has expired') || error.message.includes('expired')) {
-          Alert.alert(
-            'Code Expired',
-            'This verification code has expired. Please request a new one.',
-            [{ text: 'OK' }]
-          )
-        } else {
-          Alert.alert(
-            'Verification Failed',
-            'Unable to verify the code. Please try again or request a new one.',
-            [{ text: 'OK' }]
-          )
+          errorTitle = 'Incorrect Code'
+          errorMessage = 'The verification code you entered is incorrect. Please try again.'
+        } else if (error.message.includes('Token has expired') || error.message.includes('expired') || 
+                   error.message.includes('is invalid')) {
+          errorTitle = 'Code Expired'
+          errorMessage = 'This verification code has expired or is invalid. Please request a new one.'
         }
+        
+        Alert.alert(
+          errorTitle,
+          errorMessage,
+          [{ text: 'OK' }]
+        )
         setOtp('')
+        setLoading(false)
       } else {
-        console.log('OTP verified successfully! Auth state change will handle navigation.')
-        // Don't do anything here - let the auth state listener handle navigation
+        // For password reset, just mark as complete - App.tsx will handle navigation
+        if (isPasswordReset) {
+          setVerificationComplete(true)
+          setLoading(false)
+          setOtp('')
+          return
+        }
+        
+        // For account verification, update profile to mark OTP as verified
+        try {
+          // Prevent multiple simultaneous updates
+          if (isUpdatingProfileRef.current) {
+            return
+          }
+          isUpdatingProfileRef.current = true
+
+          // Get user from verification response
+          const verifiedUser = data?.user || data?.session?.user
+          if (!verifiedUser) {
+            throw new Error('No user found in OTP verification response')
+          }
+
+          // Update profile to mark OTP as verified
+          const { error: updateError, data: updateData } = await supabase
+            .from('profiles')
+            .update({ 
+              otp_verified: true,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', verifiedUser.id)
+            .select('otp_verified')
+            .single()
+
+          if (updateError) {
+            Alert.alert(
+              'Verification Error',
+              `Your code was verified but we could not update your profile: ${updateError.message}`,
+              [{ text: 'OK' }]
+            )
+            setLoading(false)
+            isUpdatingProfileRef.current = false
+            return
+          }
+
+          // Verify the update succeeded
+          if (!updateData?.otp_verified) {
+            Alert.alert(
+              'Verification Error',
+              'Your code was verified but the profile update failed to persist. Please try again.',
+              [{ text: 'OK' }]
+            )
+            setLoading(false)
+            isUpdatingProfileRef.current = false
+            return
+          }
+
+          // Mark verification as complete
+          setVerificationComplete(true)
+          setLoading(false)
+          isUpdatingProfileRef.current = false
+          
+          // Wait a moment to ensure database write is fully committed, then refresh session
+          // This triggers TOKEN_REFRESHED event, which will cause App.tsx to re-check otp_verified
+          // and set user state to trigger navigation
+          setTimeout(async () => {
+            try {
+              await supabase.auth.refreshSession()
+            } catch (refreshError) {
+              // Silent fail - App.tsx will detect via profile subscription if needed
+            }
+          }, 300)
+        } catch (updateError: any) {
+          isUpdatingProfileRef.current = false
+          Alert.alert(
+            'Verification Error',
+            'Your code was verified but we encountered an error updating your profile. Please try signing in again.',
+            [{ text: 'OK' }]
+          )
+          setLoading(false)
+        }
       }
     } catch (error: any) {
-      console.error('Unexpected error verifying OTP:', error)
+      // if (__DEV__) {
+      //   console.error('AccountVerificationScreen.tsx: ','Unexpected error verifying OTP:', error)
+      // }
       Alert.alert(
         'Error',
         `An unexpected error occurred: ${error.message || 'Unknown error'}`,
@@ -305,7 +547,10 @@ export default function AccountVerificationScreen({ navigation, route }: Account
         clearTimeout(timeoutRef.current)
         timeoutRef.current = null
       }
-      setLoading(false)
+      // Don't set loading to false if verification is complete - keep the "Verified! Redirecting..." state
+      if (!verificationComplete) {
+        setLoading(false)
+      }
     }
   }
 
@@ -313,48 +558,20 @@ export default function AccountVerificationScreen({ navigation, route }: Account
     await sendOTP()
   }
 
-  const handleOtpChange = (text: string) => {
-    // Only allow numbers and limit to 6 digits
-    const numericText = text.replace(/[^0-9]/g, '').slice(0, 6)
-    setOtp(numericText)
-  }
-
-  const handleKeyPress = (index: number, text: string) => {
-    if (text.length === 1 && index < 5) {
-      inputRefs.current[index + 1]?.focus()
-    }
-  }
 
   const handleSignOut = async () => {
     try {
-      console.log('Sign out button pressed')
-      
-      // Check if user is currently signed in
-      const { data: { user } } = await supabase.auth.getUser()
-      console.log('Current user before sign out:', user ? 'exists' : 'none')
-      
-      // Sign out regardless of current state
+      // Sign out - App.tsx will handle navigation via state change
       const { error } = await supabase.auth.signOut()
-      if (error) {
-        console.error('Sign out error:', error)
-      } else {
-        console.log('Sign out successful')
-      }
-      
-      // Navigate to auth screen
-      console.log('Navigating to Auth screen...')
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Auth' }],
-      })
-      
+      // if (error) {
+      //   if (__DEV__) {
+      //     console.error('AccountVerificationScreen.tsx: Sign out error:', error)
+      //   }
+      // }
     } catch (error) {
-      console.error('Error signing out:', error)
-      // Even if sign out fails, navigate to auth screen
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Auth' }],
-      })
+      // if (__DEV__) {
+      //   console.error('AccountVerificationScreen.tsx: Error signing out:', error)
+      // }
     }
   }
 
@@ -364,14 +581,29 @@ export default function AccountVerificationScreen({ navigation, route }: Account
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingView}
       >
-        <View style={styles.content}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.content}>
+          {/* Back Button */}
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack()
+              } else {
+                navigation.navigate('Auth')
+              }
+            }}
+          >
+            <Ionicons name="arrow-back" size={24} color={theme.text} />
+          </TouchableOpacity>
+
           <View style={styles.iconContainer}>
             <Ionicons name="mail" size={80} color={theme.primary} />
           </View>
 
           <View style={styles.textContainer}>
             <Text style={[styles.title, { color: theme.text }]}>
-              Verify Your Email
+              {isPasswordReset ? 'Reset Your Password' : 'Verify Your Email'}
             </Text>
             
             <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
@@ -383,7 +615,10 @@ export default function AccountVerificationScreen({ navigation, route }: Account
             </Text>
             
             <Text style={[styles.description, { color: theme.textSecondary }]}>
-              Enter the verification code below to complete your account setup.
+              {isPasswordReset 
+                ? 'Enter the verification code below to reset your password and log in.'
+                : 'Enter the verification code below to complete your account setup.'
+              }
             </Text>
           </View>
 
@@ -391,43 +626,60 @@ export default function AccountVerificationScreen({ navigation, route }: Account
             <Text style={[styles.otpLabel, { color: theme.text }]}>
               Verification Code
             </Text>
-            <View style={styles.otpInputs}>
-              {[0, 1, 2, 3, 4, 5].map((index) => (
-                <TextInput
-                  key={index}
-                  ref={(ref) => {
-                    if (ref) inputRefs.current[index] = ref
-                  }}
-                  style={[
-                    styles.otpInput,
-                    {
-                      backgroundColor: theme.surface,
-                      borderColor: otp.length > index ? theme.primary : theme.border,
-                      color: theme.text
-                    }
-                  ]}
-                  value={otp[index] || ''}
-                  onChangeText={(text) => {
-                    const newOtp = otp.split('')
-                    newOtp[index] = text.replace(/[^0-9]/g, '').slice(0, 1)
-                    const updatedOtp = newOtp.join('').slice(0, 6)
-                    setOtp(updatedOtp)
-                    
-                    if (text && index < 5) {
-                      inputRefs.current[index + 1]?.focus()
-                    }
-                  }}
-                  onKeyPress={({ nativeEvent }) => {
-                    if (nativeEvent.key === 'Backspace' && !otp[index] && index > 0) {
-                      inputRefs.current[index - 1]?.focus()
-                    }
-                  }}
-                  keyboardType="numeric"
-                  maxLength={1}
-                  textAlign="center"
-                  selectTextOnFocus
-                />
-              ))}
+            <View style={styles.otpInputsWrapper}>
+              {/* Hidden TextInput for autofill support */}
+              <TextInput
+                ref={otpInputRef}
+                style={styles.hiddenOtpInput}
+                value={otp}
+                onChangeText={(text) => {
+                  // Extract only digits and limit to 6
+                  const digits = text.replace(/[^0-9]/g, '').slice(0, 6)
+                  setOtp(digits)
+                }}
+                onFocus={() => setIsOtpFocused(true)}
+                onBlur={() => setIsOtpFocused(false)}
+                keyboardType="number-pad"
+                maxLength={6}
+                textContentType="oneTimeCode"
+                autoComplete="sms-otp"
+                autoFocus={false}
+                caretHidden={true}
+              />
+              {/* Visual boxes that look like separate inputs */}
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={() => otpInputRef.current?.focus()}
+                style={styles.otpInputs}
+              >
+                {[0, 1, 2, 3, 4, 5].map((index) => (
+                  <View
+                    key={index}
+                    style={[
+                      styles.otpBox,
+                      {
+                        backgroundColor: theme.surface,
+                        borderColor: otp.length > index ? theme.primary : theme.border,
+                      }
+                    ]}
+                  >
+                    <Text style={[styles.otpBoxText, { color: theme.text }]}>
+                      {otp[index] || ''}
+                    </Text>
+                    {isOtpFocused && index === otp.length && otp.length < 6 && (
+                      <Animated.View 
+                        style={[
+                          styles.cursor, 
+                          { 
+                            backgroundColor: theme.primary,
+                            opacity: cursorOpacity,
+                          }
+                        ]} 
+                      />
+                    )}
+                  </View>
+                ))}
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -435,8 +687,8 @@ export default function AccountVerificationScreen({ navigation, route }: Account
             <TouchableOpacity
               style={[
                 styles.primaryButton,
-                { backgroundColor: theme.buttonPrimary },
-                (loading || otp.length !== 6 || verificationComplete) && { backgroundColor: theme.textTertiary }
+                { backgroundColor: verificationComplete ? theme.buttonPrimary : theme.buttonPrimary },
+                (loading || (otp.length !== 6 && !verificationComplete)) && { backgroundColor: theme.textTertiary }
               ]}
               onPress={handleVerifyOTP}
               disabled={loading || otp.length !== 6 || verificationComplete}
@@ -447,7 +699,7 @@ export default function AccountVerificationScreen({ navigation, route }: Account
                 <>
                   <Ionicons name="checkmark-circle" size={20} color={theme.buttonText} />
                   <Text style={[styles.primaryButtonText, { color: theme.buttonText }]}>
-                    Verified! Redirecting...
+                    OTP Verified! Redirecting...
                   </Text>
                 </>
               ) : (
@@ -481,7 +733,8 @@ export default function AccountVerificationScreen({ navigation, route }: Account
               )}
             </TouchableOpacity>
           </View>
-        </View>
+          </View>
+        </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -499,6 +752,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 32,
+    paddingTop: 20,
+  },
+  backButton: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    padding: 8,
+    zIndex: 10,
   },
   iconContainer: {
     marginBottom: 32,
@@ -545,19 +806,41 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 16,
   },
+  otpInputsWrapper: {
+    position: 'relative',
+    width: '100%',
+  },
+  hiddenOtpInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
+    zIndex: -1,
+  },
   otpInputs: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
   },
-  otpInput: {
+  otpBox: {
     width: 45,
     height: 55,
     borderWidth: 2,
     borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  otpBoxText: {
     fontSize: 24,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  cursor: {
+    position: 'absolute',
+    width: 2,
+    height: 24,
+    borderRadius: 1,
   },
   buttonContainer: {
     width: '100%',
@@ -603,4 +886,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 })
+
 

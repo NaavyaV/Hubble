@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   Text,
@@ -9,18 +9,39 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Image,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
+import LegalAgreementModal from './LegalAgreementScreen'
+
+// Pre-load image source as constant for instant rendering
+const splashIconSource = require('../../assets/splash-icon.png')
 
 export default function AuthScreen({ navigation }: any) {
   const { theme } = useTheme()
+  const insets = useSafeAreaInsets()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [isSignIn, setIsSignIn] = useState(false)
+  const [showLegalModal, setShowLegalModal] = useState(false)
+
+  // Preload image when component mounts to ensure it's cached (backup in case App.tsx preload missed it)
+  useEffect(() => {
+    try {
+      const resolvedSource = Image.resolveAssetSource(splashIconSource)
+      if (resolvedSource?.uri) {
+        Image.prefetch(resolvedSource.uri).catch(() => {
+          // Silent fail - image will still load normally via require()
+        })
+      }
+    } catch (error) {
+      // Silent fail - image will still load normally via require()
+    }
+  }, [])
 
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
@@ -45,11 +66,23 @@ export default function AuthScreen({ navigation }: any) {
           .from('profiles')
           .select('otp_verified')
           .eq('id', data.user.id)
-          .single()
+          .maybeSingle()
         
         if (!profile?.otp_verified) {
-          // User needs to complete OTP verification
-          navigation.navigate('AccountVerification', { email: email.trim() })
+          // User needs to complete OTP verification - navigate immediately
+          navigation.reset({
+            index: 0,
+            routes: [
+              { name: 'Auth' },
+              { 
+                name: 'AccountVerification', 
+                params: { 
+                  email: email.trim(),
+                  userId: data.user.id
+                } 
+              }
+            ],
+          })
           return
         }
       }
@@ -61,7 +94,16 @@ export default function AuthScreen({ navigation }: any) {
   }
 
   const handleGetStarted = () => {
+    setShowLegalModal(true)
+  }
+
+  const handleLegalAgree = () => {
+    setShowLegalModal(false)
     navigation.navigate('Onboarding')
+  }
+
+  const handleCloseLegalModal = () => {
+    setShowLegalModal(false)
   }
 
   const handleSignInPress = () => {
@@ -74,20 +116,60 @@ export default function AuthScreen({ navigation }: any) {
     setPassword('')
   }
 
-  if (isSignIn) {
-    return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+  const handleForgotPassword = () => {
+    // Navigate to ForgotPassword screen with current email if available
+    navigation.navigate('ForgotPassword', {
+      email: email.trim() || undefined
+    })
+  }
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      {/* Render both views but show/hide them - images stay mounted */}
+      <View style={[styles.viewContainer, !isSignIn && styles.viewVisible]}>
+        <View style={[styles.welcomeContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <View style={styles.logoContainer}>
+            <Image 
+              source={splashIconSource} 
+              style={styles.welcomeLogoImage}
+              resizeMode="contain"
+              fadeDuration={0}
+            />
+            <Text style={[styles.welcomeTitle, { color: theme.text }]}>Welcome to Hubble!</Text>
+            <Text style={[styles.welcomeSubtext, { color: theme.textSecondary }]}>
+              The one stop app to improve your social life on campus :)
+            </Text>
+          </View>
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity style={[styles.getStartedButton, { backgroundColor: theme.buttonPrimary }]} onPress={handleGetStarted}>
+              <Text style={[styles.getStartedButtonText, { color: theme.buttonText }]}>Get Started</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.signInLink} onPress={handleSignInPress}>
+              <Text style={[styles.signInLinkText, { color: theme.primary }]}>Have an account? Sign in</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      <View style={[styles.viewContainer, isSignIn && styles.viewVisible]}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardView}
         >
           <ScrollView contentContainerStyle={styles.scrollContent}>
-            <View style={styles.content}>
+            <View style={[styles.content, { paddingTop: insets.top }]}>
               <TouchableOpacity style={styles.backButton} onPress={handleBack}>
                 <Ionicons name="arrow-back" size={24} color={theme.text} />
               </TouchableOpacity>
-              <View style={styles.logoContainer}>
-                <Ionicons name="calendar" size={64} color={theme.primary} />
+              <View style={[styles.logoContainer, styles.signInLogoContainer]}>
+                <Image 
+                  source={splashIconSource} 
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                  fadeDuration={0}
+                />
                 <Text style={[styles.logoText, { color: theme.text }]}>Hubble</Text>
                 <Text style={[styles.logoSubtext, { color: theme.textSecondary }]}>Connect with fellow students</Text>
               </View>
@@ -137,36 +219,26 @@ export default function AuthScreen({ navigation }: any) {
                   </Text>
                 </TouchableOpacity>
 
-                {/* Forgot Password flow removed */}
+                <TouchableOpacity
+                  style={styles.forgotPasswordLink}
+                  onPress={handleForgotPassword}
+                  disabled={loading}
+                >
+                  <Text style={[styles.forgotPasswordText, { color: theme.primary }]}>
+                    Log in with OTP
+                  </Text>
+                </TouchableOpacity>
               </View>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
-      </SafeAreaView>
-    )
-  }
-
-  return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={styles.welcomeContainer}>
-        <View style={styles.logoContainer}>
-          <Ionicons name="calendar" size={80} color={theme.primary} />
-          <Text style={[styles.welcomeTitle, { color: theme.text }]}>Welcome to Hubble</Text>
-          <Text style={[styles.welcomeSubtext, { color: theme.textSecondary }]}>
-            Connect with fellow students, discover events, and make lasting friendships on campus.
-          </Text>
-        </View>
-
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity style={[styles.getStartedButton, { backgroundColor: theme.buttonPrimary }]} onPress={handleGetStarted}>
-            <Text style={[styles.getStartedButtonText, { color: theme.buttonText }]}>Get Started</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.signInLink} onPress={handleSignInPress}>
-            <Text style={[styles.signInLinkText, { color: theme.primary }]}>Have an account? Sign in</Text>
-          </TouchableOpacity>
-        </View>
       </View>
+
+      <LegalAgreementModal
+        visible={showLegalModal}
+        onClose={handleCloseLegalModal}
+        onAgree={handleLegalAgree}
+      />
     </SafeAreaView>
   )
 }
@@ -174,6 +246,20 @@ export default function AuthScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  viewContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    opacity: 0,
+    pointerEvents: 'none',
+  },
+  viewVisible: {
+    opacity: 1,
+    pointerEvents: 'auto',
+    zIndex: 1,
   },
   keyboardView: {
     flex: 1,
@@ -191,10 +277,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 40,
+    width: '100%',
   },
   logoContainer: {
     alignItems: 'center',
-    marginBottom: 60,
+    marginBottom: 32,
+    width: '100%',
+  },
+  signInLogoContainer: {
+    marginBottom: 16,
+  },
+  logoImage: {
+    width: 64,
+    height: 64,
+  },
+  welcomeLogoImage: {
+    width: 80,
+    height: 80,
   },
   logoText: {
     fontSize: 28,
@@ -221,6 +320,7 @@ const styles = StyleSheet.create({
   buttonContainer: {
     width: '100%',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   getStartedButton: {
     paddingVertical: 16,
@@ -244,10 +344,11 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    alignItems: 'center',
   },
   form: {
-    marginTop: 40,
+    marginTop: 20,
+    width: '100%',
   },
   inputGroup: {
     marginBottom: 20,
@@ -277,5 +378,12 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     backgroundColor: '#bdc3c7',
   },
-  
+  forgotPasswordLink: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  forgotPasswordText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
 })

@@ -151,29 +151,6 @@ export function buildHostUpdateNotification(params: NotificationBuilderParams): 
 }
 
 /**
- * Build test notification
- */
-export function buildTestNotification(params: NotificationBuilderParams): NotificationPayload {
-  const { userId, userName } = params
-
-  return {
-    user_id: userId,
-    event_id: null,
-    type: 'event_reminder',
-    title: '🧪 Test Notification',
-    body: `Hello ${userName || 'User'}! This is a test notification from Hubble.`,
-    scheduled_for: params.scheduledFor?.toISOString() || new Date().toISOString(),
-    data: {
-      test: true,
-      timestamp: new Date().toISOString(),
-      screen: 'Leaderboard',
-      type: 'event_reminder',
-      ...params.additionalData
-    }
-  }
-}
-
-/**
  * Build friend request notification
  */
 export function buildFriendRequestNotification(params: NotificationBuilderParams): NotificationPayload {
@@ -243,6 +220,7 @@ export function buildOrgEventCreatedNotification(params: NotificationBuilderPara
       eventId: eventId,
       orgName: hostName,
       eventTitle: eventTitle,
+      // Include orgId and org owner ID for mute checking
       ...params.additionalData
     }
   }

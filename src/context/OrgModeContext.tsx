@@ -8,7 +8,7 @@ export interface Organization {
   icon: string | null
   type: 'Greek Life' | 'Student Organization'
   description: string | null
-  owner_id: string
+  owner_id: string | null
   college_id: string | null
   created_at: string
   updated_at: string

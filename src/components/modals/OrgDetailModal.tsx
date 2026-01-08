@@ -37,19 +37,23 @@ export default function OrgDetailModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <TouchableOpacity 
-        style={styles.modalOverlay}
-        activeOpacity={1}
-        onPress={onClose}
-      >
         <TouchableOpacity 
+          style={styles.modalOverlay}
           activeOpacity={1}
-          onPress={(e) => e.stopPropagation()}
+          onPress={onClose}
         >
-          <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+            style={styles.modalContentWrapper}
+          >
+            <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>{org.name}</Text>
-              <TouchableOpacity onPress={onClose}>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity 
+                onPress={onClose}
+                activeOpacity={0.7}
+              >
                 <Ionicons name="close" size={24} color={theme.text} />
               </TouchableOpacity>
             </View>
@@ -69,6 +73,7 @@ export default function OrgDetailModal({
                 </View>
               )}
 
+              <Text style={[styles.modalTitle, { color: theme.text }]}>{org.name}</Text>
               <Text style={[styles.modalType, { color: theme.textSecondary }]}>{org.type}</Text>
 
               {org.description && (
@@ -123,8 +128,8 @@ export default function OrgDetailModal({
               </View>
             </View>
           </View>
+          </TouchableOpacity>
         </TouchableOpacity>
-      </TouchableOpacity>
     </Modal>
   )
 }
@@ -136,6 +141,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  modalContentWrapper: {
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   modalContent: {
     borderRadius: 16,
     padding: 24,
@@ -144,13 +154,62 @@ const styles = StyleSheet.create({
   },
   modalHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 0,
+    paddingTop: 0,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '600',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuContent: {
+    borderRadius: 16,
+    padding: 0,
+    width: '85%',
+    maxWidth: 400,
+    borderWidth: 1,
+  },
+  menuTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  menuItemsContainer: {
+    padding: 12,
+    gap: 8,
+  },
+  menuItemCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  menuItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+  },
+  menuItemIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  menuItemTextContainer: {
+    flex: 1,
+  },
+  menuItemTitle: {
+    fontSize: 16,
+    fontWeight: '500',
   },
   modalBody: {
     alignItems: 'center',

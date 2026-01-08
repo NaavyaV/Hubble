@@ -18,6 +18,12 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
+import { validateContentWithAlert } from '../utils/contentFilter'
+import {
+  MAX_FULL_NAME_LENGTH,
+  MAX_BIO_LENGTH,
+  MAX_MAJOR_LENGTH,
+} from '../constants/validation'
 
 export default function EditProfileScreen({ navigation }: any) {
   const { theme } = useTheme()
@@ -138,6 +144,31 @@ export default function EditProfileScreen({ navigation }: any) {
   const handleSave = async () => {
     if (!fullName.trim()) {
       Alert.alert('Error', 'Please enter your full name')
+      return
+    }
+
+    // Security: Validate input lengths
+    if (fullName.trim().length > MAX_FULL_NAME_LENGTH) {
+      Alert.alert('Error', `Full name must be ${MAX_FULL_NAME_LENGTH} characters or less`)
+      return
+    }
+    if (major && major.trim().length > MAX_MAJOR_LENGTH) {
+      Alert.alert('Error', `Major must be ${MAX_MAJOR_LENGTH} characters or less`)
+      return
+    }
+    if (bio && bio.trim().length > MAX_BIO_LENGTH) {
+      Alert.alert('Error', `Bio must be ${MAX_BIO_LENGTH} characters or less`)
+      return
+    }
+
+    // Validate content for objectionable language
+    if (!validateContentWithAlert(fullName.trim(), (message) => Alert.alert('Invalid Content', message))) {
+      return
+    }
+    if (major && major.trim() && !validateContentWithAlert(major.trim(), (message) => Alert.alert('Invalid Content', message))) {
+      return
+    }
+    if (bio && bio.trim() && !validateContentWithAlert(bio.trim(), (message) => Alert.alert('Invalid Content', message))) {
       return
     }
 

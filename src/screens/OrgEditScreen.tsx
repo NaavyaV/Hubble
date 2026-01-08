@@ -18,6 +18,11 @@ import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
+import { validateContentWithAlert } from '../utils/contentFilter'
+import {
+  MAX_ORG_NAME_LENGTH,
+  MAX_ORG_DESCRIPTION_LENGTH,
+} from '../constants/validation'
 
 export default function OrgEditScreen({ navigation }: any) {
   const { theme } = useTheme()
@@ -87,6 +92,24 @@ export default function OrgEditScreen({ navigation }: any) {
   const handleSave = async () => {
     if (!currentOrg || !name.trim()) {
       Alert.alert('Error', 'Organization name is required')
+      return
+    }
+
+    // Security: Validate input lengths
+    if (name.trim().length > MAX_ORG_NAME_LENGTH) {
+      Alert.alert('Error', `Organization name must be ${MAX_ORG_NAME_LENGTH} characters or less`)
+      return
+    }
+    if (description && description.trim().length > MAX_ORG_DESCRIPTION_LENGTH) {
+      Alert.alert('Error', `Description must be ${MAX_ORG_DESCRIPTION_LENGTH} characters or less`)
+      return
+    }
+
+    // Validate content for objectionable language
+    if (!validateContentWithAlert(name.trim(), (message) => Alert.alert('Invalid Content', message))) {
+      return
+    }
+    if (description && description.trim() && !validateContentWithAlert(description.trim(), (message) => Alert.alert('Invalid Content', message))) {
       return
     }
 

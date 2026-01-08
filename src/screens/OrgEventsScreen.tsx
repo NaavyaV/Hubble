@@ -3,6 +3,7 @@ import {
   View,
   Text,
   FlatList,
+  SectionList,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -20,6 +21,9 @@ import { useOrgMode } from '../context/OrgModeContext'
 import { isEventEnded, isEventCurrentlyHappening } from '../utils/eventTimeUtils'
 import CreateEventScreen from './CreateEventScreen'
 import notificationService from '../services/notifications'
+import { deleteOrgEventCompletely } from '../utils/eventDeletion'
+import EventCard from '../components/common/EventCard'
+import { groupEventsByTime, GroupedEvent } from '../utils/eventGrouping'
 
 export default function OrgEventsScreen() {
   const { theme } = useTheme()
@@ -169,25 +173,23 @@ export default function OrgEventsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Send notifications to all attendees before deleting
-              // For org events, pass isOrgEvent flag and use user.id as hostId (for notification purposes only)
-              await notificationService.sendEventEditDeleteNotification(
-                eventId,
-                eventToDelete.title,
-                user.id, // Use user.id as hostId for notification purposes
-                'deleted',
-                true // Indicate it's an org event
-              )
-
-              const { error } = await supabase
-                .from('org_events')
-                .delete()
-                .eq('id', eventId)
-
-              if (error) throw error
-
+              // Update UI immediately
               setEvents(events.filter(event => event.id !== eventId))
               Alert.alert('Success', 'Event deleted successfully')
+
+              // Send notifications and delete event in the background
+              Promise.all([
+                notificationService.sendEventEditDeleteNotification(
+                  eventId,
+                  eventToDelete.title,
+                  user.id, // Use user.id as hostId for notification purposes
+                  'deleted',
+                  true // Indicate it's an org event
+                ),
+                deleteOrgEventCompletely(eventId)
+              ]).catch(error => {
+                console.error('Error during event deletion:', error)
+              })
             } catch (error) {
               console.error('Error deleting event:', error)
               Alert.alert('Error', 'Failed to delete event')
@@ -208,114 +210,19 @@ export default function OrgEventsScreen() {
   }
 
   const renderEvent = ({ item }: { item: EventWithAttendees }) => {
-    const attendeeCount = (item as any).attendee_count || 0
-    const isCurrent = isEventCurrentlyHappening(item.event_date, item.start_time, item.end_time)
     const isExpanded = expandedEventIds.has(item.id)
     const orgName = currentOrg?.name || 'Organization'
     
     return (
-      <View style={[styles.eventCard, { 
-        backgroundColor: theme.card || theme.surface, 
-        borderColor: theme.border,
-        shadowColor: theme.shadow 
-      }]}>
-        {/* Compact header row */}
-        <TouchableOpacity
-          style={styles.compactHeader}
-          onPress={() => handleEventPress(item)}
-          activeOpacity={0.8}
-        >
-          <View style={styles.compactHeaderLeft}>
-            <View style={styles.compactTitleRow}>
-              <Text style={[styles.compactTitle, { color: theme.text }]} numberOfLines={1}>{item.title}</Text>
-              {isCurrent && (
-                <View style={[styles.currentBadge, { backgroundColor: theme.success + '20', borderColor: theme.success }]}>
-                  <Ionicons name="pulse" size={8} color={theme.success} />
-                  <Text style={[styles.currentBadgeText, { color: theme.success }]}>Current</Text>
-                </View>
-              )}
-            </View>
-            <Text style={[styles.compactHost, { color: theme.textSecondary }]} numberOfLines={1}>
-              {orgName}
-            </Text>
-          </View>
-          <View style={styles.compactHeaderCenter}>
-            <View style={styles.compactRowLeftAligned}>
-              <Ionicons name="calendar" size={14} color="#e74c3c" />
-              <Text style={[styles.compactMeta, { color: theme.textSecondary }]} numberOfLines={1}>{formatDate(item.event_date)}</Text>
-            </View>
-            <View style={styles.compactRowLeftAligned}>
-              <Ionicons name="time" size={14} color="#f39c12" />
-              <Text style={[styles.compactMeta, { color: theme.textSecondary }]} numberOfLines={1}>{formatTime(item.start_time)}</Text>
-            </View>
-          </View>
-          <View style={styles.compactHeaderRight}>
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={() => handleDeleteEvent(item.id)}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="trash-outline" size={18} color={theme.error} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.expandIcon}
-              onPress={() => toggleExpanded(item.id)}
-              activeOpacity={0.7}
-            >
-              <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={theme.textSecondary} />
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-
-        {/* Expanded content */}
-        {isExpanded && (
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => handleEventPress(item)}
-          >
-            {/* Optional image */}
-            {item.image_url && (
-              <Image
-                source={{ uri: item.image_url }}
-                style={[styles.compactImage, { backgroundColor: theme.surface }]}
-                resizeMode="cover"
-              />
-            )}
-
-            {/* Description */}
-            {item.description ? (
-              <Text style={[styles.compactDescription, { color: theme.textSecondary }]}>{item.description}</Text>
-            ) : null}
-          
-            {/* Location */}
-            {item.location ? (
-              <View style={[
-                styles.compactLocationRow,
-                !item.description && { paddingTop: 10 }
-              ]}>
-                <Ionicons name="location" size={16} color="#27ae60" />
-                <Text style={[styles.compactLocationText, { color: theme.textSecondary }]}>{item.location}</Text>
-            </View>
-            ) : null}
-
-            {/* Stats */}
-            <View style={styles.compactStatsRow}>
-              <View style={styles.compactRow}>
-                <Ionicons name="people" size={14} color="#27ae60" />
-                <Text style={[styles.compactMeta, { color: theme.textSecondary }]}>{attendeeCount} going</Text>
-              </View>
-              {item.max_attendees ? (
-                <View style={styles.compactRow}>
-                  <Ionicons name="person-add" size={14} color="#3498db" />
-                  <Text style={[styles.compactMeta, { color: theme.textSecondary }]}>
-                    {attendeeCount}/{item.max_attendees} spots
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          </TouchableOpacity>
-        )}
-      </View>
+      <EventCard
+        item={{ ...item, attendee_count: (item as any).attendee_count || 0 }}
+        hostOrg={{ id: (item as any).org_id || '', name: orgName }}
+        isExpanded={isExpanded}
+        showDeleteButton={true}
+        onDelete={() => handleDeleteEvent(item.id)}
+        onToggleExpand={() => toggleExpanded(item.id)}
+        onPress={() => handleEventPress(item)}
+      />
     )
   }
 
@@ -338,32 +245,43 @@ export default function OrgEventsScreen() {
     return !isEventEnded(event.event_date, event.start_time, event.end_time)
   })
 
+  const groupedEvents = groupEventsByTime(currentEvents)
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
-      <FlatList
-        data={currentEvents}
-        renderItem={renderEvent}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.eventsList}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[theme.primary]}
-            tintColor={theme.primary}
-          />
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events</Text>
-            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-              Your organization doesn't have any upcoming events. Tap the + button to create one!
-            </Text>
-          </View>
-        }
-      />
+      {groupedEvents.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
+          <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events</Text>
+          <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+            Your organization doesn't have any upcoming events. Tap the + button to create one!
+          </Text>
+        </View>
+      ) : (
+        <SectionList
+          sections={groupedEvents}
+          renderItem={renderEvent}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
+                {section.title}
+              </Text>
+            </View>
+          )}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.eventsList}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+          stickySectionHeadersEnabled={false}
+        />
+      )}
 
       {/* Create Button */}
       <TouchableOpacity
@@ -394,6 +312,16 @@ export default function OrgEventsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  sectionHeader: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 6,
+    paddingVertical: 12,
+    paddingTop: 10,
+  },
+  sectionHeaderText: {
+    fontSize: 20,
+    fontWeight: '700',
   },
   loadingContainer: {
     flex: 1,

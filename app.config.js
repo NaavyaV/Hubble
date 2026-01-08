@@ -63,6 +63,7 @@ export default ({ config }) => {
         },
       ],
       "expo-dev-client",
+      "expo-updates",
     ],
     extra: {
       eas: {

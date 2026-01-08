@@ -11,6 +11,7 @@ import {
   Platform,
   Image,
   Switch,
+  Modal,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -21,6 +22,13 @@ import { useTheme } from '../context/ThemeContext'
 import * as Notifications from 'expo-notifications'
 import notificationService from '../services/notifications'
 import * as Device from 'expo-device'
+import { validateContentWithAlert } from '../utils/contentFilter'
+import {
+  MAX_FULL_NAME_LENGTH,
+  MAX_BIO_LENGTH,
+  MAX_MAJOR_LENGTH,
+  MAX_PHONE_NUMBER_LENGTH,
+} from '../constants/validation'
 
 interface OnboardingData {
   fullName: string
@@ -36,7 +44,13 @@ interface OnboardingData {
   phoneVisibility: 'public' | 'friends_only' | 'private'
   phoneVisibleWhenHosting: boolean
   notificationsEnabled: boolean
+  eventReminders: boolean
+  goingStatusUpdates: boolean
+  friendRequests: boolean
+  eventInvitations: boolean
+  eventDeletions: boolean
 }
+
 
 export default function OnboardingScreen({ navigation }: any) {
   const { theme } = useTheme()
@@ -55,6 +69,11 @@ export default function OnboardingScreen({ navigation }: any) {
     phoneVisibility: 'private',
     phoneVisibleWhenHosting: false,
     notificationsEnabled: true,
+    eventReminders: true,
+    goingStatusUpdates: true,
+    friendRequests: true,
+    eventInvitations: true,
+    eventDeletions: true,
   })
   const [loading, setLoading] = useState(false)
   const [colleges, setColleges] = useState<any[]>([])
@@ -65,6 +84,44 @@ export default function OnboardingScreen({ navigation }: any) {
   const isSkipAvailable = () => {
     const step = steps[currentStep]
     return step === 'bio' || step === 'profilePicture' || step === 'phoneNumber'
+  }
+
+  const hasFilledSkippableAction = () => {
+    const step = steps[currentStep]
+    if (step === 'bio') {
+      return data.bio.trim().length > 0
+    }
+    if (step === 'profilePicture') {
+      return data.profileImageUri !== null
+    }
+    if (step === 'phoneNumber') {
+      // For phone number, consider it "filled" if there's any input (even if invalid)
+      // This way we show "Next" instead of "Skip" when user types something
+      return data.phoneNumber.trim().length > 0
+    }
+    return false
+  }
+
+  const getBottomButtonText = () => {
+    if (loading) return 'Creating Account...'
+    if (currentStep === steps.length - 1) return 'Create Account'
+    
+    // For skippable steps, show "Skip" if nothing is filled, "Next" if something is filled
+    if (isSkipAvailable()) {
+      return hasFilledSkippableAction() ? 'Next' : 'Skip'
+    }
+    
+    return 'Next'
+  }
+
+  const handleBottomButtonPress = () => {
+    // If showing "Skip" and it's a skippable step, call handleSkip
+    if (isSkipAvailable() && !hasFilledSkippableAction()) {
+      handleSkip()
+    } else {
+      // Otherwise, proceed normally with handleNext
+      handleNext()
+    }
   }
 
   const handleSkip = () => {
@@ -102,6 +159,7 @@ export default function OnboardingScreen({ navigation }: any) {
     fetchColleges()
   }, [])
 
+
   // Auto-request notification permissions when notifications step is shown
   useEffect(() => {
     // Step 8 is 'notifications' (0-indexed)
@@ -111,6 +169,22 @@ export default function OnboardingScreen({ navigation }: any) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep])
+
+  // Request expo notification permissions when notification settings step is shown
+  useEffect(() => {
+    const notificationSettingsStepIndex = steps.indexOf('notificationSettings')
+    if (currentStep === notificationSettingsStepIndex && data.notificationsEnabled) {
+      const requestPermissions = async () => {
+        const { status } = await Notifications.requestPermissionsAsync()
+        if (status !== 'granted') {
+          // User denied permissions, disable notifications
+          updateData('notificationsEnabled', false)
+        }
+      }
+      requestPermissions()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, data.notificationsEnabled])
 
   const fetchColleges = async () => {
     try {
@@ -183,12 +257,20 @@ export default function OnboardingScreen({ navigation }: any) {
     'phoneNumber',
     'phonePrivacy',
     'notifications',
+    'notificationSettings',
     'credentials',
   ]
 
   const handleNext = async () => {
     if (currentStep < steps.length - 1) {
-      setCurrentStep(currentStep + 1)
+      let nextStep = currentStep + 1
+      
+      // Skip notificationSettings step if notifications are disabled
+      if (steps[nextStep] === 'notificationSettings' && !data.notificationsEnabled) {
+        nextStep = nextStep + 1
+      }
+      
+      setCurrentStep(nextStep)
     } else {
       // Final step - create account, profile, and send OTP
       
@@ -221,27 +303,186 @@ export default function OnboardingScreen({ navigation }: any) {
 
         authData = authResult.data
 
-        // Step 3: Upload profile image if provided
-        let avatarUrl = null
-        if (data.profileImageUri && !data.profileImageUri.startsWith('http')) {
-          try {
-            const fileExt = data.profileImageUri.split('.').pop()?.toLowerCase() || 'jpg'
-            const fileName = `profile-${Date.now()}.${fileExt}`
-            const filePath = `profile-images/${fileName}`
-            const contentType = guessContentTypeFromUri(data.profileImageUri)
-
-            avatarUrl = await uploadBytesToBucket({
-              bucket: 'profile-images',
-              filePath,
-              uri: data.profileImageUri,
-              contentType,
-            })
-          } catch (uploadError) {
-            // Continue without profile image - don't fail the entire process
+        // Step 2: WAIT for user to be authenticated before proceeding
+        // signUp() may not immediately provide a session if email confirmation is required
+        // We MUST wait for authentication before uploading profile picture
+        console.log('Waiting for user authentication...')
+        let session = authResult.data.session
+        
+        if (!session) {
+          console.log('No session from signUp, waiting for session to be established...')
+          let sessionEstablished = false
+          let attempts = 0
+          const maxAttempts = 30 // Increased attempts to ensure we get authenticated
+          
+          while (!sessionEstablished && attempts < maxAttempts) {
+            const { data: { session: currentSession } } = await supabase.auth.getSession()
+            if (currentSession) {
+              console.log('Session established successfully - user is authenticated')
+              session = currentSession
+              sessionEstablished = true
+            } else {
+              attempts++
+              console.log(`Waiting for authentication... (attempt ${attempts}/${maxAttempts})`)
+              await new Promise(resolve => setTimeout(resolve, 500)) // Wait 500ms between attempts
+            }
           }
+          
+          if (!sessionEstablished) {
+            console.error('Failed to establish session after signUp - cannot proceed with profile creation')
+            Alert.alert(
+              'Authentication Error',
+              'Unable to authenticate your account. Please try again.',
+              [{ text: 'OK', onPress: () => setLoading(false) }]
+            )
+            return
+          }
+        } else {
+          console.log('Session available from signUp - user is authenticated')
         }
 
-        // Step 4: Create profile with all onboarding data
+        // Small delay to ensure session is fully established
+        await new Promise(resolve => setTimeout(resolve, 200))
+
+        // Step 3: NOW that user is authenticated, upload profile image if provided
+        let avatarUrl = null
+        if (data.profileImageUri) {
+          if (data.profileImageUri.startsWith('http')) {
+            // If it's already a URL, use it directly
+            avatarUrl = data.profileImageUri
+            console.log('Using existing profile image URL:', avatarUrl)
+          } else {
+            // Upload the image - user is now authenticated
+            try {
+              console.log('User authenticated - uploading profile image:', data.profileImageUri)
+              
+              // Re-verify and refresh session right before upload
+              let uploadSession = session
+              if (!uploadSession) {
+                console.log('Session not available, refreshing...')
+                const { data: { session: refreshedSession } } = await supabase.auth.getSession()
+                if (!refreshedSession) {
+                  // Try to get user to refresh session
+                  const { data: { user: currentUser } } = await supabase.auth.getUser()
+                  if (currentUser) {
+                    // User exists, try getting session again with a small delay
+                    await new Promise(resolve => setTimeout(resolve, 200))
+                    const { data: { session: retrySession } } = await supabase.auth.getSession()
+                    uploadSession = retrySession
+                  }
+                } else {
+                  uploadSession = refreshedSession
+                }
+              }
+              
+              // Verify user is authenticated one more time
+              const { data: { user: verifyUser } } = await supabase.auth.getUser()
+              if (!verifyUser) {
+                throw new Error('User authentication lost')
+              }
+              
+              if (!uploadSession) {
+                console.warn('Session lost before upload - storing image URI in metadata for upload after OTP')
+                // Store in metadata as fallback - will upload after OTP verification
+                // Use the user ID directly since we have it from signUp
+                try {
+                  await supabase.auth.updateUser({
+                    data: {
+                      ...(authData.user.user_metadata || {}),
+                      pending_profile_image_uri: data.profileImageUri
+                    }
+                  })
+                  console.log('Profile image URI stored in metadata for upload after OTP verification')
+                } catch (metadataError) {
+                  console.error('Error storing profile image URI in metadata:', metadataError)
+                }
+                avatarUrl = null
+              } else {
+                console.log('Session confirmed - proceeding with upload')
+                const fileExt = data.profileImageUri.split('.').pop()?.toLowerCase() || 'jpg'
+                const fileName = `profile-${authData.user.id}-${Date.now()}.${fileExt}`
+                const filePath = `profile-images/${fileName}`
+                const contentType = guessContentTypeFromUri(data.profileImageUri)
+
+                console.log('Upload parameters:', { bucket: 'profile-images', filePath, contentType })
+                
+                // User is authenticated - proceed with upload
+                avatarUrl = await uploadBytesToBucket({
+                  bucket: 'profile-images',
+                  filePath,
+                  uri: data.profileImageUri,
+                  contentType,
+                })
+                
+                console.log('Profile image uploaded successfully:', avatarUrl)
+                
+                if (!avatarUrl) {
+                  console.error('Upload succeeded but no URL returned - this should not happen')
+                  Alert.alert(
+                    'Upload Warning',
+                    'Profile image upload completed but URL was not returned. Your profile will be created without an image.',
+                    [{ text: 'OK' }]
+                  )
+                } else {
+                  console.log('Profile image URL confirmed:', avatarUrl)
+                }
+              }
+            } catch (uploadError: any) {
+              // Log error and handle gracefully
+              console.error('Error uploading profile image:', uploadError)
+              console.error('Upload error details:', {
+                message: uploadError?.message,
+                code: uploadError?.code,
+                error: uploadError
+              })
+              
+              // If it's an auth/session error, store in metadata for later upload
+              if (uploadError?.message?.includes('authenticated') || 
+                  uploadError?.message?.includes('Session') ||
+                  uploadError?.message?.includes('session')) {
+                console.log('Auth error during upload - storing image URI in metadata for later upload')
+                try {
+                  await supabase.auth.updateUser({
+                    data: {
+                      ...(authData.user.user_metadata || {}),
+                      pending_profile_image_uri: data.profileImageUri
+                    }
+                  })
+                  console.log('Profile image URI stored in metadata for upload after OTP verification')
+                } catch (metadataError) {
+                  console.error('Error storing profile image URI in metadata:', metadataError)
+                }
+                avatarUrl = null
+              } else {
+                // Other upload errors - show alert but continue
+                Alert.alert(
+                  'Image Upload Failed',
+                  'Your profile picture could not be uploaded. Your account will be created without a profile picture. You can add one later in your profile settings.',
+                  [{ text: 'Continue', style: 'default' }]
+                )
+                avatarUrl = null
+              }
+            }
+          }
+        } else {
+          console.log('No profile image provided')
+        }
+
+        // Step 4: Validate content for objectionable language
+        if (!validateContentWithAlert(data.fullName.trim(), (message) => Alert.alert('Invalid Content', message))) {
+          setLoading(false)
+          return
+        }
+        if (data.major.trim() && !validateContentWithAlert(data.major.trim(), (message) => Alert.alert('Invalid Content', message))) {
+          setLoading(false)
+          return
+        }
+        if (data.bio.trim() && !validateContentWithAlert(data.bio.trim(), (message) => Alert.alert('Invalid Content', message))) {
+          setLoading(false)
+          return
+        }
+
+        // Step 6: Create profile with all onboarding data
         const profileData = {
           id: authData.user.id,
           full_name: data.fullName.trim(),
@@ -249,7 +490,7 @@ export default function OnboardingScreen({ navigation }: any) {
           major: data.major.trim(),
           graduating_year: data.graduatingYear,
           bio: data.bio.trim(),
-          avatar_url: avatarUrl,
+          avatar_url: avatarUrl || null, // Ensure it's set (even if null)
           phone_number: data.phoneNumber.trim(),
           phone_visibility: data.phoneVisibility,
           phone_visible_when_hosting: data.phoneVisibleWhenHosting,
@@ -258,6 +499,17 @@ export default function OnboardingScreen({ navigation }: any) {
           updated_at: new Date().toISOString()
         }
         
+        if (__DEV__) {
+          console.log('Creating profile with data:', {
+            ...profileData,
+            avatar_url: avatarUrl ? 'SET' : 'NULL' // Don't log actual URLs
+          })
+        }
+        
+        // Verify avatar_url is set correctly before creating profile
+        if (data.profileImageUri && !avatarUrl) {
+          console.warn('WARNING: Profile image URI was provided but avatarUrl is null/undefined')
+        }
         
         const { error: profileError } = await supabase
           .from('profiles')
@@ -285,29 +537,66 @@ export default function OnboardingScreen({ navigation }: any) {
           return // Stay on current screen
         }
 
-        // Step 5: Save notification preferences
-        const notificationPreferences = {
-          user_id: authData.user.id,
-          push_notifications: data.notificationsEnabled,
-          event_reminders: data.notificationsEnabled,
-          going_status_updates: data.notificationsEnabled,
-          friend_requests: data.notificationsEnabled,
-          event_invitations: data.notificationsEnabled,
-          event_deletions: data.notificationsEnabled,
+        // Step 5: Refresh session before following orgs and creating notification preferences
+        // Ensure we have a valid session for RLS policies
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        if (!currentSession) {
+          console.error('Session lost before following orgs - cannot proceed')
+          Alert.alert(
+            'Session Error',
+            'Your session was lost. Please try creating your account again.',
+            [{ text: 'OK', onPress: () => setLoading(false) }]
+          )
+          return
+        }
+        
+        // Verify user is authenticated
+        const { data: { user: currentUser } } = await supabase.auth.getUser()
+        if (!currentUser || currentUser.id !== authData.user.id) {
+          console.error('User authentication mismatch')
+          Alert.alert(
+            'Authentication Error',
+            'Authentication error occurred. Please try again.',
+            [{ text: 'OK', onPress: () => setLoading(false) }]
+          )
+          return
         }
 
+        // Step 6: Create notification preferences NOW (user is authenticated)
+        const notificationPreferencesData = {
+          user_id: currentUser.id, // Use current user ID from session
+          push_notifications: data.notificationsEnabled,
+          event_reminders: data.notificationsEnabled && data.eventReminders,
+          going_status_updates: data.notificationsEnabled && data.goingStatusUpdates,
+          friend_requests: data.notificationsEnabled && data.friendRequests,
+          event_invitations: data.notificationsEnabled && data.eventInvitations,
+          event_deletions: data.notificationsEnabled && data.eventDeletions,
+        }
+        
+        console.log('Creating notification preferences:', notificationPreferencesData)
+        if (__DEV__) {
+          console.log('User IDs match')
+        }
+        
         const { error: prefError } = await supabase
           .from('notification_preferences')
-          .insert(notificationPreferences)
-
+          .upsert(notificationPreferencesData, { onConflict: 'user_id' })
+        
         if (prefError) {
-          // Log error but don't fail account creation
-          if (__DEV__) {
-            console.error('Error saving notification preferences:', prefError)
-          }
+          console.error('Error creating notification preferences:', prefError)
+          console.error('Pref error details:', {
+            message: prefError.message,
+            code: prefError.code,
+            details: prefError.details,
+            hint: prefError.hint
+          })
+          // Don't fail the entire process, but log the error
+          // User can set preferences later if this fails
+        } else {
+          console.log('Notification preferences created successfully')
         }
 
-        // Step 6: Request notification token if enabled and on a device
+        // Step 7: Request notification token if enabled and on a device
         if (data.notificationsEnabled && Device.isDevice) {
           try {
             // Small delay to ensure preferences are saved
@@ -325,7 +614,8 @@ export default function OnboardingScreen({ navigation }: any) {
           }
         }
 
-        // Step 7: Navigate to verification screen with email and userId
+        // Step 8: Navigate to verification screen with email and userId
+        // ALL user data is now set up: profile created, PFP uploaded, orgs followed, notification preferences created
         navigation.navigate('AccountVerification', { 
           email: data.email.trim(),
           userId: authData.user.id
@@ -361,7 +651,15 @@ export default function OnboardingScreen({ navigation }: any) {
           return
         }
       }
-      setCurrentStep(currentStep - 1)
+      
+      let prevStep = currentStep - 1
+      
+      // Skip notificationSettings step if notifications are disabled when going back
+      if (stepsOrder[prevStep] === 'notificationSettings' && !data.notificationsEnabled) {
+        prevStep = prevStep - 1
+      }
+      
+      setCurrentStep(prevStep)
     }
   }
 
@@ -591,6 +889,12 @@ export default function OnboardingScreen({ navigation }: any) {
     return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`
   }
 
+  const isValidPhoneNumber = (phone: string) => {
+    // Check if phone number has exactly 10 digits
+    const digits = (phone || '').replace(/\D/g, '')
+    return digits.length === 10
+  }
+
   const renderPhoneNumberStep = () => (
     <View style={styles.stepContainer}>
       <Text style={[styles.stepTitle, { color: theme.text }]}>What's your phone number?</Text>
@@ -683,45 +987,39 @@ export default function OnboardingScreen({ navigation }: any) {
         </View>
 
         {/* Show hosting toggle for all privacy levels, but with different behavior for public */}
-        <TouchableOpacity 
+        <View 
           style={[
             styles.hostingToggleContainer, 
             { backgroundColor: theme.surface, borderColor: theme.border },
             data.phoneVisibility === 'public' && { opacity: 0.7 } // Dim when public (auto-enabled)
           ]}
-          onPress={() => {
-            // Don't allow toggling when public since it's automatically enabled
-            if (data.phoneVisibility !== 'public') {
-              updateData('phoneVisibleWhenHosting', !data.phoneVisibleWhenHosting)
-            }
-          }}
-          disabled={data.phoneVisibility === 'public'}
         >
-          <View style={styles.hostingToggleLeft}>
-            <Ionicons name="calendar" size={24} color={theme.textSecondary} />
-            <View style={styles.hostingToggleText}>
+          <View style={styles.hostingToggleContent}>
+            <View style={styles.hostingToggleTextContainer}>
               <Text style={[styles.hostingToggleTitle, { color: theme.text }]}>
-                Phone number shown when hosting events
+                Show phone number when hosting
               </Text>
               <Text style={[styles.hostingToggleDescription, { color: theme.textSecondary }]}>
-                {data.phoneVisibility === 'public' 
-                  ? 'Automatically enabled since your phone number is public'
-                  : 'Show your phone number for contact when you host events'
-                }
+                Display your number to event attendees
               </Text>
             </View>
+            <View style={styles.hostingToggleSwitchWrapper}>
+              <Switch
+                value={data.phoneVisibleWhenHosting}
+                onValueChange={(value) => {
+                  // Don't allow toggling when public since it's automatically enabled
+                  if (data.phoneVisibility !== 'public') {
+                    updateData('phoneVisibleWhenHosting', value)
+                  }
+                }}
+                disabled={data.phoneVisibility === 'public'}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
           </View>
-          <View style={[
-            styles.iosToggle,
-            { backgroundColor: data.phoneVisibleWhenHosting ? theme.primary : theme.border }
-          ]}>
-            <View style={[
-              styles.iosToggleThumb,
-              { backgroundColor: theme.surface },
-              data.phoneVisibleWhenHosting && styles.iosToggleThumbActive
-            ]} />
-          </View>
-        </TouchableOpacity>
+        </View>
       </View>
     )
   }
@@ -791,33 +1089,18 @@ export default function OnboardingScreen({ navigation }: any) {
   }
 
   const renderNotificationsStep = () => {
-    const handleNotificationToggle = async () => {
-      if (!data.notificationsEnabled) {
-        // User is enabling notifications, request permissions
-        await requestNotificationPermissions()
-        // requestNotificationPermissions already handles updating the toggle state
-      } else {
-        // User is disabling notifications
-        updateData('notificationsEnabled', false)
-      }
-    }
-
     return (
       <View style={styles.stepContainer}>
         <Text style={[styles.stepTitle, { color: theme.text }]}>Notifications</Text>
         <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Stay updated on events and friend requests</Text>
         
         <View style={[styles.notificationSection, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <TouchableOpacity 
-            style={styles.notificationItem}
-            onPress={handleNotificationToggle}
-            activeOpacity={0.7}
-          >
+          <View style={styles.notificationItem}>
             <View style={styles.notificationItemLeft}>
               <Ionicons 
                 name="notifications-outline" 
                 size={24} 
-                color={data.notificationsEnabled ? theme.primary : theme.textSecondary} 
+                color={theme.textSecondary} 
               />
               <View style={styles.notificationItemText}>
                 <Text style={[styles.notificationItemTitle, { color: theme.text }]}>
@@ -828,39 +1111,20 @@ export default function OnboardingScreen({ navigation }: any) {
                 </Text>
               </View>
             </View>
-            <Switch
-              value={data.notificationsEnabled}
-              onValueChange={async (val) => {
-                if (val) {
-                  await requestNotificationPermissions()
-                } else {
-                  updateData('notificationsEnabled', false)
-                }
-              }}
-              trackColor={{ false: theme.border, true: theme.primary }}
-              thumbColor={data.notificationsEnabled ? theme.buttonText : theme.textSecondary}
-              ios_backgroundColor={theme.border}
-            />
-          </TouchableOpacity>
-
-          <View style={[styles.notificationDetails, { borderTopColor: theme.border }]}>
-            <View style={styles.notificationDetailItem}>
-              <Ionicons name="calendar-outline" size={16} color={theme.textSecondary} />
-              <Text style={[styles.notificationDetailText, { color: theme.textSecondary }]}>
-                Event reminders and updates
-              </Text>
-            </View>
-            <View style={styles.notificationDetailItem}>
-              <Ionicons name="people-outline" size={16} color={theme.textSecondary} />
-              <Text style={[styles.notificationDetailText, { color: theme.textSecondary }]}>
-                Friend requests and messages
-              </Text>
-            </View>
-            <View style={styles.notificationDetailItem}>
-              <Ionicons name="checkmark-circle-outline" size={16} color={theme.textSecondary} />
-              <Text style={[styles.notificationDetailText, { color: theme.textSecondary }]}>
-                Event confirmations and changes
-              </Text>
+            <View style={styles.notificationSwitchWrapper}>
+              <Switch
+                value={data.notificationsEnabled}
+                onValueChange={async (val) => {
+                  if (val) {
+                    await requestNotificationPermissions()
+                  } else {
+                    updateData('notificationsEnabled', false)
+                  }
+                }}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
             </View>
           </View>
         </View>
@@ -872,15 +1136,149 @@ export default function OnboardingScreen({ navigation }: any) {
     )
   }
 
+  const renderNotificationSettingsStep = () => {
+    if (!data.notificationsEnabled) {
+      // If notifications are disabled, skip this step
+      return null
+    }
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={[styles.stepTitle, { color: theme.text }]}>Notification Preferences</Text>
+        <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Choose what you want to be notified about</Text>
+        
+        <View style={[styles.notificationSection, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <View style={[styles.notificationSettingItem, { borderBottomColor: theme.border }]}>
+            <View style={styles.notificationSettingLeft}>
+              <Ionicons name="calendar-outline" size={20} color={theme.textSecondary} />
+              <View style={styles.notificationSettingTextContainer}>
+                <Text style={[styles.notificationSettingLabel, { color: theme.text }]}>
+                  Event Reminders
+                </Text>
+                <Text style={[styles.notificationSettingDescription, { color: theme.textSecondary }]}>
+                  Get reminders before events you're attending
+                </Text>
+              </View>
+            </View>
+            <View style={styles.notificationSwitchWrapper}>
+              <Switch
+                value={data.eventReminders}
+                onValueChange={(val) => updateData('eventReminders', val)}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
+          </View>
+
+          <View style={[styles.notificationSettingItem, { borderBottomColor: theme.border }]}>
+            <View style={styles.notificationSettingLeft}>
+              <Ionicons name="checkmark-circle-outline" size={20} color={theme.textSecondary} />
+              <View style={styles.notificationSettingTextContainer}>
+                <Text style={[styles.notificationSettingLabel, { color: theme.text }]}>
+                  Going Status Updates
+                </Text>
+                <Text style={[styles.notificationSettingDescription, { color: theme.textSecondary }]}>
+                  Notifications when friends mark themselves as going
+                </Text>
+              </View>
+            </View>
+            <View style={styles.notificationSwitchWrapper}>
+              <Switch
+                value={data.goingStatusUpdates}
+                onValueChange={(val) => updateData('goingStatusUpdates', val)}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
+          </View>
+
+          <View style={[styles.notificationSettingItem, { borderBottomColor: theme.border }]}>
+            <View style={styles.notificationSettingLeft}>
+              <Ionicons name="people-outline" size={20} color={theme.textSecondary} />
+              <View style={styles.notificationSettingTextContainer}>
+                <Text style={[styles.notificationSettingLabel, { color: theme.text }]}>
+                  Friend Requests
+                </Text>
+                <Text style={[styles.notificationSettingDescription, { color: theme.textSecondary }]}>
+                  Get notified when someone sends you a friend request
+                </Text>
+              </View>
+            </View>
+            <View style={styles.notificationSwitchWrapper}>
+              <Switch
+                value={data.friendRequests}
+                onValueChange={(val) => updateData('friendRequests', val)}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
+          </View>
+
+          <View style={[styles.notificationSettingItem, { borderBottomColor: theme.border }]}>
+            <View style={styles.notificationSettingLeft}>
+              <Ionicons name="mail-outline" size={20} color={theme.textSecondary} />
+              <View style={styles.notificationSettingTextContainer}>
+                <Text style={[styles.notificationSettingLabel, { color: theme.text }]}>
+                  Event Invitations
+                </Text>
+                <Text style={[styles.notificationSettingDescription, { color: theme.textSecondary }]}>
+                  Notifications when you're invited to events
+                </Text>
+              </View>
+            </View>
+            <View style={styles.notificationSwitchWrapper}>
+              <Switch
+                value={data.eventInvitations}
+                onValueChange={(val) => updateData('eventInvitations', val)}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
+          </View>
+
+          <View style={styles.notificationSettingItem}>
+            <View style={styles.notificationSettingLeft}>
+              <Ionicons name="trash-outline" size={20} color={theme.textSecondary} />
+              <View style={styles.notificationSettingTextContainer}>
+                <Text style={[styles.notificationSettingLabel, { color: theme.text }]}>
+                  Event Deletions
+                </Text>
+                <Text style={[styles.notificationSettingDescription, { color: theme.textSecondary }]}>
+                  Get notified when events you're attending are deleted
+                </Text>
+              </View>
+            </View>
+            <View style={styles.notificationSwitchWrapper}>
+              <Switch
+                value={data.eventDeletions}
+                onValueChange={(val) => updateData('eventDeletions', val)}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                thumbColor={theme.surface}
+                ios_backgroundColor={theme.border}
+              />
+            </View>
+          </View>
+        </View>
+      </View>
+    )
+  }
+
   const getWordCount = (text: string) => {
     return text.trim().split(/\s+/).filter(word => word.length > 0).length
   }
 
+
   const renderCredentialsStep = () => {
     const selectedCollegeDomain = getSelectedCollegeDomain()
     const emailPlaceholder = selectedCollegeDomain 
-      ? `Enter your ${selectedCollegeDomain} email` 
+      ? `Enter your @${selectedCollegeDomain} email` 
       : 'Enter your college email'
+    const selectedCollege = colleges.find(college => college.id === data.collegeId)
+    const collegeName = selectedCollege?.name || 'this college'
     
     return (
       <View style={styles.stepContainer}>
@@ -915,6 +1313,11 @@ export default function OnboardingScreen({ navigation }: any) {
               spellCheck={false}
               textContentType="emailAddress"
             />
+            {data.collegeId && selectedCollege && (
+              <Text style={[styles.collegeNote, { color: theme.textSecondary }]}>
+                You must be a student at {collegeName} to use Hubble.
+              </Text>
+            )}
             {selectedCollegeDomain && emailDomainError && (
               <View style={styles.emailErrorContainer}>
                 <Text style={[styles.emailDomainHint, { color: '#ff4444' }]}>
@@ -978,6 +1381,8 @@ export default function OnboardingScreen({ navigation }: any) {
         return renderPhonePrivacyStep()
       case 'notifications':
         return renderNotificationsStep()
+      case 'notificationSettings':
+        return renderNotificationSettingsStep()
       case 'credentials':
         return renderCredentialsStep()
       default:
@@ -1000,10 +1405,14 @@ export default function OnboardingScreen({ navigation }: any) {
       case 'profilePicture':
         return true // Optional
       case 'phoneNumber':
-        return true // Optional
+        // Can proceed if phone is empty (skip) or valid (10 digits)
+        const phoneDigits = (data.phoneNumber || '').replace(/\D/g, '')
+        return phoneDigits.length === 0 || phoneDigits.length === 10
       case 'phonePrivacy':
         return true // Settings step
       case 'notifications':
+        return true // Settings step
+      case 'notificationSettings':
         return true // Settings step
       case 'credentials':
         return !collegesLoading && 
@@ -1030,15 +1439,6 @@ export default function OnboardingScreen({ navigation }: any) {
           >
             <Ionicons name="arrow-back" size={24} color={theme.text} />
           </TouchableOpacity>
-          {isSkipAvailable() && (
-            <TouchableOpacity 
-              style={[styles.skipTopButton, { backgroundColor: theme.buttonPrimary }]}
-              onPress={handleSkip}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.skipTopButtonText, { color: theme.buttonText }]}>Skip</Text>
-            </TouchableOpacity>
-          )}
         </View>
 
         <ScrollView 
@@ -1056,12 +1456,11 @@ export default function OnboardingScreen({ navigation }: any) {
               { backgroundColor: theme.buttonPrimary },
               (!canProceed() || loading) && { backgroundColor: theme.textTertiary }
             ]}
-            onPress={handleNext}
+            onPress={handleBottomButtonPress}
             disabled={!canProceed() || loading}
           >
             <Text style={[styles.nextButtonText, { color: theme.buttonText }]}>
-              {loading ? 'Creating Account...' : 
-               currentStep === steps.length - 1 ? 'Create Account' : 'Next'}
+              {getBottomButtonText()}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1240,6 +1639,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontStyle: 'italic',
   },
+  collegeNote: {
+    fontSize: 13,
+    marginTop: 8,
+    textAlign: 'left',
+    fontStyle: 'italic',
+  },
   emailErrorContainer: {
     alignItems: 'center',
     marginTop: 8,
@@ -1348,33 +1753,39 @@ const styles = StyleSheet.create({
     flexWrap: 'nowrap',
   },
   hostingToggleContainer: {
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginTop: 12,
+    marginBottom: 24,
+    borderWidth: 1,
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  hostingToggleContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-    borderRadius: 16,
-    marginTop: 8,
-    marginBottom: 24,
-    borderWidth: 1,
   },
-  hostingToggleLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  hostingToggleTextContainer: {
     flex: 1,
-  },
-  hostingToggleText: {
-    marginLeft: 16,
-    flex: 1,
+    flexShrink: 1,
+    marginRight: 12,
   },
   hostingToggleTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   hostingToggleDescription: {
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  hostingToggleSwitchWrapper: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   notificationSection: {
     marginTop: 20,
@@ -1422,6 +1833,37 @@ const styles = StyleSheet.create({
   notificationDetailText: {
     fontSize: 14,
     marginLeft: 12,
+  },
+  notificationSettingItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+  },
+  notificationSettingLeft: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    flex: 1,
+  },
+  notificationSettingTextContainer: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  notificationSettingLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  notificationSettingDescription: {
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  notificationSwitchWrapper: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   iosToggle: {
     width: 51,

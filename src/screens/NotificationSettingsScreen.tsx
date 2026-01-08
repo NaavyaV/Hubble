@@ -157,6 +157,8 @@ export default function NotificationSettingsScreen() {
           event_invitations: settings.eventInvitations,
           event_deletions: settings.eventDeletions,
           updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'user_id'
         })
 
       if (error) {

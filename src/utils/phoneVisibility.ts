@@ -1,4 +1,5 @@
 import { supabase } from '../services/supabase'
+import { safeFriendshipOrQuery } from './queryHelpers'
 
 export type PhoneVisibility = 'public' | 'friends_only' | 'private'
 
@@ -66,7 +67,7 @@ const areUsersFriends = async (userId1: string, userId2: string): Promise<boolea
     const { data, error } = await supabase
       .from('friendships')
       .select('id')
-      .or(`and(user_id.eq.${userId1},friend_id.eq.${userId2}),and(user_id.eq.${userId2},friend_id.eq.${userId1})`)
+      .or(safeFriendshipOrQuery(userId1, userId2))
       .eq('status', 'accepted')
       .limit(1)
 

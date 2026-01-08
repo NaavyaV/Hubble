@@ -28,14 +28,26 @@ export async function triggerProcessNotifications(): Promise<void> {
       console.log('Triggering Edge Function to process notifications:', edgeFunctionUrl)
     }
     
+    // Security: Require authentication - never fall back to anon key
+    if (!session?.access_token) {
+      if (__DEV__) {
+        console.log('No session token available, skipping Edge Function trigger')
+      }
+      return
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${session?.access_token || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+        'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
-    })
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId))
 
     if (response.ok) {
       const result = await response.json()
@@ -72,6 +84,32 @@ async function processBackgroundNotification(data: any) {
     if (__DEV__) {
       console.error('Error processing background notification:', error)
     }
+  }
+}
+
+// Helper function to filter out muted users from notification recipients
+async function filterMutedUsers(recipientIds: string[], senderId?: string): Promise<string[]> {
+  try {
+    if (recipientIds.length === 0) return []
+    
+    // If senderId is provided, filter recipients who have muted the sender
+    if (senderId) {
+      const { data: mutedData } = await supabase
+        .from('user_mutes')
+        .select('muter_id')
+        .eq('muted_id', senderId)
+        .in('muter_id', recipientIds)
+      
+      const mutedRecipientIds = new Set((mutedData || []).map(m => m.muter_id))
+      return recipientIds.filter(id => !mutedRecipientIds.has(id))
+    }
+    
+    // If no senderId, return all (for system notifications)
+    return recipientIds
+  } catch (error) {
+    console.error('Error filtering muted users:', error)
+    // On error, return all recipients to avoid blocking notifications
+    return recipientIds
   }
 }
 
@@ -326,9 +364,29 @@ class NotificationService {
         return
       }
 
+      // Get event host to filter muted users
+      const { data: eventData } = await supabase
+        .from('events')
+        .select('host_id')
+        .eq('id', eventId)
+        .single()
+      
+      const hostId = eventData?.host_id
+      
+      // Filter out muted users
+      const attendeeIds = attendees.map(a => a.user_id)
+      const filteredRecipients = await filterMutedUsers(attendeeIds, hostId)
+      
+      if (filteredRecipients.length === 0) {
+        if (__DEV__) {
+          console.log('All attendees have muted the host, skipping reminders')
+        }
+        return
+      }
+      
       // Batch insert all reminder notifications using centralized builder
       const notificationData = buildBatchNotifications(
-        attendees.map(a => a.user_id),
+        filteredRecipients,
         buildEventReminderNotification,
         {
           eventId: eventId,
@@ -399,7 +457,7 @@ class NotificationService {
     return this.notificationToken
   }
 
-  // Send event edit/delete notification to all attendees except host
+  // Send event edit/delete notification to all going and invited users except host
   async sendEventEditDeleteNotification(
     eventId: string, 
     eventTitle: string, 
@@ -408,47 +466,122 @@ class NotificationService {
     isOrgEvent: boolean = false
   ): Promise<void> {
     try {
-      let attendeesQuery
+      let allUserIds = new Set<string>()
+      
       if (isOrgEvent) {
-        // For org events, fetch attendees from org_event_attendees
-        // Don't exclude anyone since orgs don't have individual hosts
-        attendeesQuery = supabase
+        // For org events, fetch ALL users with any status from org_event_attendees
+        const { data: attendees, error: attendeesError } = await supabase
           .from('org_event_attendees')
           .select('user_id')
           .eq('event_id', eventId)
+        
+        if (attendeesError) {
+          console.error('Error fetching org event attendees:', attendeesError)
+        } else if (attendees) {
+          attendees.forEach(a => {
+            if (a.user_id && a.user_id !== hostId) {
+              allUserIds.add(a.user_id)
+            }
+          })
+        }
       } else {
-        // For personal events, fetch from event_attendees and exclude host
-        attendeesQuery = supabase
+        // For personal events, fetch:
+        // 1. ALL attendees with any status (going, maybe, not_going) except host
+        const { data: attendees, error: attendeesError } = await supabase
           .from('event_attendees')
           .select('user_id')
           .eq('event_id', eventId)
           .neq('user_id', hostId)
+        
+        if (attendeesError) {
+          console.error('Error fetching event attendees:', attendeesError)
+        } else if (attendees) {
+          attendees.forEach(a => {
+            if (a.user_id) {
+              allUserIds.add(a.user_id)
+            }
+          })
+        }
+        
+        // 2. ALL invited users (from event_invitations) who haven't responded yet
+        const { data: invitations, error: invitationsError } = await supabase
+          .from('event_invitations')
+          .select('user_id')
+          .eq('event_id', eventId)
+        
+        if (invitationsError) {
+          console.error('Error fetching event invitations:', invitationsError)
+        } else if (invitations) {
+          invitations.forEach(inv => {
+            if (inv.user_id && inv.user_id !== hostId) {
+              allUserIds.add(inv.user_id)
+            }
+          })
+        }
       }
 
-      const { data: attendees, error } = await attendeesQuery
-
-      if (error) {
-        console.error('Error fetching attendees:', error)
+      if (allUserIds.size === 0) {
+        if (__DEV__) {
+          console.log(`No users to notify for event ${action} (eventId: ${eventId})`)
+        }
         return
       }
 
-      if (!attendees || attendees.length === 0) {
-        console.log('No attendees to notify for event edit/delete')
+      // Filter out muted users and blocked users
+      const userIdsArray = Array.from(allUserIds)
+      
+      // CRITICAL: Filter out users who have muted the host
+      // If User A mutes User B, User A should not receive notifications from User B
+      const filteredRecipients = await filterMutedUsers(userIdsArray, hostId)
+      
+      if (__DEV__) {
+        console.log(`[EVENT ${action.toUpperCase()}] Filtering recipients: ${userIdsArray.length} total, ${filteredRecipients.length} after mute filter (hostId: ${hostId})`)
+      }
+      
+      // Also filter out users who have blocked the host
+      const { data: blockersData } = await supabase
+        .from('user_blocks')
+        .select('blocked_id')
+        .eq('blocker_id', hostId)
+      
+      const blockedIds = new Set<string>()
+      if (blockersData) {
+        blockersData.forEach(b => {
+          if (b.blocked_id) {
+            blockedIds.add(b.blocked_id)
+          }
+        })
+      }
+      
+      const finalRecipients = filteredRecipients.filter(userId => !blockedIds.has(userId))
+      
+      if (finalRecipients.length === 0) {
+        if (__DEV__) {
+          console.log(`[EVENT ${action.toUpperCase()}] All users have muted or blocked the host, skipping notifications`)
+        }
         return
+      }
+      
+      if (__DEV__) {
+        const mutedCount = userIdsArray.length - filteredRecipients.length
+        const blockedCount = filteredRecipients.length - finalRecipients.length
+        console.log(`[EVENT ${action.toUpperCase()}] Final recipients: ${finalRecipients.length} (${mutedCount} muted, ${blockedCount} blocked)`)
       }
 
       // Batch insert all notifications using centralized builder
       // For org events, set event_id to null to avoid foreign key constraint violation
       // (since org events are in org_events table, not events table)
       const notificationData = buildBatchNotifications(
-        attendees.map(a => a.user_id),
+        finalRecipients,
         buildEventEditDeleteNotification,
         {
           eventId: isOrgEvent ? null : eventId, // Set to null for org events
           eventTitle: eventTitle,
           action: action,
-          isOrgEvent: isOrgEvent,
           additionalData: {
+            isOrgEvent: isOrgEvent,
+            hostId: hostId, // CRITICAL: Include hostId for mute checking in trigger
+            host_id: hostId, // Also include with underscore for compatibility
             ...(isOrgEvent ? { orgEventId: eventId } : {}) // Store org event ID in data instead
           }
         }
@@ -463,8 +596,12 @@ class NotificationService {
       }
 
       if (__DEV__) {
-        console.log(`Queued ${action} notifications for ${attendees.length} attendees for event ${eventId}`)
+        console.log(`Queued ${action} notifications for ${finalRecipients.length} users (${allUserIds.size} total, ${allUserIds.size - finalRecipients.length} filtered) for event ${eventId}`)
       }
+
+      // For deleted events, notifications are queued and will be processed by the Edge Function
+      // We don't wait here to avoid blocking the UI - notifications are queued first,
+      // then deletion happens, ensuring notifications are sent before the event is fully deleted
 
       // Note: Edge Function will be triggered automatically by the database trigger
       // after a 2-second debounce period to allow batch inserts

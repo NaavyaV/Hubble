@@ -24,18 +24,28 @@ import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
 import { PREDEFINED_TAGS } from '../constants/tags'
-import { buildEventInvitationNotification, buildBatchNotifications, buildOrgEventCreatedNotification } from '../utils/notificationTemplates'
+import { buildEventInvitationNotification, buildBatchNotifications, buildOrgEventCreatedNotification, buildEventEditDeleteNotification } from '../utils/notificationTemplates'
 import EventInviteScreen from './EventInviteScreen'
+import { validateContentWithAlert } from '../utils/contentFilter'
+import {
+  MAX_EVENT_TITLE_LENGTH,
+  MAX_EVENT_DESCRIPTION_LENGTH,
+  MAX_LOCATION_LENGTH,
+} from '../constants/validation'
 
 interface CreateEventScreenProps {
   onBack: () => void
-  onEventCreated: () => void
+  onEventCreated: (event?: any) => void
   isOrgEvent?: boolean
   orgId?: string
+  // Edit mode props
+  eventId?: string
+  existingEvent?: any
+  isEditMode?: boolean
 }
 
 
-export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent = false, orgId }: CreateEventScreenProps) {
+export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent = false, orgId, eventId, existingEvent, isEditMode = false }: CreateEventScreenProps) {
   const { theme, isDark } = useTheme()
   const navigation = useNavigation()
   const getRoundedToNextFiveMinutes = () => {
@@ -81,6 +91,64 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
   const [showStartTimePicker, setShowStartTimePicker] = useState(false)
   const [showEndTimePicker, setShowEndTimePicker] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
+
+  // Load existing event data when in edit mode
+  useEffect(() => {
+    if (isEditMode && existingEvent) {
+      setTitle(existingEvent.title || '')
+      setDescription(existingEvent.description || '')
+      setLocation(existingEvent.location || '')
+      setMaxAttendees(existingEvent.max_attendees ? existingEvent.max_attendees.toString() : '')
+      setEventDate(new Date(existingEvent.event_date))
+      
+      // Parse start time
+      const [startHours, startMinutes] = existingEvent.start_time.split(':').map(Number)
+      const startDate = new Date()
+      startDate.setHours(startHours, startMinutes, 0, 0)
+      setStartTime(startDate)
+      
+      // Parse end time if exists
+      if (existingEvent.end_time) {
+        const [endHours, endMinutes] = existingEvent.end_time.split(':').map(Number)
+        const endDate = new Date()
+        endDate.setHours(endHours, endMinutes, 0, 0)
+        setEndTime(endDate)
+        setHasEndTime(true)
+      } else {
+        setHasEndTime(false)
+      }
+      
+      setSelectedTags(existingEvent.tags || [])
+      setPrivacy(existingEvent.privacy || 'public')
+      
+      // Set image if exists
+      if (existingEvent.image_url) {
+        setImageUri(existingEvent.image_url)
+      }
+      
+      // Load existing invited users for private events
+      if (existingEvent.privacy === 'invite_only' && !isOrgEvent) {
+        loadExistingInvitedUsers()
+      }
+    }
+  }, [isEditMode, existingEvent])
+
+  const loadExistingInvitedUsers = async () => {
+    if (!eventId) return
+    
+    try {
+      const { data: invitations } = await supabase
+        .from('event_invitations')
+        .select('user_id')
+        .eq('event_id', eventId)
+      
+      if (invitations) {
+        setInvitedUsers(invitations.map(inv => inv.user_id))
+      }
+    } catch (error) {
+      console.error('Error loading existing invited users:', error)
+    }
+  }
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev => 
@@ -170,9 +238,31 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     setShowEndTimePicker(!showEndTimePicker)
   }
 
-  const handleCreateEvent = async () => {
+  const handleSaveEvent = async () => {
     if (!title.trim() || !location.trim()) {
       Alert.alert('Error', 'Please fill in all required fields')
+      return
+    }
+
+    // Security: Validate input lengths
+    if (title.trim().length > MAX_EVENT_TITLE_LENGTH) {
+      Alert.alert('Error', `Event title must be ${MAX_EVENT_TITLE_LENGTH} characters or less`)
+      return
+    }
+    if (description.trim().length > MAX_EVENT_DESCRIPTION_LENGTH) {
+      Alert.alert('Error', `Event description must be ${MAX_EVENT_DESCRIPTION_LENGTH} characters or less`)
+      return
+    }
+    if (location.trim().length > MAX_LOCATION_LENGTH) {
+      Alert.alert('Error', `Location must be ${MAX_LOCATION_LENGTH} characters or less`)
+      return
+    }
+
+    // Validate content for objectionable language
+    if (!validateContentWithAlert(title.trim(), (message) => Alert.alert('Invalid Content', message))) {
+      return
+    }
+    if (description.trim() && !validateContentWithAlert(description.trim(), (message) => Alert.alert('Invalid Content', message))) {
       return
     }
 
@@ -188,11 +278,311 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       }
     }
 
-    setLoading(true)
+    // If editing, show confirmation about attendees
+    if (isEditMode && eventId) {
+      await handleEditEvent()
+      return
+    }
+
+    // Otherwise, create new event
+    await handleCreateEvent()
+  }
+
+  const handleEditEvent = async () => {
+    if (!eventId) return
+
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
+        Alert.alert('Error', 'You must be logged in to edit an event')
+        return
+      }
+
+      // Check if this is an org event
+      const isOrgEvent = (existingEvent as any).isOrgEvent || (!existingEvent.host_id && (existingEvent as any).org_id)
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+
+      // Get all users currently marked as "going"
+      // For personal events, exclude the host; for org events, get all going attendees
+      let goingAttendeesQuery = supabase
+        .from(attendeesTable)
+        .select('user_id')
+        .eq('event_id', eventId)
+        .eq('status', 'going')
+      
+      if (!isOrgEvent) {
+        // Exclude host for personal events
+        goingAttendeesQuery = goingAttendeesQuery.neq('user_id', user.id)
+      }
+      
+      const { data: goingAttendees } = await goingAttendeesQuery
+
+      const goingUserIds = (goingAttendees || []).map(a => a.user_id)
+      const goingCount = goingUserIds.length
+
+      if (goingCount > 0) {
+        // Show confirmation alert
+        const actionText = existingEvent.privacy === 'invite_only' 
+          ? 'moved to invited' 
+          : 'removed from going'
+        Alert.alert(
+          'Edit Event',
+          `All people currently going will be ${actionText} and will be notified that the event was edited. Do you want to continue?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Update Event',
+              style: 'default',
+              onPress: async () => {
+                await performEditEvent(goingUserIds, isOrgEvent)
+              }
+            }
+          ]
+        )
+      } else {
+        // No one is going, proceed with edit
+        await performEditEvent([], isOrgEvent)
+      }
+    } catch (error) {
+      console.error('Error preparing edit:', error)
+      Alert.alert('Error', 'Failed to prepare event edit')
+    }
+  }
+
+  const performEditEvent = async (goingUserIds: string[], isOrgEvent: boolean) => {
+    setLoading(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !eventId) {
+        Alert.alert('Error', 'You must be logged in to edit an event')
+        return
+      }
+
+      let imageUrl = existingEvent.image_url || null
+      
+      // Upload new image if changed
+      if (imageUri && imageUri !== existingEvent.image_url && !imageUri.startsWith('http')) {
+        try {
+          const contentType = guessContentTypeFromUri(imageUri)
+          const filePath = `events/${Date.now()}-${Math.random().toString(36).substring(7)}.${contentType.split('/')[1]}`
+          
+          await uploadBytesToBucket({
+            bucket: 'event-images',
+            filePath,
+            uri: imageUri,
+            contentType
+          })
+          
+          const { data } = supabase.storage
+            .from('event-images')
+            .getPublicUrl(filePath)
+          
+          imageUrl = data.publicUrl
+        } catch (error) {
+          console.warn('Image upload failed:', error)
+          // Continue with existing image if upload fails
+        }
+      }
+
+      // Get user's college_id from profile
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('college_id')
+        .eq('id', user.id)
+        .single()
+
+      // Update event
+      if (isOrgEvent) {
+        const { error: updateError } = await supabase
+          .from('org_events')
+          .update({
+            college_id: profileData?.college_id || null,
+            title: title.trim(),
+            description: description.trim() || null,
+            event_date: eventDate.toISOString().split('T')[0],
+            start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
+            end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+            location: location.trim(),
+            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            image_url: imageUrl,
+            tags: selectedTags.length > 0 ? selectedTags : null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', eventId)
+
+        if (updateError) throw updateError
+      } else {
+        const { error: updateError } = await supabase
+          .from('events')
+          .update({
+            college_id: profileData?.college_id || null,
+            title: title.trim(),
+            description: description.trim() || null,
+            event_date: eventDate.toISOString().split('T')[0],
+            start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
+            end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+            location: location.trim(),
+            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            image_url: imageUrl,
+            tags: selectedTags.length > 0 ? selectedTags : null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', eventId)
+
+        if (updateError) throw updateError
+      }
+
+      // Handle attendees based on privacy
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+      
+      if (goingUserIds.length > 0) {
+        // Send notifications to affected users BEFORE deleting/moving attendees
+        // Use buildBatchNotifications directly since we already have the user IDs
+        const notificationData = buildBatchNotifications(
+          goingUserIds,
+          buildEventEditDeleteNotification,
+          {
+            eventId: isOrgEvent ? null : eventId,
+            eventTitle: title.trim(),
+            action: 'edited',
+            additionalData: {
+              isOrgEvent: isOrgEvent,
+              ...(isOrgEvent ? { orgEventId: eventId } : {})
+            }
+          }
+        )
+
+        const { error: notificationError } = await supabase
+          .from('notification_queue')
+          .insert(notificationData)
+
+        if (notificationError) {
+          console.error('Error queuing edit notifications:', notificationError)
+          // Don't fail the edit if notifications fail
+        }
+
+        if (existingEvent.privacy === 'invite_only') {
+          // For private events: move going people to invited
+          // Remove from attendees
+          await supabase
+            .from(attendeesTable)
+            .delete()
+            .eq('event_id', eventId)
+            .in('user_id', goingUserIds)
+            .eq('status', 'going')
+
+          // Add to invitations (only for personal events)
+          if (!isOrgEvent) {
+            const invitations = goingUserIds.map(userId => ({
+              event_id: eventId,
+              user_id: userId,
+              invited_by: user.id
+            }))
+
+            // Use upsert to avoid duplicates
+            await supabase
+              .from('event_invitations')
+              .upsert(invitations, { onConflict: 'event_id,user_id' })
+          }
+        } else {
+          // For public events: remove from going list
+          await supabase
+            .from(attendeesTable)
+            .delete()
+            .eq('event_id', eventId)
+            .in('user_id', goingUserIds)
+            .eq('status', 'going')
+        }
+      }
+
+      Alert.alert('Success', 'Event updated successfully!', [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Fetch updated event and pass to callback
+            fetchUpdatedEvent()
+          }
+        }
+      ])
+    } catch (error: any) {
+      console.error('Error editing event:', error)
+      Alert.alert('Error', 'Failed to update event. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchUpdatedEvent = async () => {
+    if (!eventId) return
+
+    try {
+      const isOrgEvent = (existingEvent as any).isOrgEvent || (!existingEvent.host_id && (existingEvent as any).org_id)
+      
+      if (isOrgEvent) {
+        const { data: updatedEvent } = await supabase
+          .from('org_events')
+          .select(`
+            *,
+            attendees:org_event_attendees(
+              id,
+              user_id,
+              status
+            )
+          `)
+          .eq('id', eventId)
+          .single()
+        
+        if (updatedEvent) {
+          onEventCreated({ ...updatedEvent, isOrgEvent: true })
+        }
+      } else {
+        const { data: updatedEvent } = await supabase
+          .from('events')
+          .select(`
+            *,
+            attendees:event_attendees(
+              id,
+              user_id,
+              status
+            )
+          `)
+          .eq('id', eventId)
+          .single()
+        
+        if (updatedEvent) {
+          onEventCreated(updatedEvent)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching updated event:', error)
+      onEventCreated()
+    }
+  }
+
+  const handleCreateEvent = async () => {
+    setLoading(true)
+    try {
+      // Security: Validate input lengths
+      if (title.trim().length > MAX_EVENT_TITLE_LENGTH) {
+        Alert.alert('Error', `Event title must be ${MAX_EVENT_TITLE_LENGTH} characters or less`)
+        setLoading(false)
+        return
+      }
+      if (description.trim().length > MAX_EVENT_DESCRIPTION_LENGTH) {
+        Alert.alert('Error', `Event description must be ${MAX_EVENT_DESCRIPTION_LENGTH} characters or less`)
+        setLoading(false)
+        return
+      }
+      if (location.trim().length > MAX_LOCATION_LENGTH) {
+        Alert.alert('Error', `Location must be ${MAX_LOCATION_LENGTH} characters or less`)
+        setLoading(false)
+        return
+      }
+
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
         Alert.alert('Error', 'You must be logged in to create an event')
+        setLoading(false)
         return
       }
 
@@ -304,9 +694,10 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
         // Filter out the host from invited users to prevent self-notifications
         const usersToNotify = invitedUsers.filter(userId => userId !== user.id)
 
-        // For invite-only events, create invitation records (only for personal events)
+        // Create invitation records for BOTH public and private events (only for personal events)
+        // This ensures event_invitations table is the single source of truth for all invitations
         // NOTE: This does NOT send notifications - notifications are sent separately below
-        if (!isOrgEvent && privacy === 'invite_only') {
+        if (!isOrgEvent) {
           const invitations = usersToNotify.map(userId => ({
             event_id: event.id,
             user_id: userId,
@@ -320,37 +711,53 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
           if (inviteError) {
             console.error('Error creating invitations:', inviteError)
             // Don't fail the entire event creation if invitations fail
+          } else {
+            if (__DEV__) {
+              console.log(`Created ${invitations.length} invitation records for event ${event.id}`)
+            }
           }
         }
 
         // Queue notifications for selected users (excluding the host)
         // This is the ONLY place where invitation notifications are sent
         if (usersToNotify.length > 0) {
-          // Use centralized notification builder - this is the single source of notification data
-          const notificationData = buildBatchNotifications(
-            usersToNotify,
-            buildEventInvitationNotification,
-            {
-              eventId: event.id,
-              hostName: hostName,
-              eventTitle: event.title,
-              privacy: privacy,
-              additionalData: {
-                hostId: user.id
+          // Filter out muted users
+          const { data: mutedData } = await supabase
+            .from('user_mutes')
+            .select('muter_id')
+            .eq('muted_id', user.id)
+            .in('muter_id', usersToNotify)
+          
+          const mutedUserIds = new Set((mutedData || []).map(m => m.muter_id))
+          const filteredUsers = usersToNotify.filter(id => !mutedUserIds.has(id))
+          
+          if (filteredUsers.length > 0) {
+            // Use centralized notification builder - this is the single source of notification data
+            const notificationData = buildBatchNotifications(
+              filteredUsers,
+              buildEventInvitationNotification,
+              {
+                eventId: event.id,
+                hostName: hostName,
+                eventTitle: event.title,
+                privacy: privacy,
+                additionalData: {
+                  hostId: user.id
+                }
               }
-            }
-          )
+            )
 
-          const { error: notificationError } = await supabase
-            .from('notification_queue')
-            .insert(notificationData)
+            const { error: notificationError } = await supabase
+              .from('notification_queue')
+              .insert(notificationData)
 
-          if (notificationError) {
-            console.error('Error queuing notifications:', notificationError)
-            // Don't fail the entire event creation if notifications fail
-          } else {
-            if (__DEV__) {
-              console.log(`Queued ${usersToNotify.length} notifications for event ${event.id}`)
+            if (notificationError) {
+              console.error('Error queuing notifications:', notificationError)
+              // Don't fail the entire event creation if notifications fail
+            } else {
+              if (__DEV__) {
+                console.log(`Queued ${filteredUsers.length} notifications for event ${event.id}`)
+              }
             }
             
             // The Edge Function will be triggered automatically by the database trigger
@@ -372,32 +779,68 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
           if (followersError) {
             console.error('Error fetching org followers:', followersError)
           } else if (followers && followers.length > 0) {
-            // Use centralized notification builder
-            // For org events, set eventId to null to avoid foreign key constraint violation
-            // (since org events are in org_events table, not events table)
-            const notificationData = buildBatchNotifications(
-              followers.map(f => f.user_id),
-              buildOrgEventCreatedNotification,
-              {
-                eventId: null, // Set to null for org events
-                hostName: hostName,
-                eventTitle: event.title,
-                additionalData: {
-                  orgId: orgId,
-                  orgEventId: event.id // Store org event ID in data instead
+            // Get users who have blocked this org
+            const { data: blockedUsers } = await supabase
+              .from('org_blocks')
+              .select('user_id')
+              .eq('org_id', orgId)
+
+            const blockedUserIds = new Set((blockedUsers || []).map(b => b.user_id))
+            
+            // Get users who have muted the org owner (host)
+            // For org events, we need to get the org owner to check mutes
+            const { data: orgData } = await supabase
+              .from('organizations')
+              .select('owner_id')
+              .eq('id', orgId)
+              .single()
+            
+            let mutedUserIds = new Set<string>()
+            if (orgData?.owner_id) {
+              const { data: mutedData } = await supabase
+                .from('user_mutes')
+                .select('muter_id')
+                .eq('muted_id', orgData.owner_id)
+                .in('muter_id', followers.map(f => f.user_id))
+              
+              mutedUserIds = new Set((mutedData || []).map(m => m.muter_id))
+            }
+            
+            // Filter out blocked users and muted users
+            const usersToNotify = followers
+              .map(f => f.user_id)
+              .filter(userId => !blockedUserIds.has(userId) && !mutedUserIds.has(userId))
+
+            if (usersToNotify.length > 0) {
+              // Use centralized notification builder
+              // For org events, set eventId to null to avoid foreign key constraint violation
+              // (since org events are in org_events table, not events table)
+              const notificationData = buildBatchNotifications(
+                usersToNotify,
+                buildOrgEventCreatedNotification,
+                {
+                  eventId: null, // Set to null for org events
+                  hostName: hostName,
+                  eventTitle: event.title,
+                  additionalData: {
+                    orgId: orgId,
+                    orgEventId: event.id, // Store org event ID in data instead
+                    ownerId: orgData?.owner_id, // Include owner ID for mute checking
+                    owner_id: orgData?.owner_id // Also include with underscore for compatibility
+                  }
                 }
-              }
-            )
+              )
 
-            const { error: notificationError } = await supabase
-              .from('notification_queue')
-              .insert(notificationData)
+              const { error: notificationError } = await supabase
+                .from('notification_queue')
+                .insert(notificationData)
 
-            if (notificationError) {
-              console.error('Error queuing org event notifications:', notificationError)
-            } else {
-              if (__DEV__) {
-                console.log(`Queued ${followers.length} notifications for org event ${event.id}`)
+              if (notificationError) {
+                console.error('Error queuing org event notifications:', notificationError)
+              } else {
+                if (__DEV__) {
+                  console.log(`Queued ${usersToNotify.length} notifications for org event ${event.id}`)
+                }
               }
             }
           }
@@ -455,7 +898,8 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             setSelectedTags([])
             setPrivacy('public')
             setInvitedUsers([])
-            onEventCreated()
+            // Pass the created event to the callback so it can be added immediately
+            onEventCreated(event)
           }
         }
       ])
@@ -471,7 +915,9 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Slim Sticky Header */}
       <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
-        <Text style={[styles.headerTitle, { color: theme.text }]}>Create Event</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>
+          {isEditMode ? 'Edit Event' : 'Create Event'}
+        </Text>
         <TouchableOpacity
           onPress={onBack}
           style={styles.closeButton}
@@ -563,8 +1009,8 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
               </View>
             </View>
 
-            {/* Privacy Settings - Hidden for org events */}
-            {!isOrgEvent && (
+            {/* Privacy Settings - Hidden for org events and edit mode */}
+            {!isOrgEvent && !isEditMode && (
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
               <View style={styles.privacyButtonsContainer}>
@@ -623,6 +1069,26 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                   : 'Only invited people can see and join this event'}
               </Text>
             </View>
+            )}
+
+            {/* Privacy Display (Read-only) - Show in edit mode */}
+            {!isOrgEvent && isEditMode && (
+              <View style={styles.inputGroup}>
+                <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
+                <View style={[styles.privacyDisplay, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                  <Ionicons
+                    name={privacy === 'public' ? 'globe' : 'lock-closed'}
+                    size={20}
+                    color={theme.primary}
+                  />
+                  <Text style={[styles.privacyDisplayText, { color: theme.text }]}>
+                    {privacy === 'public' ? 'Public' : 'Private (Invite Only)'}
+                  </Text>
+                </View>
+                <Text style={[styles.privacyDescription, { color: theme.textSecondary }]}>
+                  Privacy cannot be changed when editing an event
+                </Text>
+              </View>
             )}
 
             {/* Invitation Section - Only show when invite only is selected and not org event */}
@@ -837,11 +1303,13 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                 { backgroundColor: theme.buttonPrimary },
                 loading && { backgroundColor: theme.textTertiary }
               ]}
-              onPress={handleCreateEvent}
+              onPress={handleSaveEvent}
               disabled={loading}
             >
               <Text style={[styles.createButtonText, { color: theme.buttonText }]}>
-                {loading ? 'Creating...' : 'Create Event'}
+                {loading 
+                  ? (isEditMode ? 'Updating...' : 'Creating...') 
+                  : (isEditMode ? 'Update Event' : 'Create Event')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -980,6 +1448,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8,
     fontStyle: 'italic',
+  },
+  privacyDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  privacyDisplayText: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginLeft: 8,
   },
   inviteButton: {
     flexDirection: 'row',

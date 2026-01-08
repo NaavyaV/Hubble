@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
+import { safeBlockOrQuery } from '../utils/queryHelpers'
 import { ImageWithFallback } from '../components'
 
 const { width: screenWidth } = Dimensions.get('window')
@@ -69,10 +70,32 @@ export default function LeaderboardScreen() {
 
       if (profilesError) throw profilesError
 
-      // Filter leaderboard to only include OTP verified users
+      // Separate blocked users (users I blocked) from blockers (users who blocked me)
+      const { data: blockedData } = await supabase
+        .from('user_blocks')
+        .select('blocked_id, blocker_id')
+        .or(safeBlockOrQuery(user.id))
+
+      const blockedUserIds = new Set<string>() // Users I have blocked
+      const blockerIds = new Set<string>() // Users who have blocked me
+      if (blockedData) {
+        blockedData.forEach((b: any) => {
+          if (b.blocker_id === user.id) {
+            blockedUserIds.add(b.blocked_id) // I blocked them
+          }
+          if (b.blocked_id === user.id) {
+            blockerIds.add(b.blocker_id) // They blocked me
+          }
+        })
+      }
+
+      // Filter leaderboard to only include OTP verified users and exclude blocked users AND blockers
+      // If Person A blocks Person B, Person B should not see Person A on leaderboard
       const verifiedHostIds = new Set(verifiedProfiles?.map(p => p.id) || [])
       const filteredLeaderboard = leaderboardData?.filter(entry => 
-        verifiedHostIds.has(entry.host_id)
+        verifiedHostIds.has(entry.host_id) && 
+        !blockedUserIds.has(entry.host_id) && 
+        !blockerIds.has(entry.host_id) // Exclude users who have blocked me
       ) || []
       
       // Re-rank the filtered leaderboard to show consecutive numbers

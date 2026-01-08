@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { safeBlockOrQuery } from '../utils/queryHelpers'
 import NotificationService from '../services/notifications'
 import { ProfileModal } from '../components'
 import { buildHostUpdateNotification } from '../utils/notificationTemplates'
@@ -24,7 +25,9 @@ import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
 import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
 import { deleteEventCompletely } from '../utils/eventDeletion'
 import EventInviteScreen from './EventInviteScreen'
+import CreateEventScreen from './CreateEventScreen'
 import { buildEventInvitationNotification, buildBatchNotifications } from '../utils/notificationTemplates'
+import ReportModal, { ReportReason } from '../components/modals/ReportModal'
 
 interface EventAttendee {
   id: string
@@ -78,6 +81,7 @@ export default function EventDetailScreen() {
   const [college, setCollege] = useState<any>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
+  const [isOrgOwner, setIsOrgOwner] = useState(false)
   const [showHostPhone, setShowHostPhone] = useState(false)
   const [hostPhoneVisibilityLoading, setHostPhoneVisibilityLoading] = useState(true)
   const [isInvited, setIsInvited] = useState(false)
@@ -87,19 +91,63 @@ export default function EventDetailScreen() {
   }>({ timer: null, lastState: null })
   const [showOptionsModal, setShowOptionsModal] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
   const [invitedUsers, setInvitedUsers] = useState<any[]>([])
   const [notGoingAttendees, setNotGoingAttendees] = useState<EventAttendee[]>([])
+  const [reportModalVisible, setReportModalVisible] = useState(false)
+  const [reportPhotoModalVisible, setReportPhotoModalVisible] = useState(false)
+  const [photoSelectorVisible, setPhotoSelectorVisible] = useState(false)
+  const [eventPhotos, setEventPhotos] = useState<any[]>([])
+  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null)
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (event && event.id) {
+      // OPTIMIZED: Run all independent queries in parallel
       fetchCurrentUser()
       fetchAttendeesWithProfiles()
-      fetchHostProfile()
-      fetchHostOrganization()
-      fetchCollege()
-      checkIfInvited()
+      
+      // Run these in parallel since they don't depend on each other
+      Promise.all([
+        fetchHostProfile(),
+        fetchHostOrganization(),
+        fetchCollege(),
+        checkIfInvited(),
+        fetchEventPhotos()
+      ]).catch(error => {
+        console.error('Error fetching event details:', error)
+      })
+      
       if (event.privacy === 'invite_only') {
         fetchInvitedUsers()
+      }
+
+      // Set up realtime subscription for auto-refresh
+      const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
+      const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+      
+      const channel = supabase
+        .channel(`event-attendees-${event.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*', // Listen to all changes (INSERT, UPDATE, DELETE)
+            schema: 'public',
+            table: attendeesTable,
+            filter: `event_id=eq.${event.id}`
+          },
+          (payload) => {
+            // Refresh attendees when changes occur
+            fetchAttendeesWithProfiles(true).catch(error => {
+              console.error('Error refreshing attendees from realtime:', error)
+            })
+          }
+        )
+        .subscribe()
+
+      // Cleanup subscription on unmount or event change
+      return () => {
+        supabase.removeChannel(channel)
       }
     }
   }, [event?.id])
@@ -132,6 +180,7 @@ export default function EventDetailScreen() {
       if (!isOrgEvent) {
         const hostStatus = user?.id === event.host_id
         setIsHost(hostStatus)
+        setIsOrgOwner(false)
         
         // If user is host, automatically set them as "going"
         if (hostStatus) {
@@ -140,8 +189,21 @@ export default function EventDetailScreen() {
           await ensureHostIsAttending()
         }
       } else {
-        // For org events, user is never the host
+        // For org events, check if user owns the org
         setIsHost(false)
+        
+        if (user && (event as any).org_id) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('org_ownership_id')
+            .eq('id', user.id)
+            .single()
+          
+          const userOwnsOrg = profile?.org_ownership_id === (event as any).org_id
+          setIsOrgOwner(userOwnsOrg)
+        } else {
+          setIsOrgOwner(false)
+        }
       }
     } catch (error) {
       console.error('Error fetching current user:', error)
@@ -180,55 +242,106 @@ export default function EventDetailScreen() {
     }
   }
 
-  const fetchAttendeesWithProfiles = async () => {
+  const fetchAttendeesWithProfiles = async (skipLoading = false) => {
     try {
-      setLoading(true)
+      if (!skipLoading) {
+        setLoading(true)
+      }
+      
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (!currentUser) return
+      
+      // Separate blocked users (users I blocked) from blockers (users who blocked me)
+      const { data: blockedData } = await supabase
+        .from('user_blocks')
+        .select('blocked_id, blocker_id')
+        .or(safeBlockOrQuery(currentUser.id))
+
+      const blockedUserIds = new Set<string>() // Users I have blocked
+      const blockerIds = new Set<string>() // Users who have blocked me
+      if (blockedData) {
+        blockedData.forEach((b: any) => {
+          if (b.blocker_id === currentUser.id) {
+            blockedUserIds.add(b.blocked_id) // I blocked them
+          }
+          if (b.blocked_id === currentUser.id) {
+            blockerIds.add(b.blocker_id) // They blocked me
+          }
+        })
+      }
       
       // Check if this is an org event
       const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
       const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
       
-      // Use separate queries since the join syntax is not working
+      // OPTIMIZED: Use join to fetch attendees with profiles in a single query
       const { data: attendeesData, error: attendeesError } = await supabase
         .from(attendeesTable)
-        .select('*')
+        .select(`
+          *,
+          user:profiles!${isOrgEvent ? 'org_event_attendees_user_id_fkey' : 'event_attendees_user_id_fkey'}(
+            id,
+            full_name,
+            avatar_url,
+            bio,
+            phone_number
+          )
+        `)
         .eq('event_id', event.id)
+        .eq('user.otp_verified', true)
 
-      if (attendeesError) throw attendeesError
-
-      // Get user profiles for the attendees
-      const userIds = attendeesData?.map(a => a.user_id) || []
-      let profilesData: any[] = []
+      let attendeesWithProfiles: EventAttendee[] = []
       
-      if (userIds.length > 0) {
-        const { data: profiles, error: profilesError } = await supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url, bio, phone_number')
-          .in('id', userIds)
-          .eq('otp_verified', true) // Only show OTP verified users
+      if (attendeesError) {
+        // Fallback to separate queries if join fails
+        const { data: attendeesOnly, error: attendeesOnlyError } = await supabase
+          .from(attendeesTable)
+          .select('*')
+          .eq('event_id', event.id)
+
+        if (attendeesOnlyError) throw attendeesOnlyError
+
+        const userIds = attendeesOnly?.map(a => a.user_id) || []
+        let profilesData: any[] = []
         
-        if (profilesError) throw profilesError
-        profilesData = profiles || []
-      }
+        if (userIds.length > 0) {
+          const { data: profiles, error: profilesError } = await supabase
+            .from('profiles')
+            .select('id, full_name, avatar_url, bio, phone_number')
+            .in('id', userIds)
+            .eq('otp_verified', true)
+          
+          if (profilesError) throw profilesError
+          profilesData = profiles || []
+        }
 
-      // Transform the data to match the expected structure
-      const attendeesWithProfiles = (attendeesData || []).map(attendee => ({
-        ...attendee,
-        user: profilesData.find(profile => profile.id === attendee.user_id)
-      }))
+        attendeesWithProfiles = (attendeesOnly || []).map(attendee => ({
+          ...attendee,
+          user: profilesData.find(profile => profile.id === attendee.user_id)
+        }))
+      } else {
+        // Use joined data
+        attendeesWithProfiles = (attendeesData || []).map((attendee: any) => ({
+          ...attendee,
+          user: attendee.user || null
+        }))
+      }
       
-      setAttendees(attendeesWithProfiles)
+      // Filter out blocked users AND blockers
+      // If Person A blocks Person B, Person B should not see Person A in attendees
+      const filteredAttendees = attendeesWithProfiles.filter(attendee => 
+        !blockedUserIds.has(attendee.user_id) && 
+        !blockerIds.has(attendee.user_id) // Exclude users who have blocked me
+      )
       
-      // Separate not going attendees for display
+      setAttendees(filteredAttendees)
       const notGoing = attendeesWithProfiles.filter(a => a.status === 'not_going')
       setNotGoingAttendees(notGoing)
-      
       setProfilesLoaded(true)
 
       // Find current user's attendance status (only if not host and not org event in org mode)
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user && !isHost && !(isOrgMode && isOrgEvent)) {
-        const userAttendance = attendeesWithProfiles.find(a => a.user_id === user.id)
+      if (currentUser && !isHost && !(isOrgMode && isOrgEvent)) {
+        const userAttendance = filteredAttendees.find(a => a.user_id === currentUser.id)
         // Set status based on attendance record
         if (userAttendance?.status === 'going' || userAttendance?.status === 'maybe') {
           setUserAttendance('going')
@@ -303,6 +416,22 @@ export default function EventDetailScreen() {
       }
     } catch (error) {
       console.error('Error fetching college:', error)
+    }
+  }
+
+  const fetchEventPhotos = async () => {
+    try {
+      const { data: photos, error } = await supabase
+        .from('event_photos')
+        .select('id, image_url, caption')
+        .eq('event_id', event.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setEventPhotos(photos || [])
+    } catch (error) {
+      console.error('Error fetching event photos:', error)
+      setEventPhotos([])
     }
   }
 
@@ -459,13 +588,38 @@ export default function EventDetailScreen() {
   }
 
   const addAttendance = async () => {
+    let user: any = null
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (!currentUser) return
+      user = currentUser
 
       // Check if this is an org event
       const isOrgEvent = (event as any).isOrgEvent || (!event.host_id && (event as any).org_id)
       const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+
+      // OPTIMISTIC UPDATE: Update UI immediately
+      setUserAttendance('going')
+      
+      // Optimistically add user to attendees list if not already present
+      setAttendees(prev => {
+        const existingIndex = prev.findIndex(a => a.user_id === user.id)
+        if (existingIndex >= 0) {
+          // Update existing
+          const updated = [...prev]
+          updated[existingIndex] = { ...updated[existingIndex], status: 'going' }
+          return updated
+        } else {
+          // Add new - we'll fetch the profile in the background
+          return [...prev, {
+            id: `temp-${user.id}`,
+            event_id: event.id,
+            user_id: user.id,
+            status: 'going' as const,
+            user: undefined // Will be populated by background fetch
+          }]
+        }
+      })
 
       // Check if attendance record already exists
       const { data: existingAttendance } = await supabase
@@ -483,7 +637,11 @@ export default function EventDetailScreen() {
           .eq('event_id', event.id)
           .eq('user_id', user.id)
 
-        if (error) throw error
+        if (error) {
+          // Rollback on error
+          setUserAttendance(null)
+          throw error
+        }
       } else {
         // Create new record with 'going' status
         const { error } = await supabase
@@ -494,15 +652,28 @@ export default function EventDetailScreen() {
             status: 'going'
           })
 
-        if (error) throw error
+        if (error) {
+          // Rollback on error
+          setUserAttendance(null)
+          throw error
+        }
       }
 
-      setUserAttendance('going')
-      
-      // Refresh attendees list
-      await fetchAttendeesWithProfiles()
+      // Refresh attendees list in background (without loading state)
+      fetchAttendeesWithProfiles(true).catch(error => {
+        console.error('Error refreshing attendees:', error)
+        // If refresh fails, try again with loading
+        fetchAttendeesWithProfiles(false)
+      })
     } catch (error) {
       console.error('Error adding attendance:', error)
+      // Rollback optimistic update
+      setUserAttendance(null)
+      if (user) {
+        setAttendees(prev => prev.filter(a => a.user_id !== user.id || !a.id?.startsWith('temp-')))
+      }
+      // Refresh to get correct state
+      fetchAttendeesWithProfiles(true)
       Alert.alert('Error', 'Failed to mark as going')
     }
   }
@@ -560,13 +731,26 @@ export default function EventDetailScreen() {
                     if (error) throw error
                   }
 
+                  // OPTIMISTIC UPDATE: Update UI immediately
                   setUserAttendance('not_going')
+                  setAttendees(prev => {
+                    const existingIndex = prev.findIndex(a => a.user_id === user.id)
+                    if (existingIndex >= 0) {
+                      const updated = [...prev]
+                      updated[existingIndex] = { ...updated[existingIndex], status: 'not_going' }
+                      return updated
+                    }
+                    return prev
+                  })
                   
                   // Send notification to host
                   await sendNotGoingNotification()
                   
-                  // Refresh attendees list
-                  await fetchAttendeesWithProfiles()
+                  // Refresh attendees list in background (without loading state)
+                  fetchAttendeesWithProfiles(true).catch(error => {
+                    console.error('Error refreshing attendees:', error)
+                    fetchAttendeesWithProfiles(false)
+                  })
                   
                   // Exit the event page after confirming "not going"
                   // Use canGoBack to check if we can navigate back, otherwise navigate to MyEvents
@@ -593,20 +777,33 @@ export default function EventDetailScreen() {
 
       // For non-invited events or org events, just delete the attendance record
       const attendeesTable = isOrgEvent ? 'org_event_attendees' : 'event_attendees'
+      
+      // OPTIMISTIC UPDATE: Update UI immediately
+      setUserAttendance(null)
+      setAttendees(prev => prev.filter(a => a.user_id !== user.id))
+      
       const { error } = await supabase
         .from(attendeesTable)
         .delete()
         .eq('event_id', event.id)
         .eq('user_id', user.id)
 
-      if (error) throw error
-
-      setUserAttendance(null)
+      if (error) {
+        // Rollback on error
+        fetchAttendeesWithProfiles(true)
+        throw error
+      }
       
-      // Refresh attendees list
-      await fetchAttendeesWithProfiles()
+      // Refresh attendees list in background (without loading state)
+      fetchAttendeesWithProfiles(true).catch(error => {
+        console.error('Error refreshing attendees:', error)
+        // If refresh fails, try again with loading
+        fetchAttendeesWithProfiles(false)
+      })
     } catch (error) {
       console.error('Error removing attendance:', error)
+      // Rollback - refresh to get correct state
+      fetchAttendeesWithProfiles(true)
       Alert.alert('Error', 'Failed to remove attendance')
     }
   }
@@ -679,15 +876,28 @@ export default function EventDetailScreen() {
                 if (error) throw error
               }
 
+              // OPTIMISTIC UPDATE: Update UI immediately
               setUserAttendance('not_going')
+              setAttendees(prev => {
+                const existingIndex = prev.findIndex(a => a.user_id === user.id)
+                if (existingIndex >= 0) {
+                  const updated = [...prev]
+                  updated[existingIndex] = { ...updated[existingIndex], status: 'not_going' }
+                  return updated
+                }
+                return prev
+              })
               
               // Send notification to host (only for invited users and only for personal events)
               if (isInvited && !isOrgEvent) {
                 await sendNotGoingNotification()
               }
               
-              // Refresh attendees list
-              await fetchAttendeesWithProfiles()
+              // Refresh attendees list in background (without loading state)
+              fetchAttendeesWithProfiles(true).catch(error => {
+                console.error('Error refreshing attendees:', error)
+                fetchAttendeesWithProfiles(false)
+              })
               
               // Exit the event page after confirming "not going"
               // Use canGoBack to check if we can navigate back, otherwise navigate to MyEvents
@@ -763,6 +973,62 @@ export default function EventDetailScreen() {
     }
   }
 
+  const handleReportEvent = async (reason: ReportReason, comments?: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      // Confirmation alert is handled in ReportModal, so just submit
+      const { error } = await supabase
+        .from('reports')
+        .insert({
+          reported_by: user.id,
+          content_type: 'event',
+          content_id: event.id,
+          reason: reason,
+          comments: comments || null
+        })
+
+      if (error) throw error
+
+      Alert.alert('Report Submitted', 'We have received your report, will handle within 24 hours')
+      setReportModalVisible(false)
+    } catch (error) {
+      console.error('Error submitting report:', error)
+      Alert.alert('Error', 'Failed to submit report')
+    }
+  }
+
+  const handleReportPhoto = async (reason: ReportReason, comments?: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !selectedPhotoUrl) return
+
+      // Confirmation alert is handled in ReportModal, so just submit
+      // Use photo_url for photos, content_id can be event_id or photo_id (UUID)
+      const { error } = await supabase
+        .from('reports')
+        .insert({
+          reported_by: user.id,
+          content_type: 'event_photo',
+          content_id: selectedPhotoId || event.id, // Use photo ID if available, otherwise event ID
+          photo_url: selectedPhotoUrl, // Store the photo URL
+          reason: reason,
+          comments: comments || null
+        })
+
+      if (error) throw error
+
+      Alert.alert('Report Submitted', 'We have received your report, will handle within 24 hours')
+      setReportPhotoModalVisible(false)
+      setSelectedPhotoId(null)
+      setSelectedPhotoUrl(null)
+    } catch (error) {
+      console.error('Error submitting report:', error)
+      Alert.alert('Error', 'Failed to submit report')
+    }
+  }
+
   const handleInvitesUpdated = async (newInvitedUsers: string[]) => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -818,52 +1084,64 @@ export default function EventDetailScreen() {
 
       const hostName = hostProfile?.full_name || 'Someone'
 
-      // Send notifications
-      if (event.privacy === 'invite_only') {
-        // For private events, send invitation notifications
-        const notificationData = buildBatchNotifications(
-          usersToInvite,
-          buildEventInvitationNotification,
-          {
-            eventId: event.id,
-            hostName: hostName,
-            eventTitle: event.title,
-            privacy: 'invite_only',
-            additionalData: {
-              hostId: user.id
+      // Filter out muted users
+      const { data: mutedData } = await supabase
+        .from('user_mutes')
+        .select('muter_id')
+        .eq('muted_id', user.id)
+        .in('muter_id', usersToInvite)
+      
+      const mutedUserIds = new Set((mutedData || []).map(m => m.muter_id))
+      const filteredUsers = usersToInvite.filter(id => !mutedUserIds.has(id))
+      
+      if (filteredUsers.length > 0) {
+        // Send notifications
+        if (event.privacy === 'invite_only') {
+          // For private events, send invitation notifications
+          const notificationData = buildBatchNotifications(
+            filteredUsers,
+            buildEventInvitationNotification,
+            {
+              eventId: event.id,
+              hostName: hostName,
+              eventTitle: event.title,
+              privacy: 'invite_only',
+              additionalData: {
+                hostId: user.id
+              }
             }
+          )
+
+          const { error: notificationError } = await supabase
+            .from('notification_queue')
+            .insert(notificationData)
+
+          if (notificationError) {
+            console.error('Error queuing notifications:', notificationError)
           }
-        )
-
-        const { error: notificationError } = await supabase
-          .from('notification_queue')
-          .insert(notificationData)
-
-        if (notificationError) {
-          console.error('Error queuing notifications:', notificationError)
-        }
-      } else {
-        // For public events, send event created notifications
-        const notificationData = buildBatchNotifications(
-          usersToInvite,
-          buildEventInvitationNotification,
-          {
-            eventId: event.id,
-            hostName: hostName,
-            eventTitle: event.title,
-            privacy: 'public',
-            additionalData: {
-              hostId: user.id
+        } else {
+          // For public events, send event created notifications
+          const notificationData = buildBatchNotifications(
+            filteredUsers,
+            buildEventInvitationNotification,
+            {
+              eventId: event.id,
+              hostName: hostName,
+              eventTitle: event.title,
+              privacy: 'public',
+              additionalData: {
+                hostId: user.id
+              }
             }
+          )
+
+          const { error: notificationError } = await supabase
+            .from('notification_queue')
+            .insert(notificationData)
+
+          if (notificationError) {
+            console.error('Error queuing notifications:', notificationError)
           }
-        )
-
-        const { error: notificationError } = await supabase
-          .from('notification_queue')
-          .insert(notificationData)
-
-        if (notificationError) {
-          console.error('Error queuing notifications:', notificationError)
         }
       }
 
@@ -877,10 +1155,10 @@ export default function EventDetailScreen() {
   }
 
   const handleDeleteEvent = async () => {
-    // Only allow deletion if user is hosting this event
+    // Only allow deletion if user is hosting this event or owns the org
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user || !isHost) {
-      Alert.alert('Error', 'You can only delete events you are hosting')
+    if (!user || (!isHost && !isOrgOwner)) {
+      Alert.alert('Error', 'You can only delete events you are hosting or own')
       return
     }
 
@@ -897,36 +1175,55 @@ export default function EventDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Send notifications to all attendees except host before deleting
-              await NotificationService.sendEventEditDeleteNotification(
-                event.id,
-                event.title,
-                event.host_id,
-                'deleted'
+              // Navigate immediately to avoid UI delay
+              // Notifications will be queued and processed in the background
+              navigation.dispatch(
+                CommonActions.reset({
+                  index: 0,
+                  routes: [
+                    {
+                      name: 'Main',
+                      params: { 
+                        screen: isOrgEvent ? 'OrgEvents' : 'MyEvents' 
+                      },
+                    },
+                  ],
+                })
               )
 
-              // Delete the event and ALL associated data
-              if (isOrgEvent) {
-                const { deleteOrgEventCompletely } = await import('../utils/eventDeletion')
-                await deleteOrgEventCompletely(event.id)
-              } else {
-                await deleteEventCompletely(event.id)
-              }
-
-              // Navigate back after deletion
-              if (navigation.canGoBack()) {
-                navigation.goBack()
-              } else {
+              // Send notifications and delete event in the background
+              // This happens after navigation so UI is responsive
+              Promise.all([
+                NotificationService.sendEventEditDeleteNotification(
+                  event.id,
+                  event.title,
+                  event.host_id,
+                  'deleted'
+                ),
+                isOrgEvent 
+                  ? (async () => {
+                      const { deleteOrgEventCompletely } = await import('../utils/eventDeletion')
+                      await deleteOrgEventCompletely(event.id)
+                    })()
+                  : deleteEventCompletely(event.id)
+              ]).catch(error => {
+                console.error('Error during event deletion:', error)
+              })
+            } catch (navError) {
+              // Fallback: try simple navigate if reset fails
+              try {
                 navigation.dispatch(
                   CommonActions.navigate({
                     name: 'Main',
-                    params: { screen: 'MyEvents' },
+                    params: { 
+                      screen: isOrgEvent ? 'OrgEvents' : 'MyEvents' 
+                    },
                   })
                 )
+              } catch (fallbackError) {
+                console.error('Navigation error after event deletion:', fallbackError)
+                // If all navigation fails, at least show success message
               }
-            } catch (error) {
-              console.error('Error deleting event:', error)
-              Alert.alert('Error', 'Failed to delete event')
             }
           }
         }
@@ -946,14 +1243,17 @@ export default function EventDetailScreen() {
       if (isOrgEvent) {
         if (!hostOrganization) return
         
-        // Get org owner
+        // Get org owner (if organization has an owner)
+        // Note: owner_id can be NULL if the original owner deleted their account
+        if (!hostOrganization.owner_id) return // No owner, skip notification
+        
         const { data: orgOwner } = await supabase
           .from('profiles')
           .select('id')
           .eq('org_ownership_id', hostOrganization.id)
-          .single()
+          .maybeSingle()
 
-        if (!orgOwner || user.id === orgOwner.id) return // Don't notify if user is the org owner
+        if (!orgOwner || user.id === orgOwner.id) return // Don't notify if user is the org owner or no owner found
 
         // Get user's profile data for the notification - ensure it loads before proceeding
         const { data: userProfile, error: profileError } = await supabase
@@ -1606,7 +1906,7 @@ export default function EventDetailScreen() {
           >
             <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
               <Text style={[styles.menuTitle, { color: theme.text }]}>
-                {isHost ? 'Event Options' : 'Options'}
+                {(isHost || isOrgOwner) ? 'Event Options' : 'Options'}
               </Text>
               <TouchableOpacity onPress={() => setShowOptionsModal(false)}>
                 <Ionicons name="close" size={24} color={theme.textSecondary} />
@@ -1614,22 +1914,22 @@ export default function EventDetailScreen() {
             </View>
             
             <View style={styles.menuItemsContainer}>
-              {isHost ? (
+              {isHost || isOrgOwner ? (
                 <>
-                  {/* Edit Event - Disabled */}
+                  {/* Edit Event */}
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
                     onPress={() => {
-                      Alert.alert('Coming Soon', 'Edit event functionality will be available in a future update.')
+                      setShowOptionsModal(false)
+                      setShowEditModal(true)
                     }}
-                    disabled={true}
                   >
                     <View style={styles.menuItemContent}>
-                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
-                        <Ionicons name="create-outline" size={22} color={theme.textSecondary} />
+                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.primary + '20' }]}>
+                        <Ionicons name="create-outline" size={22} color={theme.primary} />
                       </View>
                       <View style={styles.menuItemTextContainer}>
-                        <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Edit Event</Text>
+                        <Text style={[styles.menuItemTitle, { color: theme.text }]}>Edit Event</Text>
                       </View>
                     </View>
                   </TouchableOpacity>
@@ -1680,41 +1980,73 @@ export default function EventDetailScreen() {
                 </>
               ) : (
                 <>
-                  {/* Block */}
+                  {/* Report Event */}
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
                     onPress={() => {
-                      Alert.alert('Coming Soon', 'Block functionality will be available in a future update.')
+                      setShowOptionsModal(false)
+                      setReportModalVisible(true)
                     }}
-                    disabled={true}
                   >
                     <View style={styles.menuItemContent}>
-                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
-                        <Ionicons name="ban" size={22} color={theme.textSecondary} />
+                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.error + '20' }]}>
+                        <Ionicons name="flag" size={22} color={theme.error} />
                       </View>
                       <View style={styles.menuItemTextContainer}>
-                        <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Block</Text>
+                        <Text style={[styles.menuItemTitle, { color: theme.text }]}>Report Event</Text>
                       </View>
                     </View>
                   </TouchableOpacity>
                   
-                  {/* Report */}
-                  <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, opacity: 0.5 }]}
-                    onPress={() => {
-                      Alert.alert('Coming Soon', 'Report functionality will be available in a future update.')
-                    }}
-                    disabled={true}
-                  >
-                    <View style={styles.menuItemContent}>
-                      <View style={[styles.menuItemIconContainer, { backgroundColor: theme.textSecondary + '20' }]}>
-                        <Ionicons name="flag" size={22} color={theme.textSecondary} />
+                  {/* Report Event Photo - Show if event has image_url */}
+                  {event.image_url && (
+                    <TouchableOpacity
+                      style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                      onPress={() => {
+                        setShowOptionsModal(false)
+                        setSelectedPhotoId(event.id) // Use event ID
+                        setSelectedPhotoUrl(event.image_url || null) // Store the photo URL
+                        setReportPhotoModalVisible(true)
+                      }}
+                    >
+                      <View style={styles.menuItemContent}>
+                        <View style={[styles.menuItemIconContainer, { backgroundColor: theme.error + '20' }]}>
+                          <Ionicons name="image-outline" size={22} color={theme.error} />
+                        </View>
+                        <View style={styles.menuItemTextContainer}>
+                          <Text style={[styles.menuItemTitle, { color: theme.text }]}>Report Event Photo</Text>
+                        </View>
                       </View>
-                      <View style={styles.menuItemTextContainer}>
-                        <Text style={[styles.menuItemTitle, { color: theme.textSecondary }]}>Report</Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  {/* Report Photo - Only show if event has uploaded photos */}
+                  {eventPhotos.length > 0 && (
+                    <TouchableOpacity
+                      style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                      onPress={() => {
+                        setShowOptionsModal(false)
+                        // If only one photo, report it directly; otherwise show selector
+                        if (eventPhotos.length === 1) {
+                          setSelectedPhotoId(eventPhotos[0].id)
+                          setSelectedPhotoUrl(eventPhotos[0].image_url)
+                          setReportPhotoModalVisible(true)
+                        } else {
+                          // Show photo selector modal
+                          setPhotoSelectorVisible(true)
+                        }
+                      }}
+                    >
+                      <View style={styles.menuItemContent}>
+                        <View style={[styles.menuItemIconContainer, { backgroundColor: theme.error + '20' }]}>
+                          <Ionicons name="images-outline" size={22} color={theme.error} />
+                        </View>
+                        <View style={styles.menuItemTextContainer}>
+                          <Text style={[styles.menuItemTitle, { color: theme.text }]}>Report Uploaded Photo</Text>
+                        </View>
                       </View>
-                    </View>
-                  </TouchableOpacity>
+                    </TouchableOpacity>
+                  )}
                 </>
               )}
             </View>
@@ -1738,6 +2070,39 @@ export default function EventDetailScreen() {
         />
       </Modal>
 
+      {/* Edit Event Modal */}
+      <Modal
+        visible={showEditModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowEditModal(false)}
+      >
+        <CreateEventScreen
+          onBack={() => setShowEditModal(false)}
+          onEventCreated={async (updatedEvent) => {
+            setShowEditModal(false)
+            // Refresh the event data by navigating to the updated event
+            if (updatedEvent) {
+              // Navigate to the updated event
+              navigation.dispatch(
+                CommonActions.navigate({
+                  name: 'EventDetail',
+                  params: { event: updatedEvent }
+                })
+              )
+            } else {
+              // If no updated event, just close modal
+              // The screen will refresh when it regains focus
+            }
+          }}
+          isOrgEvent={(event as any).isOrgEvent || (!event.host_id && (event as any).org_id)}
+          orgId={(event as any).org_id}
+          eventId={event.id}
+          existingEvent={event}
+          isEditMode={true}
+        />
+      </Modal>
+
       {/* Profile Modal */}
       <ProfileModal
         isVisible={showProfileModal}
@@ -1747,6 +2112,85 @@ export default function EventDetailScreen() {
         }}
         user={selectedUser}
         isHostingEvent={isHost}
+      />
+
+      {/* Report Modal */}
+      <ReportModal
+        isVisible={reportModalVisible}
+        onClose={() => setReportModalVisible(false)}
+        onSubmit={handleReportEvent}
+        contentType="event"
+      />
+
+      {/* Photo Selector Modal (if multiple photos) */}
+      <Modal
+        visible={photoSelectorVisible}
+        transparent={true}
+        animationType="fade"
+          onRequestClose={() => {
+            setPhotoSelectorVisible(false)
+            setSelectedPhotoId(null)
+            setSelectedPhotoUrl(null)
+          }}
+      >
+        <TouchableOpacity
+          style={styles.menuOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setPhotoSelectorVisible(false)
+            setSelectedPhotoId(null)
+            setSelectedPhotoUrl(null)
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+            style={[styles.menuContent, { backgroundColor: theme.card, borderColor: theme.border, maxHeight: '70%' }]}
+          >
+            <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <Text style={[styles.menuTitle, { color: theme.text }]}>Select Photo to Report</Text>
+              <TouchableOpacity onPress={() => {
+                setPhotoSelectorVisible(false)
+                setSelectedPhotoId(null)
+                setSelectedPhotoUrl(null)
+              }}>
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: 400 }}>
+              {eventPhotos.map((photo) => (
+                <TouchableOpacity
+                  key={photo.id}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border, margin: 8 }]}
+                  onPress={() => {
+                    setSelectedPhotoId(photo.id)
+                    setSelectedPhotoUrl(photo.image_url)
+                    setPhotoSelectorVisible(false)
+                    setReportPhotoModalVisible(true)
+                  }}
+                >
+                  <Image source={{ uri: photo.image_url }} style={{ width: '100%', height: 200, borderRadius: 8 }} resizeMode="cover" />
+                  {photo.caption && (
+                    <Text style={[styles.menuItemTitle, { color: theme.textSecondary, marginTop: 8 }]} numberOfLines={2}>
+                      {photo.caption}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Report Photo Modal */}
+      <ReportModal
+        isVisible={reportPhotoModalVisible}
+        onClose={() => {
+          setReportPhotoModalVisible(false)
+          setSelectedPhotoId(null)
+        }}
+        onSubmit={handleReportPhoto}
+        contentType="event_photo"
       />
     </View>
   )
@@ -2216,6 +2660,25 @@ const styles = StyleSheet.create({
   menuItemTitle: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  footer: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  submitButton: {
+    flex: 1,
+  },
+  submitButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
   },
 
 })

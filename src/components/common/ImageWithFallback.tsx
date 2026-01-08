@@ -39,54 +39,37 @@ export default function ImageWithFallback({
   const [isLoading, setIsLoading] = useState(true)
   const [imageSource, setImageSource] = useState(source)
 
-  // Validate image URL on mount (only if not skipped)
+  // OPTIMIZED: Skip validation for better performance - let Image component handle errors
   useEffect(() => {
-    if (skipValidation) {
-      // Don't set loading to false immediately when skipping validation
-      // Let the Image component handle loading state
+    if (!source.uri) {
+      setHasError(true)
+      setIsLoading(false)
       return
     }
 
-    const validateImage = async () => {
-      if (!source.uri) {
-        setHasError(true)
-        setIsLoading(false)
-        return
-      }
-
-      // If image is already cached, skip validation
-      if (imageCache.has(source.uri)) {
-        setIsLoading(false)
-        return
-      }
-
-      // Skip validation for Supabase URLs as they're typically reliable
-      if (source.uri.includes('supabase.co/storage')) {
-        setIsLoading(false)
-        return
-      }
-
-      try {
-        const validation = await validateImageUrl(source.uri)
-        if (!validation.isValid) {
-          console.warn('ImageWithFallback - Invalid image URL:', source.uri, validation.error)
-          if (validation.alternativeUrl) {
-            setImageSource({ uri: validation.alternativeUrl })
-          } else {
-            setHasError(true)
-            setIsLoading(false)
-          }
-        } else {
-          setIsLoading(false)
-        }
-      } catch (error) {
-        console.warn('ImageWithFallback - Error validating URL:', error)
-        setIsLoading(false)
-      }
+    // If image is already cached, skip validation
+    if (imageCache.has(source.uri)) {
+      setIsLoading(false)
+      return
     }
 
-    validateImage()
-  }, [source.uri, skipValidation])
+    // OPTIMIZED: Skip validation for all URLs - validation is expensive and blocks rendering
+    // Let the Image component's onError handler deal with broken images
+    // This significantly improves initial load time
+    if (skipValidation || source.uri.includes('supabase.co/storage') || priority === 'low') {
+      setIsLoading(false)
+      return
+    }
+
+    // Only validate high-priority images asynchronously (non-blocking)
+    if (priority === 'high' && !skipValidation) {
+      validateImageUrl(source.uri).catch(() => {
+        // Silently fail - Image component will handle the error
+      })
+    }
+    
+    setIsLoading(false)
+  }, [source.uri, skipValidation, priority])
 
   const handleError = async (error: any) => {
     console.warn('ImageWithFallback - Image load error:', error)

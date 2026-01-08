@@ -3,6 +3,7 @@ import {
   View,
   Text,
   FlatList,
+  SectionList,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -19,11 +20,15 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { safeBlockOrQuery } from '../utils/queryHelpers'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { getEventEndDate, isEventEnded, isEventInFuture } from '../utils/eventTimeUtils'
 import GeneralPhotoGalleryScreen from './GeneralPhotoGalleryScreen'
 import { PREDEFINED_TAGS } from '../constants/tags'
+import EventCard from '../components/common/EventCard'
+import { groupEventsByTime, GroupedEvent } from '../utils/eventGrouping'
+import { withNetworkErrorHandling, isNetworkError } from '../utils/networkUtils'
 
 type EventListItem = EventWithAttendees & { goingCount: number; tags?: string[] }
 
@@ -80,10 +85,20 @@ export default function EventsListScreen() {
     fetchEvents()
   }, [])
 
-  // Refresh events when the tab is focused
+  // Refresh events when the tab is focused and set up auto-refresh
   useFocusEffect(
     React.useCallback(() => {
+      // Initial fetch
       fetchEvents()
+      
+      // Set up auto-refresh interval (every 5 seconds)
+      const refreshInterval = setInterval(() => {
+        fetchEvents()
+      }, 5000)
+      
+      return () => {
+        clearInterval(refreshInterval)
+      }
     }, [])
   )
 
@@ -91,9 +106,22 @@ export default function EventsListScreen() {
     filterEvents(events, 'all')
   }, [timeFilter, events, userAttendances, advancedFilters, sortBy])
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true)
-    fetchEvents()
+    // Preserve expanded state during refresh
+    const preservedExpandedIds = new Set(expandedEventIds)
+    try {
+      await fetchEvents()
+      // Restore expanded state after refresh
+      setExpandedEventIds(preservedExpandedIds)
+    } catch (error: any) {
+      // Only log errors if it's not a network error (network errors are handled by wrapper)
+      if (!isNetworkError(error)) {
+        console.error('Error refreshing events:', error)
+      }
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const formatDate = (dateString: string) => {
@@ -113,65 +141,128 @@ export default function EventsListScreen() {
     return `${displayHour}:${minutes} ${ampm}`
   }
 
-  const fetchEvents = async () => {
-    try {
+  const fetchEvents = async (): Promise<void | null> => {
+    return await withNetworkErrorHandling(async () => {
+      try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
       setCurrentUserId(user.id)
 
-      // Optimize: Run all queries in parallel for better performance
-      // NOTE: We still fetch invitedEventIds for other purposes (like filtering), 
-      // but we don't show private events on the main events page
-      const [friendsResult, invitedEventIds] = await Promise.all([
+      // OPTIMIZED: Run ALL queries in parallel for maximum performance
+      const [
+        friendsResult,
+        invitedEventIds,
+        userAttendancesResult,
+        orgUserAttendancesResult,
+        followedOrgsResult,
+        blockedOrgsResult,
+        blockedUsersResult,
+        profileResult,
+        publicEventsResult,
+        orgEventsResult
+      ] = await Promise.all([
         fetchFriends(user.id),
-        getInvitedEventIds(user.id)
+        getInvitedEventIds(user.id),
+        supabase
+          .from('event_attendees')
+          .select('event_id')
+          .eq('user_id', user.id)
+          .eq('status', 'going'),
+        supabase
+          .from('org_event_attendees')
+          .select('event_id')
+          .eq('user_id', user.id)
+          .eq('status', 'going'),
+        supabase
+          .from('org_followers')
+          .select('org_id')
+          .eq('user_id', user.id),
+        supabase
+          .from('org_blocks')
+          .select('org_id')
+          .eq('user_id', user.id),
+        supabase
+          .from('user_blocks')
+          .select('blocked_id, blocker_id')
+          .or(safeBlockOrQuery(user.id)),
+        supabase
+          .from('profiles')
+          .select('org_ownership_id')
+          .eq('id', user.id)
+          .maybeSingle(),
+        // Fetch public events (host profiles will be fetched separately if join fails)
+        supabase
+          .from('events')
+          .select(`
+            *,
+            attendees:event_attendees(
+              id,
+              user_id,
+              status
+            ),
+            host:profiles(
+              id,
+              full_name,
+              username,
+              avatar_url
+            )
+          `)
+          .eq('privacy', 'public')
+          .neq('host_id', user.id)
+          .order('event_date', { ascending: true }),
+        // Fetch org events (organization data will be fetched separately if join fails)
+        supabase
+          .from('org_events')
+          .select(`
+            *,
+            attendees:org_event_attendees(
+              id,
+              user_id,
+              status
+            ),
+            org:organizations(
+              id,
+              name,
+              icon,
+              type
+            )
+          `)
+          .order('event_date', { ascending: true })
+          .order('start_time', { ascending: true })
       ])
 
-      // Get events user is already attending (to exclude them)
-      const { data: userAttendancesData } = await supabase
-        .from('event_attendees')
-        .select('event_id')
-        .eq('user_id', user.id)
-        .eq('status', 'going')
+      // Extract data from results
+      const attendingEventIds = new Set((userAttendancesResult.data || []).map(a => a.event_id))
+      const attendingOrgEventIds = new Set((orgUserAttendancesResult.data || []).map(a => a.event_id))
+      const followedOrgIds = new Set((followedOrgsResult.data || []).map(f => f.org_id))
+      const blockedOrgIds = new Set((blockedOrgsResult.data || []).map(b => b.org_id))
+      // Separate blocked users (users I blocked) from blockers (users who blocked me)
+      const blockedUserIds = new Set<string>() // Users I have blocked
+      const blockerIds = new Set<string>() // Users who have blocked me
+      if (blockedUsersResult.data) {
+        blockedUsersResult.data.forEach((b: any) => {
+          if (b.blocker_id === user.id) {
+            blockedUserIds.add(b.blocked_id) // I blocked them
+          }
+          if (b.blocked_id === user.id) {
+            blockerIds.add(b.blocker_id) // They blocked me
+          }
+        })
+      }
+      const userOwnedOrgId = profileResult.data?.org_ownership_id || null
 
-      const attendingEventIds = new Set((userAttendancesData || []).map(a => a.event_id))
-
-      // Also get org events user is attending (to exclude them)
-      const { data: orgUserAttendancesData } = await supabase
-        .from('org_event_attendees')
-        .select('event_id')
-        .eq('user_id', user.id)
-        .eq('status', 'going')
-
-      const attendingOrgEventIds = new Set((orgUserAttendancesData || []).map(a => a.event_id))
-
-      // Get orgs user is following to prioritize their events
-      const { data: followedOrgsData } = await supabase
-        .from('org_followers')
-        .select('org_id')
-        .eq('user_id', user.id)
-
-      const followedOrgIds = new Set((followedOrgsData || []).map(f => f.org_id))
-
-      // Get orgs user owns to keep all their events (even past ones)
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('org_ownership_id')
-        .eq('id', user.id)
-        .single()
-
-      const userOwnedOrgId = profile?.org_ownership_id || null
-      
       if (__DEV__) {
         console.log('User owned org ID:', userOwnedOrgId)
       }
 
-      // Run all event queries in parallel
-      // NOTE: Private events (invite_only) should NOT show on the main events page
-      // They should only appear in MyEvents tab (Invited/Hosting/Attending)
-      const [publicEventsResult, orgEventsResult] = await Promise.all([
-        supabase
+      // Check for errors - if join failed, we'll fetch profiles separately
+      let publicEvents = []
+      let orgEvents = []
+      
+      if (publicEventsResult.error) {
+        // Join failed, fetch events without host profiles
+        const { data: eventsData, error: eventsError } = await supabase
           .from('events')
           .select(`
             *,
@@ -182,11 +273,25 @@ export default function EventsListScreen() {
             )
           `)
           .eq('privacy', 'public')
-          .neq('host_id', user.id) // Exclude events user is hosting
-          .order('event_date', { ascending: true }),
+          .neq('host_id', user.id)
+          .order('event_date', { ascending: true })
         
-        // Fetch all org events from org_events table
-        supabase
+        if (eventsError) throw eventsError
+        publicEvents = (eventsData || []).map(event => ({
+          ...event,
+          hostProfile: null // Will be fetched separately
+        }))
+      } else {
+        // Join succeeded, use the data
+        publicEvents = (publicEventsResult.data || []).map(event => ({
+          ...event,
+          hostProfile: event.host || null
+        }))
+      }
+      
+      if (orgEventsResult.error) {
+        // Join failed, fetch org events without org data
+        const { data: orgEventsData, error: orgEventsError } = await supabase
           .from('org_events')
           .select(`
             *,
@@ -198,24 +303,40 @@ export default function EventsListScreen() {
           `)
           .order('event_date', { ascending: true })
           .order('start_time', { ascending: true })
-      ])
-
-      // Check for errors
-      if (publicEventsResult.error) throw publicEventsResult.error
-      if (orgEventsResult.error) throw orgEventsResult.error
-
-      const publicEvents = publicEventsResult.data || []
-      const orgEvents = (orgEventsResult.data || []).map(event => {
-        const userOwnsThisOrg = userOwnedOrgId === event.org_id
-        if (__DEV__ && userOwnsThisOrg) {
-          console.log('Found org event owned by user:', event.id, event.title, 'org_id:', event.org_id)
-        }
-        return {
-          ...event,
-          isOrgEvent: true, // Mark as org event
-          isFollowedOrg: followedOrgIds.has(event.org_id), // Mark if from followed org
-          userOwnsOrg: userOwnsThisOrg // Mark if user owns this org
-        }
+        
+        if (orgEventsError) throw orgEventsError
+        orgEvents = (orgEventsData || []).map(event => {
+          const userOwnsThisOrg = userOwnedOrgId === event.org_id
+          return {
+            ...event,
+            isOrgEvent: true,
+            isFollowedOrg: followedOrgIds.has(event.org_id),
+            userOwnsOrg: userOwnsThisOrg,
+            hostOrg: null // Will be fetched separately
+          }
+        }).filter(event => !blockedOrgIds.has(event.org_id))
+      } else {
+        // Join succeeded, use the data
+        orgEvents = (orgEventsResult.data || []).map(event => {
+          const userOwnsThisOrg = userOwnedOrgId === event.org_id
+          if (__DEV__ && userOwnsThisOrg) {
+            console.log('Found org event owned by user:', event.id, event.title, 'org_id:', event.org_id)
+          }
+          return {
+            ...event,
+            isOrgEvent: true,
+            isFollowedOrg: followedOrgIds.has(event.org_id),
+            userOwnsOrg: userOwnsThisOrg,
+            hostOrg: event.org || null
+          }
+        }).filter(event => !blockedOrgIds.has(event.org_id))
+      }
+      
+      // Filter out events hosted by users who have blocked me (blockers)
+      // If Person A blocks Person B, Person B should not see Person A's events
+      publicEvents = publicEvents.filter(event => {
+        if (!event.host_id) return true
+        return !blockerIds.has(event.host_id)
       })
       
       // Sort org events: followed orgs first, then others (both sorted by date)
@@ -239,7 +360,18 @@ export default function EventsListScreen() {
 
       // Filter out events user is already attending (both personal and org events)
       // Also explicitly exclude any private events (safety check)
+      // Exclude events hosted by blocked users AND blockers
       const filteredEvents = uniqueEvents.filter(event => {
+        // Exclude events hosted by users I have blocked
+        if (!(event as any).isOrgEvent && blockedUserIds.has(event.host_id)) {
+          return false
+        }
+        // Exclude events hosted by users who have blocked me (blockers)
+        // If Person A blocks Person B, Person B should not see Person A's events
+        if (!(event as any).isOrgEvent && blockerIds.has(event.host_id)) {
+          return false
+        }
+        
         // Exclude events user is already attending
         if ((event as any).isOrgEvent) {
           if (attendingOrgEventIds.has(event.id)) {
@@ -278,27 +410,88 @@ export default function EventsListScreen() {
           return true
         })
 
-      // Set events immediately for faster UI response
+      // Set events immediately for faster UI response (host profiles already included)
       setEvents(eventsWithCounts)
-      setLoading(false) // Show events as soon as basic data is loaded
+      setLoading(false)
 
-      // Fetch additional data in parallel without blocking UI
+      // Build host profiles map from already-fetched data and fetch any missing ones
+      // Preserve existing profiles to prevent flickering during auto-refresh
+      const hostProfilesMap: Record<string, any> = {}
+      const missingHostIds: string[] = []
+      
+      publicEvents.forEach(event => {
+        if (event.hostProfile) {
+          hostProfilesMap[event.host_id] = event.hostProfile
+        } else if (event.host_id) {
+          missingHostIds.push(event.host_id)
+        }
+      })
+      
+      // Fetch any missing host profiles that weren't in the join query
+      if (missingHostIds.length > 0) {
+        const uniqueMissingIds = [...new Set(missingHostIds)]
+        const { data: missingProfiles } = await supabase
+          .from('profiles')
+          .select('id, full_name, username, avatar_url')
+          .in('id', uniqueMissingIds)
+          .eq('otp_verified', true)
+        
+        if (missingProfiles) {
+          missingProfiles.forEach(profile => {
+            hostProfilesMap[profile.id] = profile
+          })
+        }
+      }
+      
+      // Update state by merging existing profiles with new ones (preserves existing during refresh)
+      setHostProfiles(prev => {
+        const updated = { ...prev }
+        // Update with new data, but keep existing profiles that aren't being updated
+        Object.keys(hostProfilesMap).forEach(id => {
+          updated[id] = hostProfilesMap[id]
+        })
+        return updated
+      })
+
+      // Build host organizations map from already-fetched data (initial set, will be updated by fetchHostOrganizations)
+      const hostOrgsMap: Record<string, any> = {}
+      orgEvents.forEach(event => {
+        if (event.hostOrg) {
+          hostOrgsMap[event.id] = event.hostOrg
+        }
+      })
+      setHostOrganizations(hostOrgsMap)
+
+      // Fetch remaining data in parallel without blocking UI (attendee profiles, photos, etc.)
+      // Note: Host profiles are already loaded above, so we skip fetchHostProfiles
       Promise.all([
-        fetchHostProfiles(eventsWithCounts),
         fetchHostOrganizations(eventsWithCounts),
         fetchAttendeeProfiles(eventsWithCounts),
         fetchEventPhotos(eventsWithCounts),
         fetchUserAttendances(eventsWithCounts),
         fetchUserInvitations(eventsWithCounts)
       ]).catch(error => {
-        console.error('Error fetching additional data:', error)
+        if (!isNetworkError(error)) {
+          console.error('Error fetching additional data:', error)
+        }
       })
-    } catch (error) {
-      console.error('Error fetching events:', error)
-      setLoading(false)
-    } finally {
-      setRefreshing(false)
+      
+      if (!loading) {
+        setRefreshing(false)
+      }
+      return undefined
+    } catch (error: any) {
+      // Only log errors if it's not a network error (network errors are handled by wrapper)
+      if (!isNetworkError(error)) {
+        console.error('Error fetching events:', error)
+      } else {
+        // If it's a network error, the wrapper already handled it, just update loading state
+        setLoading(false)
+        setRefreshing(false)
+      }
+      return undefined
     }
+    }, () => fetchEvents(), true) // Pass retry callback and suppress errors
   }
 
   const fetchFriends = async (userId: string) => {
@@ -313,8 +506,10 @@ export default function EventsListScreen() {
         const friendIds = new Set(friendsData.map(f => f.friend_id))
         setFriends(friendIds)
       }
-    } catch (error) {
-      console.error('Error fetching friends:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching friends:', error)
+      }
     }
   }
 
@@ -326,8 +521,10 @@ export default function EventsListScreen() {
         .eq('user_id', userId)
 
       return invitations?.map(inv => inv.event_id) || []
-    } catch (error) {
-      console.error('Error fetching invitations:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching invitations:', error)
+      }
       return []
     }
   }
@@ -335,8 +532,8 @@ export default function EventsListScreen() {
   const fetchHostProfiles = async (eventsList: EventWithAttendees[]) => {
     try {
       // Only fetch profiles for events that are NOT org events
-      const nonOrgEvents = eventsList.filter(event => !(event as any).org_id)
-      const hostIds = [...new Set(nonOrgEvents.map(event => event.host_id))]
+      const nonOrgEvents = eventsList.filter(event => !(event as any).isOrgEvent && !(event as any).org_id)
+      const hostIds = [...new Set(nonOrgEvents.map(event => event.host_id).filter(Boolean))]
       if (hostIds.length === 0) return
 
       const { data: profiles } = await supabase
@@ -346,14 +543,18 @@ export default function EventsListScreen() {
         .eq('otp_verified', true) // Only show OTP verified users
 
       if (profiles) {
-        const profilesMap = profiles.reduce((acc, profile) => {
-          acc[profile.id] = profile
-          return acc
-        }, {} as Record<string, any>)
-        setHostProfiles(profilesMap)
+        setHostProfiles(prev => {
+          const updated = { ...prev }
+          profiles.forEach(profile => {
+            updated[profile.id] = profile
+          })
+          return updated
+        })
       }
-    } catch (error) {
-      console.error('Error fetching host profiles:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching host profiles:', error)
+      }
     }
   }
 
@@ -373,18 +574,22 @@ export default function EventsListScreen() {
         .in('id', orgIds)
 
       if (organizations) {
-        // Create a map: event.id -> organization
-        const orgsMap: Record<string, any> = {}
-        orgEvents.forEach(event => {
-          const org = organizations.find(o => o.id === (event as any).org_id)
-          if (org) {
-            orgsMap[event.id] = org
-          }
+        // Create a map: event.id -> organization (merge with existing)
+        setHostOrganizations(prev => {
+          const updated = { ...prev }
+          orgEvents.forEach(event => {
+            const org = organizations.find(o => o.id === (event as any).org_id)
+            if (org) {
+              updated[event.id] = org
+            }
+          })
+          return updated
         })
-        setHostOrganizations(orgsMap)
       }
-    } catch (error) {
-      console.error('Error fetching host organizations:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching host organizations:', error)
+      }
     }
   }
 
@@ -403,7 +608,9 @@ export default function EventsListScreen() {
         .order('created_at', { ascending: false })
 
       if (error) {
-        console.error('Error fetching event photos:', error)
+        if (!isNetworkError(error)) {
+          console.error('Error fetching event photos:', error)
+        }
         return
       }
 
@@ -427,8 +634,10 @@ export default function EventsListScreen() {
         })
         return updated
       })
-    } catch (error) {
-      console.error('Error in fetchEventPhotos:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error in fetchEventPhotos:', error)
+      }
     }
   }
 
@@ -470,8 +679,10 @@ export default function EventsListScreen() {
           }))
         )
       }
-    } catch (error) {
-      console.error('Error fetching attendee profiles:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching attendee profiles:', error)
+      }
     }
   }
 
@@ -496,8 +707,10 @@ export default function EventsListScreen() {
         }, {} as Record<string, string>)
         setUserAttendances(attendanceMap)
       }
-    } catch (error) {
-      console.error('Error fetching user attendances:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching user attendances:', error)
+      }
     }
   }
 
@@ -519,8 +732,10 @@ export default function EventsListScreen() {
         const invitationSet = new Set(invitations.map(inv => inv.event_id))
         setUserInvitations(invitationSet)
       }
-    } catch (error) {
-      console.error('Error fetching user invitations:', error)
+    } catch (error: any) {
+      if (!isNetworkError(error)) {
+        console.error('Error fetching user invitations:', error)
+      }
     }
   }
 
@@ -674,9 +889,11 @@ export default function EventsListScreen() {
         <View style={styles.pastEventHeader}>
           <View style={styles.pastEventInfo}>
             <Text style={styles.pastEventTitle}>{item.title}</Text>
-            <Text style={styles.pastEventHost}>
-              Hosted by {hostOrg ? hostOrg.name : (hostProfile?.full_name || hostProfile?.username || 'Unknown')}
-            </Text>
+            {hostOrg || hostProfile ? (
+              <Text style={styles.pastEventHost}>
+                Hosted by {hostOrg ? hostOrg.name : (hostProfile?.full_name || hostProfile?.username || '')}
+              </Text>
+            ) : null}
             <Text style={styles.pastEventDate}>
               {formatDate(item.event_date)} • {formatTime(item.start_time)}
             </Text>
@@ -762,87 +979,17 @@ export default function EventsListScreen() {
     const isExpanded = expandedEventIds.has(item.id)
 
     return (
-      <View style={styles.eventCard}>
-        {/* Compact header row */}
-        <TouchableOpacity
-          style={styles.compactHeader}
-          onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
-          activeOpacity={0.8}
-        >
-          <View style={styles.compactHeaderLeft}>
-            <Text style={styles.compactTitle} numberOfLines={1}>{item.title}</Text>
-            <Text style={styles.compactHost} numberOfLines={1}>
-              {hostOrg ? hostOrg.name : (hostProfile?.full_name || hostProfile?.username || 'Unknown')}
-            </Text>
-          </View>
-          <View style={styles.compactHeaderCenter}>
-            <View style={styles.compactRowLeftAligned}>
-              <Ionicons name="calendar" size={14} color="#e74c3c" />
-              <Text style={styles.compactMeta} numberOfLines={1}>{formatDate(item.event_date)}</Text>
-            </View>
-            <View style={styles.compactRowLeftAligned}>
-              <Ionicons name="time" size={14} color="#f39c12" />
-              <Text style={styles.compactMeta} numberOfLines={1}>{formatTime(item.start_time)}</Text>
-            </View>
-          </View>
-          <TouchableOpacity
-            style={styles.expandIcon}
-            onPress={() => toggleExpanded(item.id)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={theme.textSecondary} />
-          </TouchableOpacity>
-        </TouchableOpacity>
-
-        {/* Expanded content */}
-        {isExpanded && (
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
-          >
-            {/* Optional image */}
-            {item.image_url && (
-              <Image
-                source={{ uri: item.image_url }}
-                style={styles.compactImage}
-                resizeMode="cover"
-              />
-            )}
-
-            {/* Description */}
-            {item.description ? (
-              <Text style={styles.compactDescription}>{item.description}</Text>
-            ) : null}
-
-            {/* Location */}
-            {item.location ? (
-              <View style={[
-                styles.compactLocationRow,
-                !item.description && { paddingTop: 10 }
-              ]}>
-                <Ionicons name="location" size={16} color="#27ae60" />
-                <Text style={styles.compactLocationText}>{item.location}</Text>
-              </View>
-            ) : null}
-
-            {/* Stats */}
-            <View style={styles.compactStatsRow}>
-              <View style={styles.compactRow}>
-                <Ionicons name="people" size={14} color="#27ae60" />
-                <Text style={styles.compactMeta}>{item.goingCount} going</Text>
-              </View>
-              {item.max_attendees ? (
-                <View style={styles.compactRow}>
-                  <Ionicons name="person-add" size={14} color="#3498db" />
-                  <Text style={styles.compactMeta}>
-                    {item.goingCount}/{item.max_attendees} spots
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          </TouchableOpacity>
-        )}
-      </View>
+      <EventCard
+        item={item}
+        hostProfile={hostProfile}
+        hostOrg={hostOrg}
+        userAttendance={userAttendance}
+        isInvited={isInvited}
+        isHost={isHost}
+        isExpanded={isExpanded}
+        onToggleExpand={() => toggleExpanded(item.id)}
+        onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
+      />
     )
   }
 
@@ -902,64 +1049,59 @@ export default function EventsListScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-        
-        {/* Floating buttons without fade effect */}
-        <View style={styles.floatingButtonsContainer}>
-          <TouchableOpacity
-            style={styles.floatingButton}
-            onPress={() => {
-              setShowPhotosModal(true)
-            }}
-          >
-            <Ionicons 
-              name="images-outline" 
-              size={20} 
-              color={theme.textSecondary} 
-            />
-          </TouchableOpacity>
-        </View>
       </View>
 
       {/* Events List */}
-      <FlatList
-          data={filteredEvents}
-          renderItem={renderEventCard}
-          keyExtractor={(item) => item.id}
-          style={styles.eventsFlatList}
-          contentContainerStyle={[
-            styles.eventsList,
-            filteredEvents.length === 0 && styles.emptyStateContainer
-          ]}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={[theme.primary]}
-              tintColor={theme.primary}
-            />
-          }
-          showsVerticalScrollIndicator={false}
-          extraData={expandedEventIds}
-          ListEmptyComponent={
-            timeFilter === 'org' ? (
-              <View style={styles.emptyContainer}>
-                <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
-                <Text style={[styles.emptyTitle, { color: theme.text }]}>No Org Events</Text>
-                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-                  Org events coming soon
+      {(() => {
+        const groupedEvents = groupEventsByTime<EventListItem>(filteredEvents)
+        
+        if (groupedEvents.length === 0) {
+          return (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>
+                {timeFilter === 'org' ? 'No Org Events' : 'No Events'}
+              </Text>
+              <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+                {timeFilter === 'org' 
+                  ? 'Org events coming soon'
+                  : 'No upcoming events to show right now'}
+              </Text>
+            </View>
+          )
+        }
+        
+        return (
+          <SectionList
+            sections={groupedEvents}
+            renderItem={renderEventCard}
+            renderSectionHeader={({ section }) => (
+              <View style={styles.sectionHeader}>
+                <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
+                  {section.title}
                 </Text>
               </View>
-            ) : timeFilter === 'student' ? (
-              <View style={styles.emptyContainer}>
-                <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
-                <Text style={[styles.emptyTitle, { color: theme.text }]}>No Events</Text>
-                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-                  No upcoming events to show right now
-                </Text>
-              </View>
-            ) : null
-          }
-        />
+            )}
+            keyExtractor={(item) => item.id}
+            style={styles.eventsFlatList}
+            contentContainerStyle={styles.eventsList}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={[theme.primary]}
+                tintColor={theme.primary}
+              />
+            }
+            showsVerticalScrollIndicator={false}
+            extraData={expandedEventIds.size}
+            maintainVisibleContentPosition={{
+              minIndexForVisible: 0,
+            }}
+            stickySectionHeadersEnabled={false}
+          />
+        )
+      })()}
 
       
       
@@ -1508,6 +1650,16 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   eventsList: {
     padding: 20,
+  },
+  sectionHeader: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 6,
+    paddingVertical: 12,
+    paddingTop: 10,
+  },
+  sectionHeaderText: {
+    fontSize: 20,
+    fontWeight: '700',
   },
   eventsFlatList: {
     flex: 1,

@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { safeFriendshipUserOrQuery, safeBlockOrQuery } from '../utils/queryHelpers'
 import { ImageWithFallback } from '../components'
 import { useTheme } from '../context/ThemeContext'
 
@@ -128,7 +129,7 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
       const { data: friendshipsData, error: friendshipsError } = await supabase
         .from('friendships')
         .select('*')
-        .or(`user_id.eq.${user.id},friend_id.eq.${user.id}`)
+        .or(safeFriendshipUserOrQuery(user.id))
         .eq('status', 'accepted')
 
       if (friendshipsError) throw friendshipsError
@@ -142,6 +143,25 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
       )
 
       if (friendIds.length > 0) {
+        // Separate blocked users (users I blocked) from blockers (users who blocked me)
+        const { data: blockedData } = await supabase
+          .from('user_blocks')
+          .select('blocked_id, blocker_id')
+          .or(safeBlockOrQuery(user.id))
+
+        const blockedUserIds = new Set<string>() // Users I have blocked
+        const blockerIds = new Set<string>() // Users who have blocked me
+        if (blockedData) {
+          blockedData.forEach((b: any) => {
+            if (b.blocker_id === user.id) {
+              blockedUserIds.add(b.blocked_id) // I blocked them
+            }
+            if (b.blocked_id === user.id) {
+              blockerIds.add(b.blocker_id) // They blocked me
+            }
+          })
+        }
+
         const { data: friendProfiles, error: friendsError } = await supabase
           .from('profiles')
           .select('id, full_name, avatar_url, phone_number, major, graduating_year, bio')
@@ -149,7 +169,14 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
           .eq('otp_verified', true) // Only show OTP verified users
 
         if (friendsError) throw friendsError
-        setFriends(friendProfiles || [])
+        
+        // Filter out blocked users AND blockers
+        // If Person A blocks Person B, Person B should not see Person A in friends list
+        const filteredFriends = (friendProfiles || []).filter(f => 
+          !blockedUserIds.has(f.id) && 
+          !blockerIds.has(f.id) // Exclude users who have blocked me
+        )
+        setFriends(filteredFriends)
       }
     } catch (error) {
       console.error('Error fetching friends:', error)

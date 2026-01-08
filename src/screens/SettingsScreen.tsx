@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  Linking,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -16,7 +17,6 @@ import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
 import notificationService from '../services/notifications'
-import { isEventEnded } from '../utils/eventTimeUtils'
 
 export default function SettingsScreen() {
   const navigation = useNavigation()
@@ -38,6 +38,26 @@ export default function SettingsScreen() {
 
   const handlePhoneVisibilityPress = () => {
     navigation.navigate('PhoneVisibility' as never)
+  }
+
+  const handleHelpSupportPress = async () => {
+    const supportEmail = 'upwork9080@gmail.com'
+    
+    Alert.alert(
+      'Help & Support',
+      `Contact us at:\n\n${supportEmail}`,
+      [
+        { 
+          text: 'Open Email', 
+          onPress: () => {
+            Linking.openURL(`mailto:${supportEmail}`).catch(() => {
+              Alert.alert('Error', 'Could not open email client')
+            })
+          }
+        },
+        { text: 'Close', style: 'cancel' },
+      ]
+    )
   }
 
   const openEditPhoneNumber = async () => {
@@ -122,148 +142,38 @@ export default function SettingsScreen() {
 
       const userId = user.id
 
-      // Step 1: Get all upcoming events by this user
-      const { data: allEvents, error: eventsError } = await supabase
-        .from('events')
-        .select('id, event_date, start_time, end_time')
-        .eq('host_id', userId)
-
-      if (eventsError) {
-        console.error('Error fetching events:', eventsError)
-      }
-
-      // Filter to get only upcoming events
-      const upcomingEventIds: string[] = []
-      if (allEvents) {
-        for (const event of allEvents) {
-          const isPast = isEventEnded(event.event_date, event.start_time, event.end_time)
-          if (!isPast) {
-            upcomingEventIds.push(event.id)
-          }
-        }
-      }
-
-      console.log(`Found ${upcomingEventIds.length} upcoming events to delete`)
-
-      // Step 2: Delete event attendees for upcoming events (cascading should handle this, but be explicit)
-      if (upcomingEventIds.length > 0) {
-        const { error: attendeesError } = await supabase
-          .from('event_attendees')
-          .delete()
-          .in('event_id', upcomingEventIds)
-
-        if (attendeesError) {
-          console.error('Error deleting event attendees:', attendeesError)
-        }
-
-        // Delete event invitations for upcoming events
-        const { error: invitationsError } = await supabase
-          .from('event_invitations')
-          .delete()
-          .in('event_id', upcomingEventIds)
-
-        if (invitationsError) {
-          console.error('Error deleting event invitations:', invitationsError)
-        }
-
-        // Delete event photos for upcoming events
-        const { error: photosError } = await supabase
-          .from('event_photos')
-          .delete()
-          .in('event_id', upcomingEventIds)
-
-        if (photosError) {
-          console.error('Error deleting event photos:', photosError)
-        }
-
-        // Delete notification queue for upcoming events
-        const { error: queueError } = await supabase
-          .from('notification_queue')
-          .delete()
-          .in('event_id', upcomingEventIds)
-
-        if (queueError) {
-          console.error('Error deleting notification queue:', queueError)
-        }
-
-        // Delete upcoming events
-        const { error: deleteEventsError } = await supabase
-          .from('events')
-          .delete()
-          .in('id', upcomingEventIds)
-
-        if (deleteEventsError) {
-          console.error('Error deleting events:', deleteEventsError)
-          throw deleteEventsError
-        }
-      }
-
-      // Step 3: Delete all friendships (both as user and as friend)
-      const { error: friendshipsError } = await supabase
-        .from('friendships')
-        .delete()
-        .or(`user_id.eq.${userId},friend_id.eq.${userId}`)
-
-      if (friendshipsError) {
-        console.error('Error deleting friendships:', friendshipsError)
-        throw friendshipsError
-      }
-
-      // Step 4: Delete event attendees where user is an attendee (remove user from all events)
-      const { error: userAttendeesError } = await supabase
-        .from('event_attendees')
-        .delete()
-        .eq('user_id', userId)
-
-      if (userAttendeesError) {
-        console.error('Error deleting user attendees:', userAttendeesError)
-      }
-
-      // Step 5: Delete event invitations for this user
-      const { error: userInvitationsError } = await supabase
-        .from('event_invitations')
-        .delete()
-        .or(`user_id.eq.${userId},invited_by.eq.${userId}`)
-
-      if (userInvitationsError) {
-        console.error('Error deleting user invitations:', userInvitationsError)
-      }
-
-      // Step 6: Delete notification data
-      // Delete notification preferences
-      await supabase
-        .from('notification_preferences')
-        .delete()
-        .eq('user_id', userId)
-
-      // Delete notification tokens
+      // Delete notification token from client-side storage
       await notificationService.removeToken()
 
-      // Delete notification queue entries
-      await supabase
-        .from('notification_queue')
-        .delete()
-        .eq('user_id', userId)
+      // Call the comprehensive database function to delete everything
+      // This function handles ALL cascading deletes including:
+      // - Upcoming events and all related data
+      // - All events where user is host
+      // - Friendships
+      // - Event attendees (both personal and org events)
+      // - Event invitations
+      // - Event photos
+      // - Notification preferences, tokens, and queue
+      // - Org followers
+      // - Organization owner_id update
+      // - Profile deletion
+      // - Auth user deletion
+      const { error: deleteError } = await supabase.rpc('delete_user_completely', {
+        user_uuid: userId
+      })
 
-      // Delete notification logs
-      await supabase
-        .from('notification_log')
-        .delete()
-        .eq('user_id', userId)
-
-      // Step 7: Delete the profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', userId)
-
-      if (profileError) {
-        console.error('Error deleting profile:', profileError)
-        throw profileError
+      if (deleteError) {
+        console.error('Error deleting user:', deleteError)
+        throw deleteError
       }
 
-      // Step 8: Sign out and navigate to auth
-      await supabase.auth.signOut()
+      // Sign out (auth user is already deleted by the function)
+      try {
+        await supabase.auth.signOut()
+      } catch (signOutError) {
+        // Ignore sign out errors since the auth user is already deleted
+        console.log('Sign out after deletion (expected)')
+      }
 
       Alert.alert(
         'Profile Deleted',
@@ -393,7 +303,7 @@ export default function SettingsScreen() {
             </View>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity style={styles.settingItem} onPress={handleHelpSupportPress}>
             <View style={styles.settingLeft}>
               <Ionicons name="help-circle" size={20} color={theme.textSecondary} />
               <View style={styles.settingText}>
@@ -404,7 +314,10 @@ export default function SettingsScreen() {
             <Ionicons name="chevron-forward" size={20} color={theme.textTertiary} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity 
+            style={styles.settingItem}
+            onPress={() => navigation.navigate('LegalDocuments' as never)}
+          >
             <View style={styles.settingLeft}>
               <Ionicons name="document-text" size={20} color={theme.textSecondary} />
               <View style={styles.settingText}>

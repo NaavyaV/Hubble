@@ -56,8 +56,8 @@ export async function validateImageUrl(url: string): Promise<ImageValidationResu
       }
 
       return { isValid: true }
-    } catch (error) {
-      if (error.name === 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         return { isValid: false, error: 'Request timeout' }
       }
       throw error

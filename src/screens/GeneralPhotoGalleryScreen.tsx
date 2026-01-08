@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { safeFriendshipOrQuery } from '../utils/queryHelpers'
 import {
   View,
   Text,
@@ -176,7 +177,8 @@ export default function GeneralPhotoGalleryScreen() {
         const { data: friendship } = await supabase
           .from('friendships')
           .select('status')
-          .or(`and(user_id.eq.${userId},friend_id.eq.${photo.uploaded_by},status.eq.accepted),and(user_id.eq.${photo.uploaded_by},friend_id.eq.${userId},status.eq.accepted)`)
+          .or(safeFriendshipOrQuery(userId, photo.uploaded_by))
+          .eq('status', 'accepted')
           .single()
         
         if (friendship) {
