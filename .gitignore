@@ -35,3 +35,9 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# Android release signing - NEVER commit these files
+*.keystore
+!debug.keystore
+keystore.properties
+local.properties
