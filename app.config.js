@@ -45,6 +45,7 @@ export default ({ config }) => {
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE",
         "android.permission.WAKE_LOCK",
+        "android.permission.POST_NOTIFICATIONS",
       ],
       package: isDev
         ? "com.abcdefg123456710.hubble.dev"
