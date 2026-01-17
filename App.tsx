@@ -22,7 +22,7 @@ try {
   Updates = null
 }
 import * as Notifications from 'expo-notifications'
-import { supabase } from './src/services/supabase'
+import { supabase, isInvalidRefreshTokenError } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
 import { ThemeProvider, useTheme } from './src/context/ThemeContext'
@@ -631,6 +631,18 @@ function AppContent() {
       try {
         const { data: { session }, error } = await supabase.auth.getSession()
         
+        // Handle invalid refresh token errors
+        if (error && isInvalidRefreshTokenError(error)) {
+          if (__DEV__) {
+            console.log('App.tsx: Invalid refresh token on initial session check, signing out')
+          }
+          await supabase.auth.signOut()
+          setUser(null)
+          setOtpChecked(true)
+          safeSetLoadingFalse()
+          return
+        }
+        
         if (__DEV__) {
           console.log('App.tsx: Initial session check:', { session: session ? 'exists' : 'none' })
         }
@@ -689,7 +701,14 @@ function AppContent() {
               
               setOtpChecked(true)
               safeSetLoadingFalse()
-            } catch (error) {
+            } catch (error: any) {
+              // Handle invalid refresh token errors
+              if (isInvalidRefreshTokenError(error)) {
+                if (__DEV__) {
+                  console.log('App.tsx: Invalid refresh token during OTP check, signing out')
+                }
+                await supabase.auth.signOut()
+              }
               if (__DEV__) {
                 console.error('App.tsx: Error checking initial OTP verification:', error)
               }
@@ -709,7 +728,18 @@ function AppContent() {
           setOtpChecked(true)
           safeSetLoadingFalse()
         }
-      } catch (error) {
+      } catch (error: any) {
+        // Handle invalid refresh token errors
+        if (isInvalidRefreshTokenError(error)) {
+          if (__DEV__) {
+            console.log('App.tsx: Invalid refresh token error, signing out')
+          }
+          try {
+            await supabase.auth.signOut()
+          } catch (signOutError) {
+            // Ignore sign out errors
+          }
+        }
         if (__DEV__) {
           console.error('App.tsx: Error checking initial session:', error)
         }
@@ -768,7 +798,18 @@ function AppContent() {
               } else {
                 setUser(null)
               }
-            } catch (error) {
+            } catch (error: any) {
+              // Handle invalid refresh token errors
+              if (isInvalidRefreshTokenError(error)) {
+                if (__DEV__) {
+                  console.log('App.tsx: Invalid refresh token during auth state change, signing out')
+                }
+                try {
+                  await supabase.auth.signOut()
+                } catch (signOutError) {
+                  // Ignore sign out errors
+                }
+              }
               // if (__DEV__) {
               //   console.error('App.tsx: Error checking OTP verification:', error)
               // }

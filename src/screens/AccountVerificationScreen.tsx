@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { RouteProp } from '@react-navigation/native'
-import { supabase } from '../services/supabase'
+import { supabase, safeRefreshSession } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 
@@ -362,8 +362,8 @@ export default function AccountVerificationScreen({ navigation, route }: Account
         }
       } else {
         setOtpSent(true)
-        setRateLimitTime(60) // Set 60 second rate limit
-        setCountdown(60)
+        setRateLimitTime(180) // Set 180 second (3 minute) rate limit
+        setCountdown(180)
         // Don't show alert on initial send - it's expected
         // Only show alert when user manually resends
         if (resendingEmail) {
@@ -518,9 +518,13 @@ export default function AccountVerificationScreen({ navigation, route }: Account
           // and set user state to trigger navigation
           setTimeout(async () => {
             try {
-              await supabase.auth.refreshSession()
-            } catch (refreshError) {
-              // Silent fail - App.tsx will detect via profile subscription if needed
+              await safeRefreshSession()
+            } catch (refreshError: any) {
+              // If it's an invalid refresh token error, it's already handled by safeRefreshSession
+              // Other errors are logged but don't block the flow - App.tsx will detect via profile subscription if needed
+              if (__DEV__ && !refreshError?.message?.includes('Invalid Refresh Token')) {
+                console.log('AccountVerificationScreen: Error refreshing session:', refreshError)
+              }
             }
           }, 300)
         } catch (updateError: any) {
@@ -603,7 +607,7 @@ export default function AccountVerificationScreen({ navigation, route }: Account
 
           <View style={styles.textContainer}>
             <Text style={[styles.title, { color: theme.text }]}>
-              {isPasswordReset ? 'Reset Your Password' : 'Verify Your Email'}
+              {isPasswordReset ? 'OTP Login' : 'Verify Your Email'}
             </Text>
             
             <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
@@ -616,8 +620,8 @@ export default function AccountVerificationScreen({ navigation, route }: Account
             
             <Text style={[styles.description, { color: theme.textSecondary }]}>
               {isPasswordReset 
-                ? 'Enter the verification code below to reset your password and log in.'
-                : 'Enter the verification code below to complete your account setup.'
+                ? 'DISCLAIMER: Because college emails scrutinize OTP emails more, the code may take up to 2-3 minutes to send.\n\nPlease do not close Hubble in this time, and be sure to check spam / junk for your code :)'
+                : 'DISCLAIMER: Because college emails scrutinize OTP emails more, the code may take up to 2-3 minutes to send.\n\nPlease do not close Hubble in this time, and be sure to check spam / junk for your code :)'
               }
             </Text>
           </View>

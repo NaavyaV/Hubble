@@ -5,7 +5,7 @@ export default ({ config }) => {
     ...config,
     name: isDev ? "Hubble Dev" : "Hubble",
     slug: "hubble",
-    version: "1.0.0",
+    version: "1.0.1",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "automatic",
@@ -24,7 +24,7 @@ export default ({ config }) => {
       androidCollapsedTitle: "Hubble",
     },
     ios: {
-      supportsTablet: true,
+      supportsTablet: false,
       deploymentTarget: "15.1",
       infoPlist: {
         UIBackgroundModes: ["remote-notification"],
@@ -72,9 +72,7 @@ export default ({ config }) => {
       },
     },
     owner: "abcdefg123456710",
-    runtimeVersion: {
-      policy: "appVersion",
-    },
+    runtimeVersion: "1.0.0",
     updates: {
       url: "https://u.expo.dev/3a800a94-2beb-4074-b4bc-dbd3aca9faf5",
       fallbackToCacheTimeout: 0,

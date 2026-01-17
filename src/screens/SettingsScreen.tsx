@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
 import notificationService from '../services/notifications'
+import Constants from 'expo-constants'
 
 export default function SettingsScreen() {
   const navigation = useNavigation()
@@ -298,7 +299,9 @@ export default function SettingsScreen() {
               <Ionicons name="information-circle" size={20} color={theme.textSecondary} />
               <View style={styles.settingText}>
                 <Text style={styles.settingTitle}>App Version</Text>
-                <Text style={styles.settingDescription}>1.0.0</Text>
+                <Text style={styles.settingDescription}>
+                  {Constants.expoConfig?.version || Constants.manifest?.version || '1.0.1'}
+                </Text>
               </View>
             </View>
           </TouchableOpacity>

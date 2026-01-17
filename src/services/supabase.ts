@@ -9,6 +9,17 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!
 // Global flag to prevent multiple simultaneous alerts
 let isHandlingNetworkError = false
 
+// Helper function to check if error is an invalid refresh token error
+export function isInvalidRefreshTokenError(error: any): boolean {
+  return (
+    error?.message?.includes('Invalid Refresh Token') ||
+    error?.message?.includes('Refresh Token Not Found') ||
+    error?.status === 401 ||
+    (error?.name === 'AuthApiError' && 
+     (error?.message?.includes('refresh_token') || error?.message?.includes('session_not_found')))
+  )
+}
+
 // Wrapper for fetch that handles network errors globally
 async function fetchWithNetworkHandling(url: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
   try {
@@ -93,3 +104,21 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     },
   },
 })
+
+// Safe refresh session helper that handles invalid refresh token errors
+export async function safeRefreshSession(): Promise<void> {
+  try {
+    await supabase.auth.refreshSession()
+  } catch (error: any) {
+    // If refresh token is invalid, sign out to clear invalid session
+    if (isInvalidRefreshTokenError(error)) {
+      if (__DEV__) {
+        console.log('supabase.ts: Invalid refresh token detected, signing out')
+      }
+      // Clear invalid session by signing out
+      await supabase.auth.signOut()
+    }
+    // Re-throw other errors
+    throw error
+  }
+}
