@@ -25,6 +25,19 @@ import * as Notifications from 'expo-notifications'
 import { supabase, isInvalidRefreshTokenError } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
+
+// Dynamically import Firebase Messaging for Android only
+let messaging: any = null
+if (Platform.OS === 'android') {
+  try {
+    messaging = require('@react-native-firebase/messaging').default
+  } catch (error) {
+    // Firebase Messaging not available - will use Expo Push
+    if (__DEV__) {
+      console.log('Firebase Messaging not available:', error)
+    }
+  }
+}
 import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 import { OrgModeProvider, useOrgMode } from './src/context/OrgModeContext'
 import { isEventEnded } from './src/utils/eventTimeUtils'
@@ -589,6 +602,82 @@ function AppContent() {
   const hasSetLoadingFalseRef = useRef(false)
   const pendingNotificationRef = useRef<any>(null)
   const notificationHandledRef = useRef(false)
+
+  // Set up FCM message handlers for Android
+  useEffect(() => {
+    if (Platform.OS === 'android' && messaging) {
+      // Request permission (Android auto-grants, but good practice)
+      messaging()
+        .requestPermission()
+        .then(() => {
+          if (__DEV__) {
+            console.log('App.tsx: FCM permission granted')
+          }
+        })
+        .catch((error: any) => {
+          if (__DEV__) {
+            console.log('App.tsx: FCM permission error:', error)
+          }
+        })
+
+      // Handle foreground messages
+      const unsubscribeForeground = messaging().onMessage(async (remoteMessage: any) => {
+        if (__DEV__) {
+          console.log('App.tsx: Foreground FCM message:', remoteMessage)
+        }
+
+        // Display notification when app is in foreground
+        try {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: remoteMessage.notification?.title || '',
+              body: remoteMessage.notification?.body || '',
+              data: remoteMessage.data || {},
+            },
+            trigger: null, // Send immediately
+          })
+        } catch (error) {
+          if (__DEV__) {
+            console.error('App.tsx: Error displaying FCM notification:', error)
+          }
+        }
+      })
+
+      // Handle token refresh
+      const unsubscribeTokenRefresh = messaging().onTokenRefresh(async (token: string) => {
+        if (__DEV__) {
+          console.log('App.tsx: FCM token refreshed:', token.substring(0, 20) + '...')
+        }
+        // Update token in notification service and database
+        try {
+          notificationService.setToken(token)
+          const { data: { user: currentUser } } = await supabase.auth.getUser()
+          if (currentUser) {
+            await supabase
+              .from('notification_tokens')
+              .upsert({
+                user_id: currentUser.id,
+                token,
+                platform: Platform.OS,
+                updated_at: new Date().toISOString()
+              }, {
+                onConflict: 'user_id,platform'
+              })
+          }
+        } catch (error) {
+          if (__DEV__) {
+            console.error('App.tsx: Error updating refreshed FCM token:', error)
+          }
+        }
+      })
+
+      // Cleanup subscriptions
+      return () => {
+        unsubscribeForeground()
+        unsubscribeTokenRefresh()
+      }
+    }
+  }, [])
 
   // Fail-safe loading timeout - ensures app never gets stuck
   // Use longer timeout for simulators which may be slower

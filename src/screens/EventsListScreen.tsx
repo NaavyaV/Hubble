@@ -23,7 +23,7 @@ import { supabase } from '../services/supabase'
 import { safeBlockOrQuery } from '../utils/queryHelpers'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
-import { getEventEndDate, isEventEnded, isEventInFuture } from '../utils/eventTimeUtils'
+import { getEventEndDate, isEventEnded, isEventInFuture, parseLocalDate } from '../utils/eventTimeUtils'
 import GeneralPhotoGalleryScreen from './GeneralPhotoGalleryScreen'
 import { PREDEFINED_TAGS } from '../constants/tags'
 import EventCard from '../components/common/EventCard'
@@ -125,12 +125,8 @@ export default function EventsListScreen() {
   }
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    })
+    const { formatDateString } = require('../utils/eventTimeUtils')
+    return formatDateString(dateString)
   }
 
   const formatTime = (timeString: string) => {
@@ -347,7 +343,7 @@ export default function EventsListScreen() {
           return aFollowed - bFollowed // Followed orgs come first
         }
         // If both are followed or both are not, sort by date
-        return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+        return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
       })
 
       // Combine all events and remove duplicates
@@ -776,7 +772,7 @@ export default function EventsListScreen() {
           return aFollowed - bFollowed // Followed orgs come first
         }
         // If both are followed or both are not, sort by date
-        return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+        return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
       })
     }
 
@@ -820,9 +816,9 @@ export default function EventsListScreen() {
         // Within same group (both followed or both not), apply sortBy
         switch (sortBy) {
           case 'date_asc':
-            return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+            return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
           case 'date_desc':
-            return new Date(b.event_date).getTime() - new Date(a.event_date).getTime()
+            return parseLocalDate(b.event_date).getTime() - parseLocalDate(a.event_date).getTime()
           case 'people_going':
             return b.goingCount - a.goingCount
           case 'recently_created':
@@ -830,17 +826,17 @@ export default function EventsListScreen() {
           case 'alphabetical':
             return a.title.localeCompare(b.title)
           default:
-            return new Date(a.event_date).getTime() - new Date(b.event_date).getTime()
+            return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
         }
       })
     } else {
       // For student events, apply normal sorting
       switch (sortBy) {
         case 'date_asc':
-          filtered.sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime())
+          filtered.sort((a, b) => parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime())
           break
         case 'date_desc':
-          filtered.sort((a, b) => new Date(b.event_date).getTime() - new Date(a.event_date).getTime())
+          filtered.sort((a, b) => parseLocalDate(b.event_date).getTime() - parseLocalDate(a.event_date).getTime())
           break
         case 'people_going':
           filtered.sort((a, b) => b.goingCount - a.goingCount)

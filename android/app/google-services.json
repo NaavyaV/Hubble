@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "733314493451",
+    "project_id": "hubble-9580c",
+    "storage_bucket": "hubble-9580c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:733314493451:android:fd426cb701f8218f782b0e",
+        "android_client_info": {
+          "package_name": "com.abcdefg123456710.hubble"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC03yaL0lET0b3wmGqq9DVBjuDM8q0Z7As"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

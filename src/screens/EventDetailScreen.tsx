@@ -1372,7 +1372,8 @@ export default function EventDetailScreen() {
   }
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
+    const { parseLocalDate } = require('../utils/eventTimeUtils')
+    const date = parseLocalDate(dateString)
     return date.toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',

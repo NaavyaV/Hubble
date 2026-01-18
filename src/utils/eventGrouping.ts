@@ -1,4 +1,5 @@
 import { EventWithAttendees } from '../types'
+import { getEventStartDate } from './eventTimeUtils'
 
 export type TimeSection = 'today' | 'thisWeek' | 'nextWeek'
 
@@ -54,13 +55,10 @@ function getStartOfNextWeek(): Date {
  * Determines which time section an event belongs to based on its event_date
  */
 function getEventTimeSection(eventDate: string, startTime?: string): TimeSection {
-  const eventDateTime = new Date(eventDate)
-  if (startTime) {
-    const [hours, minutes] = startTime.split(':')
-    eventDateTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0)
-  } else {
-    eventDateTime.setHours(0, 0, 0, 0)
-  }
+  // Use getEventStartDate to properly parse date in local timezone
+  const eventDateTime = startTime 
+    ? getEventStartDate(eventDate, startTime)
+    : getEventStartDate(eventDate, '00:00')
   
   const now = new Date()
   const startOfToday = getStartOfToday()

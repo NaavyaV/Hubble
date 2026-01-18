@@ -21,7 +21,7 @@ import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
-import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay } from '../utils/eventTimeUtils'
+import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay, getEventStartDate, parseLocalDate } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
 import { PREDEFINED_TAGS } from '../constants/tags'
 import { buildEventInvitationNotification, buildBatchNotifications, buildOrgEventCreatedNotification, buildEventEditDeleteNotification } from '../utils/notificationTemplates'
@@ -99,7 +99,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       setDescription(existingEvent.description || '')
       setLocation(existingEvent.location || '')
       setMaxAttendees(existingEvent.max_attendees ? existingEvent.max_attendees.toString() : '')
-      setEventDate(new Date(existingEvent.event_date))
+      setEventDate(parseLocalDate(existingEvent.event_date))
       
       // Parse start time
       const [startHours, startMinutes] = existingEvent.start_time.split(':').map(Number)
@@ -188,6 +188,14 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     } catch (error) {
       Alert.alert('Error', 'Failed to pick image')
     }
+  }
+
+  // Helper function to format date as YYYY-MM-DD using local timezone (not UTC)
+  const formatDateForDatabase = (date: Date): string => {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
   }
 
   const formatDate = (date: Date) => {
@@ -399,7 +407,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             college_id: profileData?.college_id || null,
             title: title.trim(),
             description: description.trim() || null,
-            event_date: eventDate.toISOString().split('T')[0],
+            event_date: formatDateForDatabase(eventDate),
             start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
             end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
@@ -418,7 +426,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             college_id: profileData?.college_id || null,
             title: title.trim(),
             description: description.trim() || null,
-            event_date: eventDate.toISOString().split('T')[0],
+            event_date: formatDateForDatabase(eventDate),
             start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
             end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
@@ -628,7 +636,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             college_id: profileData?.college_id || null,
             title: title.trim(),
             description: description.trim() || null,
-            event_date: eventDate.toISOString().split('T')[0],
+            event_date: formatDateForDatabase(eventDate),
             start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
             end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
@@ -651,7 +659,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             college_id: profileData?.college_id || null,
             title: title.trim(),
             description: description.trim() || null,
-            event_date: eventDate.toISOString().split('T')[0],
+            event_date: formatDateForDatabase(eventDate),
             start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
             end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
@@ -869,10 +877,8 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       }
 
       // Schedule event reminder for all going attendees (including host)
-      // Calculate event date/time for reminder scheduling
-      const eventDateTime = new Date(event.event_date)
-      const [hours, minutes] = event.start_time.split(':').map(Number)
-      eventDateTime.setHours(hours, minutes, 0, 0)
+      // Calculate event date/time for reminder scheduling using local timezone
+      const eventDateTime = getEventStartDate(event.event_date, event.start_time)
       
       // Small delay to ensure host is in the database before querying attendees
       setTimeout(async () => {

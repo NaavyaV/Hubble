@@ -84,7 +84,9 @@ export default function PhotoViewerScreen() {
   const formatDate = (dateString: string) => {
     if (!dateString) return 'Unknown Date'
     try {
-      return new Date(dateString).toLocaleDateString('en-US', {
+      const { parseLocalDate } = require('../utils/eventTimeUtils')
+      const date = parseLocalDate(dateString)
+      return date.toLocaleDateString('en-US', {
         weekday: 'short',
         month: 'short',
         day: 'numeric',

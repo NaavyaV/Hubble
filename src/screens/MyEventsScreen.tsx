@@ -573,12 +573,8 @@ export default function MyEventsScreen() {
   }
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    })
+    const { formatDateString } = require('../utils/eventTimeUtils')
+    return formatDateString(dateString)
   }
 
   const formatTime = (timeString: string) => {
@@ -692,9 +688,10 @@ export default function MyEventsScreen() {
           if (prev.some(e => e.id === newEvent.id)) {
             return prev.map(e => e.id === newEvent.id ? newEvent : e)
           }
+          const { getEventStartDate } = require('../utils/eventTimeUtils')
           return [...prev, newEvent].sort((a, b) => {
-            const dateA = new Date(`${a.event_date}T${a.start_time}`)
-            const dateB = new Date(`${b.event_date}T${b.start_time}`)
+            const dateA = getEventStartDate(a.event_date, a.start_time)
+            const dateB = getEventStartDate(b.event_date, b.start_time)
             return dateA.getTime() - dateB.getTime()
           })
         })

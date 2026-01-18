@@ -3,6 +3,33 @@
  */
 
 /**
+ * Parses a date string (YYYY-MM-DD) as a local date (not UTC)
+ * This prevents timezone issues when parsing date-only strings
+ * @param dateString - Date string in YYYY-MM-DD format
+ * @returns Date object representing the date in local timezone
+ */
+export function parseLocalDate(dateString: string): Date {
+  const [year, month, day] = dateString.split('-').map(Number)
+  // Create date in local timezone (month is 0-indexed in Date constructor)
+  return new Date(year, month - 1, day)
+}
+
+/**
+ * Formats a date string (YYYY-MM-DD) for display
+ * Parses it as local date to avoid timezone issues
+ * @param dateString - Date string in YYYY-MM-DD format
+ * @returns Formatted date string for display
+ */
+export function formatDateString(dateString: string): string {
+  const date = parseLocalDate(dateString)
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+/**
  * Checks if an event spans across midnight (end time is before start time)
  * @param startTime - Start time string in HH:MM format
  * @param endTime - End time string in HH:MM format
@@ -28,7 +55,7 @@ export function isMidnightSpanningEvent(startTime: string, endTime: string): boo
  * @returns Date object representing the actual end of the event
  */
 export function getEventEndDate(eventDate: string, startTime: string, endTime?: string): Date {
-  const startDate = new Date(eventDate + ' ' + startTime)
+  const startDate = getEventStartDate(eventDate, startTime)
   
   if (!endTime) {
     // Default to 6 hours after start if no end time
@@ -37,12 +64,20 @@ export function getEventEndDate(eventDate: string, startTime: string, endTime?: 
   
   if (isMidnightSpanningEvent(startTime, endTime)) {
     // Event spans midnight, so end time is next day
-    const nextDay = new Date(eventDate)
-    nextDay.setDate(nextDay.getDate() + 1)
-    return new Date(nextDay.toISOString().split('T')[0] + ' ' + endTime)
+    const [year, month, day] = eventDate.split('-').map(Number)
+    const baseDate = new Date(year, month - 1, day)
+    baseDate.setDate(baseDate.getDate() + 1) // Next day
+    
+    const [endHour, endMinute] = endTime.split(':').map(Number)
+    baseDate.setHours(endHour, endMinute, 0, 0)
+    return baseDate
   } else {
     // Event ends same day
-    return new Date(eventDate + ' ' + endTime)
+    const [year, month, day] = eventDate.split('-').map(Number)
+    const baseDate = new Date(year, month - 1, day)
+    const [endHour, endMinute] = endTime.split(':').map(Number)
+    baseDate.setHours(endHour, endMinute, 0, 0)
+    return baseDate
   }
 }
 
@@ -50,10 +85,14 @@ export function getEventEndDate(eventDate: string, startTime: string, endTime?: 
  * Gets the actual start date of an event
  * @param eventDate - Event date string in YYYY-MM-DD format
  * @param startTime - Start time string in HH:MM format
- * @returns Date object representing the start of the event
+ * @returns Date object representing the start of the event in local timezone
  */
 export function getEventStartDate(eventDate: string, startTime: string): Date {
-  return new Date(eventDate + ' ' + startTime)
+  const [year, month, day] = eventDate.split('-').map(Number)
+  const [hours, minutes] = startTime.split(':').map(Number)
+  // Create date in local timezone (month is 0-indexed in Date constructor)
+  const date = new Date(year, month - 1, day, hours, minutes, 0, 0)
+  return date
 }
 
 /**

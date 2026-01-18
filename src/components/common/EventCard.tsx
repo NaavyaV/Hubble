@@ -4,14 +4,11 @@ import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../../context/ThemeContext'
 import { EventWithAttendees } from '../../types'
 
+import { formatDateString } from '../../utils/eventTimeUtils'
+
 // Date and time formatting utilities
 const formatDate = (dateString: string) => {
-  const date = new Date(dateString)
-  return date.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  })
+  return formatDateString(dateString)
 }
 
 const formatTime = (timeString: string) => {

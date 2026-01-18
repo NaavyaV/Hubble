@@ -261,7 +261,10 @@ export default function EventPhotoGalleryScreen() {
       <View style={[styles.eventInfo, { backgroundColor: theme.card, borderBottomColor: theme.border }]}>
         <Text style={[styles.eventTitle, { color: theme.text }]}>{event.title}</Text>
         <Text style={[styles.eventDate, { color: theme.textSecondary }]}>
-          {new Date(event.event_date).toLocaleDateString()} • {event.start_time}
+          {(() => {
+            const { parseLocalDate } = require('../utils/eventTimeUtils')
+            return parseLocalDate(event.event_date).toLocaleDateString()
+          })()} • {event.start_time}
         </Text>
       </View>
 
