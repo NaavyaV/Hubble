@@ -80,6 +80,25 @@ export async function triggerProcessNotifications(): Promise<void> {
   }
 }
 
+// Ensure notification channel exists for Android 8.0+
+async function ensureNotificationChannel(): Promise<void> {
+  if (Platform.OS === 'android') {
+    try {
+      // Create or get notification channel for Android 8.0+
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#3498db',
+      })
+    } catch (error) {
+      if (__DEV__) {
+        console.log('Error creating notification channel:', error)
+      }
+    }
+  }
+}
+
 // Process background notifications silently
 async function processBackgroundNotification(data: any) {
   try {
@@ -265,6 +284,9 @@ class NotificationService {
         }
         return null
       }
+
+      // Ensure notification channel exists (Android 8.0+)
+      await ensureNotificationChannel()
 
       // Get push token based on platform
       if (Device.isDevice) {
