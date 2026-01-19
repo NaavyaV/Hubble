@@ -26,7 +26,7 @@ import { supabase, isInvalidRefreshTokenError } from './src/services/supabase'
 import { User, EventWithAttendees } from './src/types'
 import notificationService from './src/services/notifications'
 
-// Dynamically import Firebase Messaging for Android only
+// Dynamically import Firebase Messaging for Android only (iOS uses Expo Push)
 let messaging: any = null
 if (Platform.OS === 'android') {
   try {

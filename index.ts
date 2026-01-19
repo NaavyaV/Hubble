@@ -7,7 +7,8 @@ import App from './App';
 // It also ensures that whether you load the app in Expo Go or in a native build,
 // the environment is set up appropriately
 
-// Set up Firebase Cloud Messaging background handler for Android
+// Set up Firebase Cloud Messaging background handler for Android only
+// iOS uses Expo Push Notifications, so Firebase is not needed
 if (Platform.OS === 'android') {
   try {
     const messaging = require('@react-native-firebase/messaging').default;
@@ -21,6 +22,7 @@ if (Platform.OS === 'android') {
     });
   } catch (error) {
     // Firebase Messaging not available - background handler not registered
+    // Will fall back to Expo Push Notifications
     if (__DEV__) {
       console.log('Firebase Messaging background handler not available:', error);
     }
