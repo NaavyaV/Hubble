@@ -67,7 +67,7 @@ export const OrgModeProvider: React.FC<{ children: React.ReactNode }> = ({ child
             if (profile?.org_ownership_id === org.id) {
               const { data: orgData } = await supabase
                 .from('organizations')
-                .select('*')
+                .select('id, name, icon, type, description, owner_id, college_id, created_at, updated_at')
                 .eq('id', org.id)
                 .single()
               

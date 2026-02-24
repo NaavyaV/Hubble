@@ -1,0 +1,182 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 2737 >>
+stream
+BT
+/F1 17 Tf
+40 760 Td
+(Hubble App Summary) Tj
+ET
+BT
+/F1 9 Tf
+40 744 Td
+(Evidence source: repository code and config files only) Tj
+ET
+BT
+/F1 11 Tf
+40 724 Td
+(What It Is) Tj
+ET
+BT
+/F1 9 Tf
+40 712 Td
+(Hubble is an Expo/React Native mobile app for college communities that combines) Tj
+ET
+BT
+/F1 9 Tf
+40 701 Td
+(event planning with social networking. The codebase supports creating and discovering) Tj
+ET
+BT
+/F1 9 Tf
+40 690 Td
+(events, managing attendance, and interacting with friends and organizations.) Tj
+ET
+BT
+/F1 11 Tf
+40 671 Td
+(Who It Is For) Tj
+ET
+BT
+/F1 9 Tf
+40 659 Td
+(Primary persona: college students using school-linked accounts to connect with peers) Tj
+ET
+BT
+/F1 9 Tf
+40 648 Td
+(through events and friend activity.) Tj
+ET
+BT
+/F1 11 Tf
+40 629 Td
+(What It Does) Tj
+ET
+BT
+/F1 8.6 Tf
+50 617 Td
+(- Onboards users with college selection and school email-domain validation.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 607 Td
+(- Lets users create, edit, and join events with privacy modes and invitations.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 597 Td
+(- Provides friend requests, accepted/pending states, muting/blocking, and reporting.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 587 Td
+(- Supports organization mode with org events, followers, and org settings.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 577 Td
+(- Handles push notifications with preferences, token storage, and queue processing.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 567 Td
+(- Includes photo galleries, uploads, and photo visibility controls.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 557 Td
+(- Offers profile management, account recovery/verification, and a leaderboard.) Tj
+ET
+BT
+/F1 11 Tf
+40 539 Td
+(How It Works \(Architecture\)) Tj
+ET
+BT
+/F1 8.6 Tf
+50 527 Td
+(- App shell: App.tsx defines stack/tab navigation and wraps ThemeProvider + OrgModeProvider.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 517 Td
+(- Feature UI: src/screens/* implements auth, onboarding, events, social, photos, org, settings.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 507 Td
+(- Backend: src/services/supabase.ts configures Supabase auth/session with AsyncStorage.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 497 Td
+(- Notifications: src/services/notifications.ts integrates Expo notifications and queue tables.) Tj
+ET
+BT
+/F1 8.6 Tf
+50 487 Td
+(- Data flow: UI actions -> Supabase auth/DB/storage -> realtime subscriptions -> UI refresh/routing.) Tj
+ET
+BT
+/F1 11 Tf
+40 469 Td
+(How To Run \(Minimal\)) Tj
+ET
+BT
+/F1 8.6 Tf
+50 457 Td
+(- 1\) npm install) Tj
+ET
+BT
+/F1 8.6 Tf
+50 447 Td
+(- 2\) Create .env with EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, APP_ENV) Tj
+ET
+BT
+/F1 8.6 Tf
+50 437 Td
+(- 3\) npm run start \(dev client\)) Tj
+ET
+BT
+/F1 8.6 Tf
+50 427 Td
+(- 4\) npm run ios or npm run android) Tj
+ET
+BT
+/F1 8.6 Tf
+50 417 Td
+(- 5\) Backend bootstrap/migration steps: Not found in repo.) Tj
+ET
+BT
+/F1 8 Tf
+520 18 Td
+(Page 1 of 1) Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000317 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+3106
+%%EOF

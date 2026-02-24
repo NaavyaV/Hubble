@@ -474,30 +474,54 @@ export default function AccountVerificationScreen({ navigation, route }: Account
             throw new Error('No user found in OTP verification response')
           }
 
-          // Update profile to mark OTP as verified
+          const now = new Date().toISOString()
+          let profileOk = false
+
           const { error: updateError, data: updateData } = await supabase
             .from('profiles')
-            .update({ 
+            .update({
               otp_verified: true,
-              updated_at: new Date().toISOString()
+              updated_at: now,
             })
             .eq('id', verifiedUser.id)
             .select('otp_verified')
             .single()
 
           if (updateError) {
-            Alert.alert(
-              'Verification Error',
-              `Your code was verified but we could not update your profile: ${updateError.message}`,
-              [{ text: 'OK' }]
-            )
-            setLoading(false)
-            isUpdatingProfileRef.current = false
-            return
+            const noRow = /PGRST116|0 rows|no rows|could not find|no profile/i.test(updateError.message ?? '')
+            if (noRow) {
+              const minimalProfile: Record<string, unknown> = {
+                id: verifiedUser.id,
+                full_name: onboardingData?.full_name ?? verifiedUser.email?.split('@')[0] ?? 'User',
+                college_id: onboardingData?.college_id ?? null,
+                major: (onboardingData?.major as string) ?? null,
+                phone_number: (onboardingData?.phone_number as string) ?? null,
+                phone_visibility: (onboardingData?.phone_visibility as string) ?? 'private',
+                otp_verified: true,
+                updated_at: now,
+              }
+              const { error: insertError } = await supabase
+                .from('profiles')
+                .upsert(minimalProfile, { onConflict: 'id' })
+              if (!insertError) {
+                profileOk = true
+              }
+            }
+            if (!profileOk) {
+              Alert.alert(
+                'Verification Error',
+                'Your code was verified but we could not save your profile. Please try again or contact support.',
+                [{ text: 'OK' }]
+              )
+              setLoading(false)
+              isUpdatingProfileRef.current = false
+              return
+            }
+          } else if (updateData?.otp_verified) {
+            profileOk = true
           }
 
-          // Verify the update succeeded
-          if (!updateData?.otp_verified) {
+          if (!profileOk) {
             Alert.alert(
               'Verification Error',
               'Your code was verified but the profile update failed to persist. Please try again.',

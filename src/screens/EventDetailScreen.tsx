@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  Image,
   Linking,
   Modal,
 } from 'react-native'
@@ -16,7 +15,7 @@ import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-naviga
 import { supabase } from '../services/supabase'
 import { safeBlockOrQuery } from '../utils/queryHelpers'
 import NotificationService from '../services/notifications'
-import { ProfileModal } from '../components'
+import { ProfileModal, ImageWithFallback } from '../components'
 import { buildHostUpdateNotification } from '../utils/notificationTemplates'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
@@ -218,7 +217,7 @@ export default function EventDetailScreen() {
       // Check if host is already in attendees
       const { data: existingAttendance } = await supabase
         .from('event_attendees')
-        .select('*')
+        .select('id, event_id, user_id, status')
         .eq('event_id', event.id)
         .eq('user_id', user.id)
         .single()
@@ -296,7 +295,7 @@ export default function EventDetailScreen() {
         // Fallback to separate queries if join fails
         const { data: attendeesOnly, error: attendeesOnlyError } = await supabase
           .from(attendeesTable)
-          .select('*')
+          .select('id, event_id, user_id, status')
           .eq('event_id', event.id)
 
         if (attendeesOnlyError) throw attendeesOnlyError
@@ -391,7 +390,7 @@ export default function EventDetailScreen() {
       
       const { data: org, error } = await supabase
         .from('organizations')
-        .select('*')
+        .select('id, name, icon, type, description, owner_id, college_id, created_at, updated_at')
         .eq('id', (event as any).org_id)
         .single()
 
@@ -407,7 +406,7 @@ export default function EventDetailScreen() {
       if ((event as any).college_id) {
         const { data: collegeData, error } = await supabase
           .from('colleges')
-          .select('*')
+          .select('id, name, logo_url')
           .eq('id', (event as any).college_id)
           .single()
 
@@ -1411,7 +1410,7 @@ export default function EventDetailScreen() {
       >
         <View style={styles.attendeeAvatar}>
           {user.avatar_url ? (
-            <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
+            <ImageWithFallback source={{ uri: user.avatar_url }} style={styles.avatarImage} resizeMode="cover" />
           ) : (
             <Ionicons name="person" size={24} color={theme.textSecondary} />
           )}
@@ -1473,8 +1472,8 @@ export default function EventDetailScreen() {
           {college && (
             <View style={styles.collegeRow}>
               {college.logo_url && (
-                <Image 
-                  source={{ uri: college.logo_url }} 
+                <ImageWithFallback
+                  source={{ uri: college.logo_url }}
                   style={styles.collegeLogo}
                   resizeMode="contain"
                 />
@@ -1494,9 +1493,9 @@ export default function EventDetailScreen() {
         </View>
 
         {/* Event Image */}
-        {event.image_url && (
-          <Image source={{ uri: event.image_url }} style={styles.eventImage} />
-        )}
+        {event.image_url ? (
+          <ImageWithFallback source={{ uri: event.image_url }} style={styles.eventImage} resizeMode="cover" />
+        ) : null}
 
         {/* Event Content */}
         <View style={styles.content}>
@@ -1514,7 +1513,7 @@ export default function EventDetailScreen() {
                 <View style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                   <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
                     {hostOrganization.icon ? (
-                      <Image source={{ uri: hostOrganization.icon }} style={styles.avatarImage} />
+                      <ImageWithFallback source={{ uri: hostOrganization.icon }} style={styles.avatarImage} resizeMode="cover" />
                     ) : (
                       <Ionicons name="business" size={24} color={theme.textSecondary} />
                     )}
@@ -1530,7 +1529,7 @@ export default function EventDetailScreen() {
                 >
                   <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
                     {hostProfile.avatar_url ? (
-                      <Image source={{ uri: hostProfile.avatar_url }} style={styles.avatarImage} />
+                      <ImageWithFallback source={{ uri: hostProfile.avatar_url }} style={styles.avatarImage} resizeMode="cover" />
                     ) : (
                       <Ionicons name="person" size={24} color={theme.textSecondary} />
                     )}
@@ -1869,7 +1868,7 @@ export default function EventDetailScreen() {
                     >
                       <View style={styles.attendeeAvatar}>
                         {user.avatar_url ? (
-                          <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
+                          <ImageWithFallback source={{ uri: user.avatar_url }} style={styles.avatarImage} resizeMode="cover" />
                         ) : (
                           <Ionicons name="person" size={24} color={theme.textSecondary} />
                         )}
@@ -2170,7 +2169,7 @@ export default function EventDetailScreen() {
                     setReportPhotoModalVisible(true)
                   }}
                 >
-                  <Image source={{ uri: photo.image_url }} style={{ width: '100%', height: 200, borderRadius: 8 }} resizeMode="cover" />
+                  <ImageWithFallback source={{ uri: photo.image_url }} style={{ width: '100%', height: 200, borderRadius: 8 }} resizeMode="cover" />
                   {photo.caption && (
                     <Text style={[styles.menuItemTitle, { color: theme.textSecondary, marginTop: 8 }]} numberOfLines={2}>
                       {photo.caption}

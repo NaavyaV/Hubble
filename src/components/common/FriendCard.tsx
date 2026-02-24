@@ -34,7 +34,7 @@ export interface FriendCardProps {
   showMenuButton?: boolean
 }
 
-export default function FriendCard({
+function FriendCard({
   user,
   status,
   isBlocked = false,
@@ -288,3 +288,4 @@ const styles = StyleSheet.create({
   },
 })
 
+export default React.memo(FriendCard)

@@ -9,7 +9,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -18,6 +17,7 @@ import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
+import { ImageWithFallback } from '../components'
 import { validateContentWithAlert } from '../utils/contentFilter'
 import {
   MAX_ORG_NAME_LENGTH,
@@ -162,7 +162,7 @@ export default function OrgEditScreen({ navigation }: any) {
               disabled={loading}
             >
               {icon ? (
-                <Image source={{ uri: icon }} style={styles.icon} />
+                <ImageWithFallback source={{ uri: icon }} style={styles.icon} resizeMode="cover" />
               ) : (
                 <View style={[styles.iconPlaceholder, { backgroundColor: theme.primary }]}>
                   <Ionicons name="image-outline" size={40} color="white" />

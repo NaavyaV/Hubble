@@ -9,7 +9,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Image,
   Switch,
   Modal,
 } from 'react-native'
@@ -20,6 +19,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { useTheme } from '../context/ThemeContext'
+import { ImageWithFallback } from '../components'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay, getEventStartDate, parseLocalDate } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
@@ -989,7 +989,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                 {imageUri ? (
                   <View style={styles.imagePreviewContainer}>
                     <TouchableOpacity style={styles.imagePreviewTouchable} onPress={pickImage}>
-                      <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+                      <ImageWithFallback source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="cover" />
                       <View style={styles.imageOverlay}>
                         <View style={styles.imageOverlayContent}>
                           <Ionicons name="camera" size={24} color="white" />

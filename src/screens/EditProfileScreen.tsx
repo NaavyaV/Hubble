@@ -9,7 +9,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -18,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
+import { ImageWithFallback } from '../components'
 import { validateContentWithAlert } from '../utils/contentFilter'
 import {
   MAX_FULL_NAME_LENGTH,
@@ -221,7 +221,7 @@ export default function EditProfileScreen({ navigation }: any) {
               <Text style={[styles.label, { color: theme.text }]}>Profile Picture</Text>
               <TouchableOpacity style={styles.profileImageButton} onPress={pickProfileImage}>
                 {profileImageUri ? (
-                  <Image source={{ uri: profileImageUri }} style={[styles.profileImage, { borderColor: theme.primary }]} />
+                  <ImageWithFallback source={{ uri: profileImageUri }} style={StyleSheet.flatten([styles.profileImage, { borderColor: theme.primary }])} resizeMode="cover" />
                 ) : (
                   <View style={[styles.profileImagePlaceholder, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
                     <Text style={[styles.profileImagePlaceholderText, { color: theme.textSecondary }]}>+</Text>
@@ -272,13 +272,13 @@ export default function EditProfileScreen({ navigation }: any) {
                       }
                     ]}
                   >
-                    {college.logo_url && (
-                      <Image 
-                        source={{ uri: college.logo_url }} 
+                    {college.logo_url ? (
+                      <ImageWithFallback
+                        source={{ uri: college.logo_url }}
                         style={styles.collegeLogo}
                         resizeMode="contain"
                       />
-                    )}
+                    ) : null}
                     <View style={styles.collegeInfo}>
                       <Text style={[
                         styles.collegeName,

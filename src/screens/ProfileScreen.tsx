@@ -62,7 +62,7 @@ export default function ProfileScreen() {
           if (profileData.org_ownership_id) {
             const { data: orgData } = await supabase
               .from('organizations')
-              .select('*')
+              .select('id, name, icon, type, description, owner_id, college_id, created_at, updated_at')
               .eq('id', profileData.org_ownership_id)
               .single()
             

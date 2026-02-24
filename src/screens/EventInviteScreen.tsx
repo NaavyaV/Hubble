@@ -128,7 +128,7 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
       // Optimize: Filter for accepted friendships in the query instead of in memory
       const { data: friendshipsData, error: friendshipsError } = await supabase
         .from('friendships')
-        .select('*')
+        .select('id, user_id, friend_id, status')
         .or(safeFriendshipUserOrQuery(user.id))
         .eq('status', 'accepted')
 

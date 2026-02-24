@@ -7,7 +7,6 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ScrollView,
-  Image,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
@@ -126,11 +125,10 @@ export default function PhotoViewerScreen() {
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Photo */}
         <View style={[styles.photoContainer, { height: containerHeight }]}>
-          <Image 
-            source={{ uri: photo.imageUrl }} 
+          <ImageWithFallback
+            source={{ uri: photo.imageUrl }}
             style={styles.photo}
             resizeMode="contain"
-            onError={(error) => console.error('Image load error:', error)}
             onLoad={handleImageLoad}
           />
         </View>

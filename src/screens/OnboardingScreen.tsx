@@ -9,7 +9,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Image,
   Switch,
   Modal,
 } from 'react-native'
@@ -19,6 +18,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
+import { ImageWithFallback } from '../components'
 import * as Notifications from 'expo-notifications'
 import notificationService from '../services/notifications'
 import * as Device from 'expo-device'
@@ -29,6 +29,19 @@ import {
   MAX_MAJOR_LENGTH,
   MAX_PHONE_NUMBER_LENGTH,
 } from '../constants/validation'
+
+/** Keep only JSON-serializable values to avoid "Cannot coerce JSON" when updating user metadata. */
+function safeUserMetadata(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  if (!metadata || typeof metadata !== 'object') return {}
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(metadata)) {
+    if (v === null || v === undefined) out[k] = v
+    else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out[k] = v
+    else if (Array.isArray(v)) out[k] = v.filter((x) => typeof x === 'string' || typeof x === 'number' || typeof x === 'boolean')
+    else if (typeof v === 'object' && v.constructor === Object) out[k] = safeUserMetadata(v as Record<string, unknown>)
+  }
+  return out
+}
 
 interface OnboardingData {
   fullName: string
@@ -388,9 +401,9 @@ export default function OnboardingScreen({ navigation }: any) {
                 try {
                   await supabase.auth.updateUser({
                     data: {
-                      ...(authData.user.user_metadata || {}),
-                      pending_profile_image_uri: data.profileImageUri
-                    }
+                      ...safeUserMetadata(authData.user?.user_metadata as Record<string, unknown>),
+                      pending_profile_image_uri: data.profileImageUri,
+                    },
                   })
                   console.log('Profile image URI stored in metadata for upload after OTP verification')
                 } catch (metadataError) {
@@ -444,9 +457,9 @@ export default function OnboardingScreen({ navigation }: any) {
                 try {
                   await supabase.auth.updateUser({
                     data: {
-                      ...(authData.user.user_metadata || {}),
-                      pending_profile_image_uri: data.profileImageUri
-                    }
+                      ...safeUserMetadata(authData.user?.user_metadata as Record<string, unknown>),
+                      pending_profile_image_uri: data.profileImageUri,
+                    },
                   })
                   console.log('Profile image URI stored in metadata for upload after OTP verification')
                 } catch (metadataError) {
@@ -482,59 +495,65 @@ export default function OnboardingScreen({ navigation }: any) {
           return
         }
 
-        // Step 6: Create profile with all onboarding data
-        const profileData = {
+        // Step 6: Create or update profile with normalized onboarding data (avoids JSON/coerce errors)
+        const now = new Date().toISOString()
+        const profileData: Record<string, unknown> = {
           id: authData.user.id,
-          full_name: data.fullName.trim(),
-          college_id: data.collegeId,
-          major: data.major.trim(),
-          graduating_year: data.graduatingYear,
-          bio: data.bio.trim(),
-          avatar_url: avatarUrl || null, // Ensure it's set (even if null)
-          phone_number: data.phoneNumber.trim(),
-          phone_visibility: data.phoneVisibility,
-          phone_visible_when_hosting: data.phoneVisibleWhenHosting,
-          otp_verified: false, // Will be set to true after OTP verification
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          full_name: (data.fullName?.trim() ?? '') || null,
+          college_id: data.collegeId || null,
+          major: (data.major?.trim() ?? '') || null,
+          graduating_year: (data.graduatingYear?.trim() ?? '') || null,
+          bio: (data.bio?.trim() ?? '') || null,
+          avatar_url: avatarUrl ?? null,
+          phone_number: (data.phoneNumber?.trim() ?? '') || null,
+          phone_visibility: data.phoneVisibility ?? 'private',
+          phone_visible_when_hosting: Boolean(data.phoneVisibleWhenHosting),
+          otp_verified: false,
+          updated_at: now,
         }
-        
+        // Only set created_at on insert; upsert may update existing row
         if (__DEV__) {
-          console.log('Creating profile with data:', {
+          console.log('Creating/updating profile with data:', {
             ...profileData,
-            avatar_url: avatarUrl ? 'SET' : 'NULL' // Don't log actual URLs
+            avatar_url: avatarUrl ? 'SET' : 'NULL',
           })
         }
-        
-        // Verify avatar_url is set correctly before creating profile
+
         if (data.profileImageUri && !avatarUrl) {
           console.warn('WARNING: Profile image URI was provided but avatarUrl is null/undefined')
         }
-        
+
         const { error: profileError } = await supabase
           .from('profiles')
-          .insert(profileData)
+          .upsert(profileData, { onConflict: 'id' })
 
         if (profileError) {
-          // Profile creation failed - DELETE the auth user immediately
-          
-          // Delete the auth user to prevent orphaned records
           try {
             await supabase.auth.admin.deleteUser(authData.user.id)
           } catch (deleteError) {
+            // ignore
           }
-          
-          // Show user-friendly error
-          if (profileError.message.includes('Email domain does not match')) {
+
+          const msg = profileError.message ?? ''
+          const isJsonCoerce = /cannot coerce|json|invalid input syntax/i.test(msg)
+
+          if (msg.includes('Email domain does not match')) {
             Alert.alert(
               'Invalid Email Domain',
               'Your email domain does not match your selected college. Please use your college email address.',
               [{ text: 'OK' }]
             )
+          } else if (isJsonCoerce) {
+            Alert.alert(
+              'Couldn’t save profile',
+              'Something went wrong saving your profile. Please try again. If it keeps happening, try again with a shorter bio or different picture.',
+              [{ text: 'OK' }]
+            )
           } else {
-            Alert.alert('Error', `Failed to create profile: ${profileError.message}`)
+            Alert.alert('Error', `Failed to create profile: ${msg}`)
           }
-          return // Stay on current screen
+          setLoading(false)
+          return
         }
 
         // Step 5: Refresh session before following orgs and creating notification preferences
@@ -749,13 +768,13 @@ export default function OnboardingScreen({ navigation }: any) {
               ]}
               onPress={() => updateData('collegeId', college.id)}
             >
-              {college.logo_url && (
-                <Image 
-                  source={{ uri: college.logo_url }} 
+              {college.logo_url ? (
+                <ImageWithFallback
+                  source={{ uri: college.logo_url }}
                   style={styles.collegeLogo}
                   resizeMode="contain"
                 />
-              )}
+              ) : null}
               <View style={styles.collegeInfo}>
                 <Text style={[
                   styles.collegeName,
@@ -871,7 +890,7 @@ export default function OnboardingScreen({ navigation }: any) {
       <Text style={[styles.stepSubtitle, { color: theme.textSecondary }]}>Optional - you can always add this later</Text>
       <TouchableOpacity style={styles.profileImageButton} onPress={pickProfileImage}>
         {data.profileImageUri ? (
-          <Image source={{ uri: data.profileImageUri }} style={styles.profileImage} />
+          <ImageWithFallback source={{ uri: data.profileImageUri }} style={styles.profileImage} resizeMode="cover" />
         ) : (
           <View style={[styles.profileImagePlaceholder, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
             <Ionicons name="camera" size={32} color={theme.textSecondary} />

@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, StyleSheet, Image, ImageStyle, ViewStyle } from 'react-native'
+import React, { useState, useEffect } from 'react'
+import { View, Text, StyleSheet, ImageStyle, ViewStyle } from 'react-native'
+import { Image } from 'expo-image'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../../context/ThemeContext'
 import { validateImageUrl, retryImageLoad } from '../../utils/imageUtils'
@@ -112,12 +113,18 @@ export default function ImageWithFallback({
     )
   }
 
+  const uri = imageSource.uri
+  const contentFit = resizeMode === 'contain' ? 'contain' : resizeMode === 'stretch' ? 'fill' : resizeMode === 'center' ? 'none' : 'cover'
+
   return (
     <View style={[styles.container, containerStyle]}>
       <Image
-        source={imageSource}
+        source={{ uri }}
         style={style}
-        resizeMode={resizeMode}
+        contentFit={contentFit}
+        cachePolicy="disk"
+        recyclingKey={uri}
+        transition={0}
         onError={handleError}
         onLoad={handleLoad}
       />

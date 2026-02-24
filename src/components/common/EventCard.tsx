@@ -1,9 +1,9 @@
 import React from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../../context/ThemeContext'
 import { EventWithAttendees } from '../../types'
-
+import ImageWithFallback from './ImageWithFallback'
 import { formatDateString } from '../../utils/eventTimeUtils'
 
 // Date and time formatting utilities
@@ -47,7 +47,7 @@ interface EventCardProps {
   onPress: () => void
 }
 
-export default function EventCard({
+function EventCard({
   item,
   hostProfile,
   hostOrg,
@@ -116,14 +116,14 @@ export default function EventCard({
           activeOpacity={0.8}
           onPress={onPress}
         >
-          {/* Optional image */}
-          {item.image_url && (
-            <Image
+          {/* Optional image - stable uri for cache key */}
+          {item.image_url ? (
+            <ImageWithFallback
               source={{ uri: item.image_url }}
               style={styles.compactImage}
               resizeMode="cover"
             />
-          )}
+          ) : null}
 
           {/* Description */}
           {item.description ? (
@@ -273,3 +273,4 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
 })
 
+export default React.memo(EventCard)

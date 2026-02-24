@@ -6,17 +6,14 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  SafeAreaView,
   Dimensions,
   RefreshControl,
-  ScrollView,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
 import { ImageWithFallback } from '../components'
-import { cleanupCorruptedImages } from '../utils/imageUtils'
 
 interface PhotoWithEvent {
   id: string
@@ -196,50 +193,8 @@ export default function GeneralPhotoGalleryScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true)
-    // Clean up corrupted images before fetching
-    await cleanupCorruptedImages()
     fetchPhotos()
   }
-
-  const renderPhotoItem = ({ item, index }: { item: PhotoWithEvent, index: number }) => (
-    <TouchableOpacity
-      style={[styles.imageItem, { width: imageSize, height: imageSize }]}
-      onPress={() => {
-        // Navigate to photo viewer with event context
-        (navigation as any).navigate('PhotoViewer', {
-          photo: {
-            id: item.id,
-            imageUrl: item.image_url,
-            caption: item.caption,
-            createdAt: item.created_at,
-            uploadedBy: item.uploaded_by
-          },
-          event: item.event,
-          hostProfile: item.host_profile
-        })
-      }}
-    >
-      <ImageWithFallback 
-        source={{ uri: item.thumbnail_url || item.image_url }} 
-        style={styles.image}
-        resizeMode="cover"
-        fallbackIcon="image-outline"
-        fallbackText="Failed to load"
-      />
-      {/* Privacy indicator */}
-      <View style={styles.privacyIndicator}>
-        <Ionicons 
-          name={
-            item.privacy_level === 'public' ? 'globe' :
-            item.privacy_level === 'attendees_only' ? 'people' : 'person'
-          } 
-          size={12} 
-          color="white" 
-        />
-      </View>
-    </TouchableOpacity>
-  )
-
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
@@ -266,42 +221,27 @@ export default function GeneralPhotoGalleryScreen() {
       {photos.length === 0 ? (
         renderEmptyState()
       ) : (
-        <ScrollView 
+        <FlatList
+          data={photos}
+          keyExtractor={(item) => item.id}
+          numColumns={3}
+          key="grid"
           contentContainerStyle={styles.imageGrid}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={[theme.primary]}
-              tintColor={theme.primary}
-            />
-          }
-        >
-          {photos.map((photo, index) => {
-            return (
-            <View 
-              key={photo.id}
+          columnWrapperStyle={{ flexDirection: 'row', marginBottom: 8 }}
+          renderItem={({ item: photo, index }) => (
+            <View
               style={[
                 styles.imageItem,
-                { 
-                  width: imageSize, 
+                {
+                  width: imageSize,
                   height: imageSize,
-                  marginRight: (index + 1) % 3 === 0 ? 0 : 8,
-                  marginBottom: 8
-                }
+                  marginRight: (index % 3) < 2 ? 8 : 0,
+                },
               ]}
             >
               <TouchableOpacity
                 style={styles.imageItem}
                 onPress={() => {
-                  // Navigate to photo viewer with event context
-                  console.log('Navigating to photo viewer with:', {
-                    photoId: photo.id,
-                    eventTitle: photo.event?.title,
-                    hostName: photo.host_profile?.full_name
-                  });
-                  
                   (navigation as any).navigate('PhotoViewer', {
                     photo: {
                       id: photo.id,
@@ -325,31 +265,36 @@ export default function GeneralPhotoGalleryScreen() {
                   })
                 }}
               >
-                <ImageWithFallback 
-                  source={{ uri: photo.thumbnail_url || photo.image_url }} 
+                <ImageWithFallback
+                  source={{ uri: photo.thumbnail_url || photo.image_url }}
                   style={styles.image}
                   resizeMode="cover"
                   fallbackIcon="image-outline"
                   fallbackText="Failed to load"
-                  onError={(error) => console.error('GeneralPhotoGallery - Image load error:', error, 'for photo:', photo)}
-                  onLoad={() => console.log('GeneralPhotoGallery - Image loaded successfully:', photo.thumbnail_url || photo.image_url)}
                 />
-                {/* Privacy indicator */}
                 <View style={styles.privacyIndicator}>
-                  <Ionicons 
+                  <Ionicons
                     name={
                       photo.privacy_level === 'public' ? 'globe' :
                       photo.privacy_level === 'attendees_only' ? 'people' : 'person'
-                    } 
-                    size={12} 
-                    color="white" 
+                    }
+                    size={12}
+                    color="white"
                   />
                 </View>
               </TouchableOpacity>
             </View>
-            )
-          })}
-        </ScrollView>
+          )}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        />
       )}
     </View>
   )

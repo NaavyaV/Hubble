@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
   ScrollView,
   Alert,
   Modal as RNModal,
@@ -16,6 +15,7 @@ import { useTheme } from '../../context/ThemeContext'
 import { shouldShowPhoneNumber } from '../../utils/phoneVisibility'
 import { safeFriendshipOrQuery } from '../../utils/queryHelpers'
 import ReportModal, { ReportReason } from './ReportModal'
+import ImageWithFallback from '../common/ImageWithFallback'
 
 interface ProfileModalProps {
   isVisible: boolean
@@ -410,7 +410,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
           <View style={styles.profileSection}>
             <View style={styles.avatarContainer}>
               {user.avatar_url ? (
-                <Image source={{ uri: user.avatar_url }} style={[styles.avatar, { borderColor: theme.primary }]} />
+                <ImageWithFallback source={{ uri: user.avatar_url }} style={StyleSheet.flatten([styles.avatar, { borderColor: theme.primary }])} resizeMode="cover" />
               ) : (
                 <View style={[styles.avatarPlaceholder, { backgroundColor: theme.primary, borderColor: theme.primary }]}>
                   <Text style={[styles.avatarPlaceholderText, { color: theme.buttonText }]}>
@@ -426,13 +426,13 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
 
             {user.college && (
               <View style={styles.collegeInfo}>
-                {user.college.logo_url && (
-                  <Image 
-                    source={{ uri: user.college.logo_url }} 
+                {user.college.logo_url ? (
+                  <ImageWithFallback
+                    source={{ uri: user.college.logo_url }}
                     style={styles.collegeLogo}
                     resizeMode="contain"
                   />
-                )}
+                ) : null}
                 <Text style={[styles.collegeName, { color: theme.textSecondary }]}>
                   {user.college.name}
                 </Text>

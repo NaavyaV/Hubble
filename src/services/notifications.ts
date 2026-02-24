@@ -3,18 +3,6 @@ import * as Device from 'expo-device'
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { supabase } from './supabase'
-
-// Dynamically import Firebase Messaging for Android only
-let messaging: any = null
-if (Platform.OS === 'android') {
-  try {
-    messaging = require('@react-native-firebase/messaging').default
-  } catch (error) {
-    if (__DEV__) {
-      console.log('Firebase Messaging not available:', error)
-    }
-  }
-}
 import {
   buildEventReminderNotification,
   buildEventEditDeleteNotification,
@@ -288,62 +276,67 @@ class NotificationService {
       // Ensure notification channel exists (Android 8.0+)
       await ensureNotificationChannel()
 
-      // Get push token based on platform
+      // On Android, the system may need a moment after permission grant before FCM/token is ready
+      if (Platform.OS === 'android') {
+        await new Promise(resolve => setTimeout(resolve, 600))
+      }
+
+      // Get Expo Push token for both iOS and Android
       if (Device.isDevice) {
         try {
-          let token: string
-          
-          if (Platform.OS === 'android' && messaging) {
-            // Use FCM for Android
-            await messaging().requestPermission()
-            token = await messaging().getToken()
-            
+          // Get projectId from app config - required for Expo Push tokens
+          const projectId = Constants.expoConfig?.extra?.eas?.projectId
+          if (!projectId) {
             if (__DEV__) {
-              console.log('FCM Token obtained:', token.substring(0, 20) + '...')
+              console.error('EAS projectId not found in app config. Cannot generate Expo Push token.')
             }
-          } else {
-            // Use Expo Push for iOS or fallback
-            const expoToken = await Notifications.getExpoPushTokenAsync({
-              projectId: Constants.expoConfig?.extra?.eas?.projectId,
-            })
-            token = expoToken.data
-            
-            if (__DEV__) {
-              console.log('Expo Push Token obtained:', token.substring(0, 20) + '...')
+            return null
+          }
+
+          let token: string | null = null
+          let lastError: any = null
+
+          for (let attempt = 0; attempt < (Platform.OS === 'android' ? 2 : 1); attempt++) {
+            try {
+              if (attempt > 0) {
+                if (__DEV__) console.log('Retrying getExpoPushTokenAsync in 1.5s...')
+                await new Promise(resolve => setTimeout(resolve, 1500))
+              }
+              const expoToken = await Notifications.getExpoPushTokenAsync({
+                projectId: projectId,
+              })
+              token = expoToken.data
+              break
+            } catch (err: any) {
+              lastError = err
+              if (__DEV__) {
+                console.error(`getExpoPushTokenAsync attempt ${attempt + 1} failed:`, err?.message ?? err)
+              }
             }
           }
-          
+
+          if (!token || !token.startsWith('ExponentPushToken[')) {
+            if (__DEV__) {
+              console.error('Invalid Expo Push token format:', token ?? lastError?.message)
+            }
+            return null
+          }
+
+          if (__DEV__) {
+            console.log('Expo Push Token obtained:', token.substring(0, 30) + '...')
+          }
+
           this.notificationToken = token
-          
-          // Save token to Supabase
+
+          // Save token to Supabase (with retry on failure so Android doesn't lose the token)
           await this.saveTokenToDatabase(this.notificationToken)
-          
+
           return this.notificationToken
         } catch (error: any) {
           if (__DEV__) {
-            console.log('Push notifications not available:', error.message)
+            console.error('Error getting Expo Push token:', error.message)
           }
-          // Try fallback to Expo Push if FCM fails
-          if (Platform.OS === 'android' && messaging) {
-            try {
-              const expoToken = await Notifications.getExpoPushTokenAsync({
-                projectId: Constants.expoConfig?.extra?.eas?.projectId,
-              })
-              this.notificationToken = expoToken.data
-              await this.saveTokenToDatabase(this.notificationToken)
-              if (__DEV__) {
-                console.log('Fell back to Expo Push Token')
-              }
-              return this.notificationToken
-            } catch (fallbackError) {
-              if (__DEV__) {
-                console.log('Fallback to Expo Push also failed')
-              }
-            }
-          }
-          this.notificationToken = 'local-only'
-          await this.saveTokenToDatabase(this.notificationToken)
-          return this.notificationToken
+          return null
         }
       } else {
         if (__DEV__) {
@@ -361,6 +354,22 @@ class NotificationService {
 
   private async saveTokenToDatabase(token: string): Promise<void> {
     try {
+      // Validate token before saving - reject invalid tokens
+      if (!token || !token.startsWith('ExponentPushToken[')) {
+        if (__DEV__) {
+          console.error('Invalid token format, not saving to database:', token)
+        }
+        return
+      }
+
+      // Reject known invalid token patterns
+      if (token.includes('local-only') || token.includes('expo-go-local-only')) {
+        if (__DEV__) {
+          console.error('Invalid token pattern detected, not saving:', token)
+        }
+        return
+      }
+
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         if (__DEV__) {
@@ -370,30 +379,37 @@ class NotificationService {
       }
 
       if (__DEV__) {
-        console.log(`Saving notification token for user ${user.id}: ${token.substring(0, 20)}...`)
+        console.log(`Saving notification token for user ${user.id}: ${token.substring(0, 30)}...`)
       }
 
-      // Use upsert to handle both insert and update cases
-      const { error } = await supabase
+      const payload = {
+        user_id: user.id,
+        token,
+        platform: Platform.OS,
+        updated_at: new Date().toISOString()
+      }
+
+      let { error } = await supabase
         .from('notification_tokens')
-        .upsert({
-          user_id: user.id,
-          token,
-          platform: Platform.OS,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'user_id,platform'
-        })
+        .upsert(payload, { onConflict: 'user_id,platform' })
+
+      if (error && Platform.OS === 'android') {
+        if (__DEV__) console.log('First save failed, retrying in 1s...', error.message)
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        const result = await supabase
+          .from('notification_tokens')
+          .upsert(payload, { onConflict: 'user_id,platform' })
+        error = result.error
+      }
 
       if (error) {
         if (__DEV__) {
           console.error('Error saving notification token:', error)
         }
         throw error
-      } else {
-        if (__DEV__) {
-          console.log('Notification token saved/updated in database successfully')
-        }
+      }
+      if (__DEV__) {
+        console.log('Notification token saved/updated in database successfully')
       }
     } catch (error) {
       if (__DEV__) {
@@ -693,23 +709,31 @@ class NotificationService {
   async refreshToken(): Promise<string | null> {
     try {
       if (Device.isDevice) {
-        let token: string
+        // Get projectId from app config - required for Expo Push tokens
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId
+        if (!projectId) {
+          if (__DEV__) {
+            console.error('EAS projectId not found in app config. Cannot refresh Expo Push token.')
+          }
+          return null
+        }
+
+        // Use Expo Push for both platforms
+        const expoToken = await Notifications.getExpoPushTokenAsync({
+          projectId: projectId,
+        })
+        const token = expoToken.data
         
-        if (Platform.OS === 'android' && messaging) {
-          // Use FCM for Android
-          token = await messaging().getToken()
+        // Validate token format
+        if (!token || !token.startsWith('ExponentPushToken[')) {
           if (__DEV__) {
-            console.log('FCM Token refreshed:', token.substring(0, 20) + '...')
+            console.error('Invalid Expo Push token format after refresh:', token)
           }
-        } else {
-          // Use Expo Push for iOS or fallback
-          const expoToken = await Notifications.getExpoPushTokenAsync({
-            projectId: Constants.expoConfig?.extra?.eas?.projectId,
-          })
-          token = expoToken.data
-          if (__DEV__) {
-            console.log('Expo Push Token refreshed:', token.substring(0, 20) + '...')
-          }
+          return null
+        }
+        
+        if (__DEV__) {
+          console.log('Expo Push Token refreshed:', token.substring(0, 30) + '...')
         }
         
         this.notificationToken = token

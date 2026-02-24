@@ -21,7 +21,7 @@ export interface OrganizationCardProps {
   notificationToggleDisabled?: boolean // For onboarding: disable if not following or notifications not enabled globally
 }
 
-export default function OrganizationCard({
+function OrganizationCard({
   organization,
   isFollowing = false,
   isBlocked = false,
@@ -437,3 +437,4 @@ const styles = StyleSheet.create({
   },
 })
 
+export default React.memo(OrganizationCard)

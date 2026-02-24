@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
-  Image,
   Modal,
   ScrollView,
   Dimensions,
@@ -27,14 +26,15 @@ import { getEventEndDate, isEventEnded, isEventInFuture, parseLocalDate } from '
 import GeneralPhotoGalleryScreen from './GeneralPhotoGalleryScreen'
 import { PREDEFINED_TAGS } from '../constants/tags'
 import EventCard from '../components/common/EventCard'
+import { ImageWithFallback } from '../components'
 import { groupEventsByTime, GroupedEvent } from '../utils/eventGrouping'
+import CreateEventScreen from './CreateEventScreen'
 import { withNetworkErrorHandling, isNetworkError } from '../utils/networkUtils'
 
 type EventListItem = EventWithAttendees & { goingCount: number; tags?: string[] }
 
 type FilterType = 'all'
 type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
-type TimeFilterType = 'student' | 'org' | 'photo_gallery'
 
 interface AdvancedFilters {
   friendsOnly: boolean
@@ -53,7 +53,7 @@ export default function EventsListScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [activeFilter] = useState<FilterType>('all')
-  const [timeFilter, setTimeFilter] = useState<TimeFilterType>('student')
+  const [showCreateModal, setShowCreateModal] = useState(false)
   const [hostProfiles, setHostProfiles] = useState<Record<string, any>>({})
   const [hostOrganizations, setHostOrganizations] = useState<Record<string, any>>({})
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
@@ -81,30 +81,30 @@ export default function EventsListScreen() {
     })
   }
 
+  const handleCreateEvent = () => {
+    setShowCreateModal(true)
+  }
+
+  const handleEventCreated = () => {
+    setShowCreateModal(false)
+    fetchEvents()
+  }
+
   useEffect(() => {
     fetchEvents()
   }, [])
 
-  // Refresh events when the tab is focused and set up auto-refresh
+  // Refresh events only when tab is focused (no polling); realtime + pull-to-refresh provide fresh data
   useFocusEffect(
     React.useCallback(() => {
-      // Initial fetch
       fetchEvents()
-      
-      // Set up auto-refresh interval (every 5 seconds)
-      const refreshInterval = setInterval(() => {
-        fetchEvents()
-      }, 5000)
-      
-      return () => {
-        clearInterval(refreshInterval)
-      }
+      return () => {}
     }, [])
   )
 
   useEffect(() => {
     filterEvents(events, 'all')
-  }, [timeFilter, events, userAttendances, advancedFilters, sortBy])
+  }, [events, userAttendances, advancedFilters, sortBy])
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -738,43 +738,32 @@ export default function EventsListScreen() {
     const filterEvents = (eventsList: EventListItem[], filter: FilterType) => {
     let filtered = [...eventsList]
 
-    // Apply time filter first (student vs org)
-    // Note: Events are already filtered by type in fetchEvents, but we still need to filter by time
-    if (timeFilter === 'student') {
-      // Show all current personal events (not ended)
-      filtered = filtered.filter(event => {
-        return !isEventEnded(event.event_date, event.start_time, event.end_time) && !(event as any).isOrgEvent
-      })
-    } else if (timeFilter === 'org') {
-      // Show all org events
-      // BUT keep all events if user owns the org (including past ones)
-      filtered = filtered.filter(event => {
-        if (!(event as any).isOrgEvent) return false
-        // If user owns this org, show ALL events (including past ones)
-        if ((event as any).userOwnsOrg) {
-          if (__DEV__) {
-            console.log('Keeping org event (user owns org):', event.id, event.title)
-          }
-          return true
-        }
-        // Otherwise, only show current/upcoming events
-        const isEnded = isEventEnded(event.event_date, event.start_time, event.end_time)
-        if (__DEV__ && isEnded) {
-          console.log('Filtering out ended org event:', event.id, event.title)
-        }
-        return !isEnded
-      })
-      // Preserve order: followed org events first, then others (both sorted by date)
-      filtered.sort((a, b) => {
-        const aFollowed = (a as any).isFollowedOrg ? 0 : 1
-        const bFollowed = (b as any).isFollowedOrg ? 0 : 1
-        if (aFollowed !== bFollowed) {
-          return aFollowed - bFollowed // Followed orgs come first
-        }
-        // If both are followed or both are not, sort by date
-        return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
-      })
-    }
+    // Show both student and org events: exclude ended events (except org events where user owns the org)
+    filtered = filtered.filter(event => {
+      const ended = isEventEnded(event.event_date, event.start_time, event.end_time)
+      if ((event as any).userOwnsOrg) return true // Show all events for orgs user owns
+      return !ended
+    })
+    // Sort: followed org events first, then by sortBy
+    filtered.sort((a, b) => {
+      const aFollowed = (a as any).isFollowedOrg ? 0 : 1
+      const bFollowed = (b as any).isFollowedOrg ? 0 : 1
+      if (aFollowed !== bFollowed) return aFollowed - bFollowed
+      switch (sortBy) {
+        case 'date_asc':
+          return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
+        case 'date_desc':
+          return parseLocalDate(b.event_date).getTime() - parseLocalDate(a.event_date).getTime()
+        case 'people_going':
+          return b.goingCount - a.goingCount
+        case 'recently_created':
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        case 'alphabetical':
+          return a.title.localeCompare(b.title)
+        default:
+          return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
+      }
+    })
 
     // Apply advanced filters
     if (advancedFilters.friendsOnly) {
@@ -799,55 +788,6 @@ export default function EventsListScreen() {
       filtered = filtered.filter(event => 
         event.tags && event.tags.some(tag => advancedFilters.selectedTags.includes(tag))
       )
-    }
-
-    // Coming Events screen - no additional main filter needed
-    // Events are already filtered to exclude hosting and already attending
-
-    // Apply sorting (but preserve followed org priority for org events)
-    if (timeFilter === 'org') {
-      // For org events, maintain followed org priority, then apply sorting within each group
-      filtered.sort((a, b) => {
-        const aFollowed = (a as any).isFollowedOrg ? 0 : 1
-        const bFollowed = (b as any).isFollowedOrg ? 0 : 1
-        if (aFollowed !== bFollowed) {
-          return aFollowed - bFollowed // Followed orgs come first
-        }
-        // Within same group (both followed or both not), apply sortBy
-        switch (sortBy) {
-          case 'date_asc':
-            return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
-          case 'date_desc':
-            return parseLocalDate(b.event_date).getTime() - parseLocalDate(a.event_date).getTime()
-          case 'people_going':
-            return b.goingCount - a.goingCount
-          case 'recently_created':
-            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          case 'alphabetical':
-            return a.title.localeCompare(b.title)
-          default:
-            return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
-        }
-      })
-    } else {
-      // For student events, apply normal sorting
-      switch (sortBy) {
-        case 'date_asc':
-          filtered.sort((a, b) => parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime())
-          break
-        case 'date_desc':
-          filtered.sort((a, b) => parseLocalDate(b.event_date).getTime() - parseLocalDate(a.event_date).getTime())
-          break
-        case 'people_going':
-          filtered.sort((a, b) => b.goingCount - a.goingCount)
-          break
-        case 'recently_created':
-          filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-          break
-        case 'alphabetical':
-          filtered.sort((a, b) => a.title.localeCompare(b.title))
-          break
-      }
     }
 
     setFilteredEvents(filtered as EventListItem[])
@@ -933,9 +873,10 @@ export default function EventsListScreen() {
               {attendedAttendees.slice(0, 6).map((attendee: any, index: number) => (
                 <View key={index} style={styles.attendeeItem}>
                   {attendee.user?.avatar_url ? (
-                    <Image 
-                      source={{ uri: attendee.user.avatar_url }} 
-                      style={styles.attendeeAvatar} 
+                    <ImageWithFallback
+                      source={{ uri: attendee.user.avatar_url }}
+                      style={styles.attendeeAvatar}
+                      resizeMode="cover"
                     />
                   ) : (
                     <View style={styles.attendeeAvatarPlaceholder}>
@@ -1004,66 +945,32 @@ export default function EventsListScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* Unified Header with Scroll View */}
-      <View style={[styles.unifiedHeader, { backgroundColor: theme.background }]}>
-        <View style={[styles.tabContainer, { borderBottomColor: theme.border }]}>
-          <TouchableOpacity
-            style={[
-              styles.tab,
-              timeFilter === 'student' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
-            ]}
-            onPress={() => {
-              setTimeFilter('student')
-            }}
-          >
-            <Text 
-              style={[
-                styles.tabText,
-                { color: timeFilter === 'student' ? theme.primary : theme.textSecondary }
-              ]}
-            >
-              Student Events
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.tab,
-              timeFilter === 'org' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
-            ]}
-            onPress={() => {
-              setTimeFilter('org')
-            }}
-          >
-            <Text 
-              style={[
-                styles.tabText,
-                { color: timeFilter === 'org' ? theme.primary : theme.textSecondary }
-              ]}
-            >
-              Org Events
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Events List */}
+      {/* Events List - student and org events combined, pull-to-refresh */}
       {(() => {
         const groupedEvents = groupEventsByTime<EventListItem>(filteredEvents)
         
         if (groupedEvents.length === 0) {
           return (
-            <View style={styles.emptyContainer}>
+            <ScrollView
+              style={styles.emptyScrollView}
+              contentContainerStyle={styles.emptyContentContainer}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={[theme.primary]}
+                  tintColor={theme.primary}
+                />
+              }
+            >
               <Ionicons name="calendar-outline" size={64} color={theme.textTertiary} />
               <Text style={[styles.emptyTitle, { color: theme.text }]}>
-                {timeFilter === 'org' ? 'No Org Events' : 'No Events'}
+                No Events
               </Text>
               <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-                {timeFilter === 'org' 
-                  ? 'Org events coming soon'
-                  : 'No upcoming events to show right now'}
+                No upcoming events to show right now. Pull down to refresh.
               </Text>
-            </View>
+            </ScrollView>
           )
         }
         
@@ -1099,8 +1006,26 @@ export default function EventsListScreen() {
         )
       })()}
 
-      
-      
+      {/* Create Event FAB */}
+      <TouchableOpacity
+        style={[styles.createButton, { backgroundColor: theme.primary }]}
+        onPress={handleCreateEvent}
+      >
+        <Ionicons name="add" size={28} color={theme.buttonText} />
+      </TouchableOpacity>
+
+      <Modal
+        visible={showCreateModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowCreateModal(false)}
+      >
+        <CreateEventScreen
+          onBack={() => setShowCreateModal(false)}
+          onEventCreated={handleEventCreated}
+        />
+      </Modal>
+
       <Modal
         visible={showFilterModal}
         animationType="slide"
@@ -1543,6 +1468,15 @@ const createStyles = (theme: any) => StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
   },
+  emptyScrollView: {
+    flex: 1,
+  },
+  emptyContentContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -1560,6 +1494,21 @@ const createStyles = (theme: any) => StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
     paddingHorizontal: 32,
+  },
+  createButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    elevation: 8,
   },
   pastEventsEmptyState: {
     flex: 1,

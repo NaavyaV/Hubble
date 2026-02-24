@@ -42,27 +42,34 @@ function normalizeText(text: string): string {
   return normalized
 }
 
-// Check if text contains any profanity
+// Strip leading/trailing punctuation so we only check the actual word
+// e.g. "Billiards," -> "billiards", "anything." -> "anything"
+function getCoreWord(token: string): string {
+  return token.replace(/^\W+|\W+$/g, '').toLowerCase()
+}
+
+// Check if text contains any profanity (whole words only, never substrings)
 function containsProfanity(text: string): boolean {
   const normalized = normalizeText(text)
-  
-  // Split into words and check each word individually
-  // This prevents false positives from partial matches
+  const profanitySet = new Set(
+    PROFANITY_WORDS.map((p) => getCoreWord(normalizeText(p))).filter(
+      (core) => core.length >= 2
+    )
+  )
+
   const words = normalized.split(/\s+/)
-  
+
   for (const word of words) {
-    // Only check for exact word matches or word boundaries
-    // This prevents "private" from matching anything
-    for (const profanity of PROFANITY_WORDS) {
-      // Use word boundaries to ensure we only match whole words
-      // This is more strict and prevents false positives
-      const wordBoundaryRegex = new RegExp(`^${profanity}$|\\b${profanity}\\b`, 'i')
-      if (wordBoundaryRegex.test(word)) {
-        return true
-      }
+    const coreWord = getCoreWord(word)
+    if (!coreWord) continue
+
+    // Only match when the entire word equals a profanity word (case-insensitive).
+    // This ensures "ass" matches only "ass", not "Billiards", "class", "pass", "approachable", etc.
+    if (profanitySet.has(coreWord)) {
+      return true
     }
   }
-  
+
   return false
 }
 

@@ -497,20 +497,11 @@ export default function MyEventsScreen() {
     }
   }, [])
 
-  // Refresh when screen is focused and set up auto-refresh
+  // Refresh only when screen is focused; realtime + pull-to-refresh provide fresh data (no polling)
   useFocusEffect(
     React.useCallback(() => {
-      // Initial fetch
       fetchMyEvents()
-      
-      // Set up auto-refresh interval (every 5 seconds)
-      const refreshInterval = setInterval(() => {
-        fetchMyEvents()
-      }, 5000)
-      
-      return () => {
-        clearInterval(refreshInterval)
-      }
+      return () => {}
     }, [])
   )
 

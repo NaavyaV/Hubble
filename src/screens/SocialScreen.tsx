@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, SectionList, Alert, Image, Modal, RefreshControl, ScrollView } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, SectionList, Alert, Modal, RefreshControl, ScrollView } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useNavigation } from '@react-navigation/native'
@@ -166,24 +166,7 @@ export default function SocialScreen() {
       // Update previous tab
       previousActiveTab.current = activeTab
       
-      // Set up auto-refresh interval (every 5 seconds) - refresh ALL data continuously
-      const refreshInterval = setInterval(() => {
-        if (activeTab === 'friends') {
-          // Always refresh blockers first, then all friends data
-          fetchBlockersForUser(me).then(blockers => {
-            setBlockersSet(blockers)
-            fetchAllUsers(true) // Use fresh blockers
-          })
-          fetchFriendships(me)
-          fetchBlockedUsers()
-          fetchMutedUsers()
-        } else {
-          fetchOrganizations()
-          fetchFollowedOrgs()
-          fetchBlockedOrgs()
-        }
-      }, 5000) // 5 seconds for auto-refresh
-      
+      // No polling; realtime + focus + pull-to-refresh provide fresh data
       // Set up real-time subscription for friendships changes - always update
       const channel = supabase
         .channel('social-friendships-changes')
@@ -222,10 +205,11 @@ export default function SocialScreen() {
           {
             event: '*',
             schema: 'public',
-            table: 'profiles'
+            table: 'profiles',
+            filter: `id=eq.${me}`
           },
           () => {
-            // Refresh users list when profiles change (name updates, etc.)
+            // Only refetch when current user's profile changes (avoids global fan-out)
             if (activeTab === 'friends') {
               fetchAllUsers()
             }
@@ -239,7 +223,6 @@ export default function SocialScreen() {
             table: 'organizations'
           },
           () => {
-            // Refresh organizations when they change
             if (activeTab === 'organizations') {
               fetchOrganizations()
             }
@@ -308,7 +291,6 @@ export default function SocialScreen() {
         .subscribe()
 
       return () => {
-        clearInterval(refreshInterval)
         supabase.removeChannel(channel)
       }
     }, [me, activeTab])
@@ -589,7 +571,7 @@ export default function SocialScreen() {
       // Fetch all organizations
       const { data, error } = await supabase
         .from('organizations')
-        .select('*')
+        .select('id, name, icon, type, description, owner_id, college_id, created_at, updated_at')
         .order('name')
 
       if (error) throw error
@@ -782,7 +764,7 @@ export default function SocialScreen() {
       // Fetch the blocked org to add to blockedOrgsList
       const { data: blockedOrg } = await supabase
         .from('organizations')
-        .select('*')
+        .select('id, name, icon, type, description, owner_id, college_id, created_at, updated_at')
         .eq('id', orgId)
         .single()
       

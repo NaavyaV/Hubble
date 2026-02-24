@@ -2,7 +2,6 @@ package com.abcdefg123456710.hubble
 
 import android.app.Application
 import android.content.res.Configuration
-import com.google.firebase.FirebaseApp
 
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
@@ -41,12 +40,6 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
-    
-    // Initialize Firebase (must be before loadReactNative)
-    if (FirebaseApp.getApps(this).isEmpty()) {
-      FirebaseApp.initializeApp(this)
-    }
-    
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {

@@ -11,17 +11,4 @@
 -keep class com.swmansion.reanimated.** { *; }
 -keep class com.facebook.react.turbomodule.** { *; }
 
-# Firebase
--keep class com.google.firebase.** { *; }
--keep class com.google.android.gms.** { *; }
--dontwarn com.google.firebase.**
-
-# React Native Firebase
--keep class io.invertase.firebase.** { *; }
--dontwarn io.invertase.firebase.**
-
-# Keep Firebase Messaging classes
--keep class com.google.firebase.messaging.** { *; }
--keep interface com.google.firebase.messaging.** { *; }
-
 # Add any project specific keep options here:
