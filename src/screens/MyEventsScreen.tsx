@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react'
 import {
   View,
   Text,
-  FlatList,
   SectionList,
+  ScrollView,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -13,19 +13,17 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
-import { formatEventTimeDisplay, isMidnightSpanningEvent, isEventEnded, isEventCurrentlyHappening, isEventInFuture } from '../utils/eventTimeUtils'
+import { getEventStartDate, isEventEnded } from '../utils/eventTimeUtils'
 import CreateEventScreen from './CreateEventScreen'
 import { deleteEventCompletely } from '../utils/eventDeletion'
 import { EmptyState } from '../components'
 import EventCard from '../components/common/EventCard'
-import { groupEventsByTime, GroupedEvent } from '../utils/eventGrouping'
-
-type TabType = 'attending' | 'invited' | 'hosting'
+import { sectionHeaderLargeStyle } from '../constants/sectionTypography'
 
 export default function MyEventsScreen() {
   const { theme } = useTheme()
@@ -36,14 +34,15 @@ export default function MyEventsScreen() {
   const [hostingEvents, setHostingEvents] = useState<(EventWithAttendees & { isHosting: boolean })[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [activeTab, setActiveTab] = useState<TabType>('attending')
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(new Set())
+  const [viewerId, setViewerId] = useState<string | null>(null)
 
   const fetchMyEvents = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
+
+      setViewerId(user.id)
 
       // OPTIMIZED: Run ALL queries in parallel for maximum performance
       const [
@@ -497,14 +496,6 @@ export default function MyEventsScreen() {
     }
   }, [])
 
-  // Refresh only when screen is focused; realtime + pull-to-refresh provide fresh data (no polling)
-  useFocusEffect(
-    React.useCallback(() => {
-      fetchMyEvents()
-      return () => {}
-    }, [])
-  )
-
   const onRefresh = () => {
     setRefreshing(true)
     fetchMyEvents()
@@ -576,72 +567,40 @@ export default function MyEventsScreen() {
     return `${displayHour}:${minutes} ${ampm}`
   }
 
-  // Get events for current tab
-  const getCurrentTabEvents = () => {
-    switch (activeTab) {
-      case 'attending':
-        return attendingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
-      case 'invited':
-        // Return invited events and not going events as separate sections data
-        return {
-          invited: invitedEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)),
-          notGoing: notGoingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
-        }
-      case 'hosting':
-        return hostingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
-      default:
-        return []
-    }
-  }
-
-  const toggleExpanded = (eventId: string) => {
-    setExpandedEventIds(prev => {
-      const next = new Set(prev)
-      if (next.has(eventId)) next.delete(eventId)
-      else next.add(eventId)
-      return next
-    })
-  }
-
-  const renderEvent = ({ item }: { item: EventWithAttendees & { isHosting?: boolean } }) => {
-    const isExpanded = expandedEventIds.has(item.id)
+  const renderEvent = ({
+    item,
+    section,
+  }: {
+    item: EventWithAttendees & { isHosting?: boolean; _myInv?: 'pending' | 'declined' }
+    section: { title: string }
+  }) => {
     const isHosting = (item as any).isHosting || false
-    // For org events, show org name; for personal events, show host name
-    const isOrgEvent = (item as any).isOrgEvent
-    const hostName = isOrgEvent 
-      ? ((item as any).org?.name || 'Organization')
-      : ((item as any).host?.full_name || (item as any).host?.username || (isHosting ? 'You' : ''))
-    
-    const hostOrg = isOrgEvent ? { id: (item as any).org_id || '', name: hostName } : null
-    const hostProfile = !isOrgEvent && !isHosting ? ((item as any).host || null) : null
-    
+
+    const userAttendance = viewerId
+      ? item.attendees?.find((a: any) => a.user_id === viewerId)?.status ?? null
+      : null
+
+    let invitationStatus: 'pending' | 'declined' | null = null
+    if (section.title === 'Invited' && item._myInv) {
+      invitationStatus = item._myInv === 'pending' ? 'pending' : 'declined'
+    }
+
+    const showHostingDelete =
+      section.title === 'Hosting' && isHosting && !(item as any).isOrgEvent
+
     return (
       <EventCard
         item={{ ...item, attendee_count: (item as any).attendee_count || 0 }}
-        hostProfile={hostProfile}
-        hostOrg={hostOrg}
-        isHost={isHosting}
-        isExpanded={isExpanded}
-        onToggleExpand={() => toggleExpanded(item.id)}
+        invitationStatus={invitationStatus}
+        isHost={Boolean(isHosting)}
+        userAttendance={userAttendance}
+        viewerId={viewerId}
+        showDeleteButton={showHostingDelete}
+        onDelete={showHostingDelete ? () => handleDeleteEvent(item.id) : undefined}
         onPress={() => handleEventPress(item)}
       />
     )
   }
-
-  if (loading) {
-    return (
-      <View style={[styles.container, { backgroundColor: theme.background }]}>
-        <View style={styles.loadingContainer}>
-          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading your events...</Text>
-        </View>
-      </View>
-    )
-  }
-
-  const currentTabEventsData = getCurrentTabEvents()
-  const currentTabEvents = activeTab === 'invited' ? 
-    (currentTabEventsData as any).invited || [] :
-    (Array.isArray(currentTabEventsData) ? currentTabEventsData : [])
 
   const handleCreateEvent = () => {
     setShowCreateModal(true)
@@ -649,10 +608,8 @@ export default function MyEventsScreen() {
 
   const handleEventCreated = async (createdEvent?: any) => {
     setShowCreateModal(false)
-    
-    // If event data is provided, add it immediately to hosting events
+
     if (createdEvent && !createdEvent.isOrgEvent) {
-      // Fetch full event data with attendees
       const { data: fullEventData, error } = await supabase
         .from('events')
         .select(`
@@ -670,14 +627,12 @@ export default function MyEventsScreen() {
         const newEvent: EventWithAttendees & { isHosting: boolean } = {
           ...fullEventData,
           attendees: fullEventData.attendees || [],
-          isHosting: true
+          isHosting: true,
         }
-        
-        // Add to hosting events immediately
+
         setHostingEvents(prev => {
-          // Check if event already exists to avoid duplicates
           if (prev.some(e => e.id === newEvent.id)) {
-            return prev.map(e => e.id === newEvent.id ? newEvent : e)
+            return prev.map(e => (e.id === newEvent.id ? newEvent : e))
           }
           const { getEventStartDate } = require('../utils/eventTimeUtils')
           return [...prev, newEvent].sort((a, b) => {
@@ -686,216 +641,118 @@ export default function MyEventsScreen() {
             return dateA.getTime() - dateB.getTime()
           })
         })
-        
-        // Switch to hosting tab to show the new event
-        setActiveTab('hosting')
       }
     }
-    
-    // Always refresh to ensure everything is up to date
+
     fetchMyEvents()
   }
 
+  if (loading) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
+        <View style={styles.loadingContainer}>
+          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading your events...</Text>
+        </View>
+      </View>
+    )
+  }
+
+  const hostingFiltered = hostingEvents.filter(
+    event => !isEventEnded(event.event_date, event.start_time, event.end_time)
+  )
+  const attendingFiltered = attendingEvents.filter(
+    event => !isEventEnded(event.event_date, event.start_time, event.end_time)
+  )
+  const attendingIds = new Set(attendingFiltered.map(e => e.id))
+
+  const invitedPending = invitedEvents
+    .filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time))
+    .filter(event => !attendingIds.has(event.id))
+  const notGoingFiltered = notGoingEvents.filter(
+    event => !isEventEnded(event.event_date, event.start_time, event.end_time)
+  )
+  const invitedCombined = [
+    ...invitedPending.map(e => ({ ...e, _myInv: 'pending' as const })),
+    ...notGoingFiltered.map(e => ({ ...e, _myInv: 'declined' as const })),
+  ]
+
+  const attendingSorted = [...attendingFiltered].sort(
+    (a, b) =>
+      getEventStartDate(a.event_date, a.start_time).getTime() -
+      getEventStartDate(b.event_date, b.start_time).getTime()
+  )
+
+  const listSections: { title: string; data: any[] }[] = []
+  if (invitedCombined.length) {
+    listSections.push({ title: 'Invited', data: invitedCombined })
+  }
+  if (hostingFiltered.length) {
+    listSections.push({ title: 'Hosting', data: hostingFiltered })
+  }
+  if (attendingSorted.length) {
+    listSections.push({ title: 'Attending', data: attendingSorted })
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
-      {/* Tab Selector */}
-      <View style={[styles.tabContainer, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            activeTab === 'attending' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
-          ]}
-          onPress={() => setActiveTab('attending')}
-        >
-          <View style={styles.tabContent}>
-            <Text style={[
-              styles.tabText,
-              { color: activeTab === 'attending' ? theme.primary : theme.textSecondary }
-            ]}>
-              Attending
-            </Text>
-            <View style={[styles.countBadge, { backgroundColor: theme.border }]}>
-              <Text style={[styles.countText, { color: theme.textSecondary }]}>
-                {attendingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)).length}
-              </Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            activeTab === 'invited' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
-          ]}
-          onPress={() => setActiveTab('invited')}
-        >
-          <View style={styles.tabContent}>
-            <Text style={[
-              styles.tabText,
-              { color: activeTab === 'invited' ? theme.primary : theme.textSecondary }
-            ]}>
-              Invited
-            </Text>
-            <View style={[styles.countBadge, { backgroundColor: theme.border }]}>
-              <Text style={[styles.countText, { color: theme.textSecondary }]}>
-                {invitedEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)).length}
-              </Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            activeTab === 'hosting' && { borderBottomWidth: 2, borderBottomColor: theme.primary }
-          ]}
-          onPress={() => setActiveTab('hosting')}
-        >
-          <View style={styles.tabContent}>
-            <Text style={[
-              styles.tabText,
-              { color: activeTab === 'hosting' ? theme.primary : theme.textSecondary }
-            ]}>
-              Hosting
-            </Text>
-            <View style={[styles.countBadge, { backgroundColor: theme.border }]}>
-              <Text style={[styles.countText, { color: theme.textSecondary }]}>
-                {hostingEvents.filter(event => !isEventEnded(event.event_date, event.start_time, event.end_time)).length}
-              </Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {activeTab === 'invited' ? (
-        (() => {
-          const invitedList = currentTabEvents || []
-          const notGoingList = (currentTabEventsData as any).notGoing || []
-          const hasInvitedEvents = invitedList.length > 0
-          const hasNotGoingEvents = notGoingList.length > 0
-          
-          // If no events at all, show empty state
-          if (!hasInvitedEvents && !hasNotGoingEvents) {
-            return (
-              <FlatList
-                data={[]}
-                keyExtractor={() => 'empty'}
-                renderItem={() => null}
-                contentContainerStyle={styles.eventsList}
-                showsVerticalScrollIndicator={false}
-                refreshControl={
-                  <RefreshControl
-                    refreshing={refreshing}
-                    onRefresh={onRefresh}
-                    colors={[theme.primary]}
-                    tintColor={theme.primary}
-                  />
-                }
-                ListEmptyComponent={
-                  <EmptyState
-                    icon="calendar-outline"
-                    title="No Invitations"
-                    message="You don't have any event invitations right now."
-                  />
-                }
-              />
-            )
+      {listSections.length === 0 ? (
+        <ScrollView
+          contentContainerStyle={styles.emptyScroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
           }
-          
-          // Otherwise show SectionList with sections
-          return (
-            <SectionList
-              sections={[
-                ...(hasInvitedEvents ? [{
-                  title: 'Pending',
-                  data: invitedList,
-                }] : []),
-                ...(hasNotGoingEvents ? [{
-                  title: 'Not Going',
-                  data: notGoingList,
-                }] : [])
-              ]}
-              keyExtractor={(item) => item.id}
-              renderItem={renderEvent}
-              renderSectionHeader={({ section }) => {
-                if (section.data.length === 0) return null
-                return (
-                  <View style={styles.sectionHeader}>
-                    <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
-                      {section.title}
-                    </Text>
-                  </View>
-                )
-              }}
-              contentContainerStyle={styles.eventsList}
-              showsVerticalScrollIndicator={false}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing}
-                  onRefresh={onRefresh}
-                  colors={[theme.primary]}
-                  tintColor={theme.primary}
-                />
-              }
-            />
-          )
-        })()
-      ) : (() => {
-        const groupedEvents = groupEventsByTime(currentTabEvents)
-        
-        if (groupedEvents.length === 0) {
-          return (
-            <EmptyState
-              icon="calendar-outline"
-              title={activeTab === 'attending' ? 'No Events' : 'No Hosting Events'}
-              message={activeTab === 'attending' 
-                ? "You're not attending any upcoming events."
-                : "You're not hosting any upcoming events. Tap the + button to create one!"}
-            />
-          )
-        }
-        
-        return (
-          <SectionList
-            sections={groupedEvents}
-            renderItem={renderEvent}
-            renderSectionHeader={({ section }) => (
-              <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
-                  {section.title}
-                </Text>
-              </View>
-            )}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.eventsList}
-            showsVerticalScrollIndicator={false}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                colors={[theme.primary]}
-                tintColor={theme.primary}
-              />
-            }
-            stickySectionHeadersEnabled={false}
-          />
-        )
-      })()}
-
-      {/* Create Button - Only show on hosting tab */}
-      {activeTab === 'hosting' && (
-        <TouchableOpacity
-          style={[styles.createButton, { backgroundColor: theme.primary }]}
-          onPress={handleCreateEvent}
         >
-          <Ionicons name="add" size={28} color={theme.buttonText} />
-        </TouchableOpacity>
+          <EmptyState
+            icon="calendar-outline"
+            title="No Events"
+            message="You have no invitations, hosted events, or upcoming events yet. Tap + to create one."
+          />
+        </ScrollView>
+      ) : (
+        <SectionList
+          sections={listSections}
+          renderItem={renderEvent}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionHeaderText, sectionHeaderLargeStyle, { color: theme.text }]}>
+                {section.title}
+              </Text>
+            </View>
+          )}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.eventsList}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+          stickySectionHeadersEnabled={false}
+        />
       )}
+
+      <TouchableOpacity
+        style={[styles.createButton, { backgroundColor: theme.primary }]}
+        onPress={handleCreateEvent}
+        activeOpacity={0.88}
+      >
+        <Ionicons name="add" size={32} color={theme.buttonText} />
+      </TouchableOpacity>
 
       {/* Create Event Modal */}
       <Modal
         visible={showCreateModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
+        transparent
+        animationType="none"
+        presentationStyle="overFullScreen"
         onRequestClose={() => setShowCreateModal(false)}
       >
         <CreateEventScreen
@@ -917,10 +774,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingTop: 10,
   },
-  sectionHeaderText: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
+  sectionHeaderText: {},
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -931,6 +785,10 @@ const styles = StyleSheet.create({
   },
   eventsList: {
     padding: 20,
+  },
+  emptyScroll: {
+    flexGrow: 1,
+    paddingTop: 48,
   },
   eventCard: {
     borderRadius: 12,
@@ -1098,53 +956,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
-  tabContainer: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  tabText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  countBadge: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  countText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
   createButton: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 22,
     right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 6,
     },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
-    elevation: 8,
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 10,
   },
   hostingBadge: {
     flexDirection: 'row',

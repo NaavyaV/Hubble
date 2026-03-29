@@ -264,15 +264,14 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
       <TouchableOpacity
         style={[
           styles.userItem,
-          { 
-            backgroundColor: isAlreadyInvited ? theme.primaryLight : theme.surface,
-            borderColor: isSelected ? theme.primary : theme.border,
-            borderWidth: isSelected ? 2 : 1,
-            borderRadius: 8,
-            marginHorizontal: 0,
-            marginVertical: 3,
-            opacity: isAlreadyInvited ? 0.6 : 1
-          }
+          {
+            backgroundColor: isAlreadyInvited
+              ? theme.primary + '18'
+              : isSelected
+                ? theme.primary + '14'
+                : theme.surface,
+            opacity: isAlreadyInvited ? 0.65 : 1,
+          },
         ]}
         onPress={() => toggleUserSelection(item.id)}
         disabled={isAlreadyInvited}
@@ -319,8 +318,7 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
               <Ionicons name="checkmark" size={16} color="white" />
             </View>
           ) : (
-            <View style={[styles.unselectedIndicator, { borderColor: theme.border }]}>
-            </View>
+            <View style={[styles.unselectedIndicator, { backgroundColor: theme.divider }]} />
           )}
         </View>
       </TouchableOpacity>
@@ -339,18 +337,18 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
+      <View style={[styles.header, { backgroundColor: theme.background }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleClose}>
           <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>
-          {isEditMode ? 'Edit Invites' : 'Invite Friends'}
+          {isEditMode ? 'Edit invites' : 'Invite friends'}
         </Text>
         <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.content}>
-        <View style={[styles.searchContainer, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder }]}>
+        <View style={[styles.searchContainer, { backgroundColor: theme.surface }]}>
           <Ionicons name="search" size={20} color={theme.textSecondary} style={styles.searchIcon} />
           <TextInput
             style={[styles.searchInput, { color: theme.text }]}
@@ -363,7 +361,7 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
 
         <View style={styles.friendsSection}>
           <View style={styles.friendsHeader}>
-            <Text style={[styles.friendsTitle, { color: theme.text }]}>Your Friends</Text>
+            <Text style={[styles.friendsTitle, { color: theme.textSecondary }]}>Friends</Text>
             {friends.length > 0 && (
               <TouchableOpacity style={[styles.inviteAllButton, { backgroundColor: theme.primary }]} onPress={handleInviteAllFriends}>
                 <Text style={styles.inviteAllButtonText}>Invite All</Text>
@@ -399,9 +397,9 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
         </View>
 
         {isEditMode && (
-          <View style={[styles.editNote, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <View style={[styles.editNote, { backgroundColor: theme.surface }]}>
             <Ionicons name="information-circle" size={16} color={theme.primary} />
-            <Text style={[styles.editNoteText, { color: theme.text }]}>
+            <Text style={[styles.editNoteText, { color: theme.textSecondary }]}>
               You can add more people but cannot remove those already invited
             </Text>
           </View>
@@ -448,16 +446,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   backButton: {
     padding: 4,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
   },
   headerSpacer: {
     width: 40, // Same width as back button for centering
@@ -476,17 +473,18 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 20,
-    paddingBottom: 140, // Add space for floating button positioned higher
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 120,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 20,
-    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderWidth: 0,
   },
   searchIcon: {
     marginRight: 12,
@@ -497,17 +495,19 @@ const styles = StyleSheet.create({
   },
   friendsSection: {
     flex: 1,
-    marginBottom: 24,
+    marginBottom: 12,
   },
   friendsHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   friendsTitle: {
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '600',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
   },
   inviteAllButton: {
     paddingHorizontal: 12,
@@ -525,9 +525,10 @@ const styles = StyleSheet.create({
   userItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginBottom: 6,
   },
   userAvatar: {
     width: 40,
@@ -589,15 +590,14 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    borderWidth: 2,
   },
   editNote: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 16,
+    borderRadius: 12,
+    borderWidth: 0,
+    marginTop: 10,
   },
   editNoteText: {
     fontSize: 14,
@@ -621,12 +621,11 @@ const styles = StyleSheet.create({
   },
   floatingButtonContainer: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 28,
     left: 0,
     right: 0,
-    paddingHorizontal: 60,
+    paddingHorizontal: 24,
     paddingVertical: 0,
-    borderTopWidth: 0,
     alignItems: 'center',
   },
   floatingDoneButton: {

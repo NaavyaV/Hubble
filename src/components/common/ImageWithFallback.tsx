@@ -7,6 +7,9 @@ import { validateImageUrl, retryImageLoad } from '../../utils/imageUtils'
 
 // Simple in-memory cache for loaded images
 const imageCache = new Set<string>()
+// Avoid repeatedly hammering URLs that just failed.
+const failedImageCache = new Map<string, number>()
+const FAILED_IMAGE_COOLDOWN_MS = 5 * 60 * 1000
 
 interface ImageWithFallbackProps {
   source: { uri: string }
@@ -48,6 +51,16 @@ export default function ImageWithFallback({
       return
     }
 
+    const failedAt = failedImageCache.get(source.uri)
+    if (failedAt && Date.now() - failedAt < FAILED_IMAGE_COOLDOWN_MS) {
+      setHasError(true)
+      setIsLoading(false)
+      return
+    }
+    if (failedAt && Date.now() - failedAt >= FAILED_IMAGE_COOLDOWN_MS) {
+      failedImageCache.delete(source.uri)
+    }
+
     // If image is already cached, skip validation
     if (imageCache.has(source.uri)) {
       setIsLoading(false)
@@ -73,10 +86,12 @@ export default function ImageWithFallback({
   }, [source.uri, skipValidation, priority])
 
   const handleError = async (error: any) => {
-    console.warn('ImageWithFallback - Image load error:', error)
+    if (__DEV__) {
+      console.warn('ImageWithFallback - Image load error:', error)
+    }
     
-    // Try to retry loading the image
-    if (maxRetries > 0) {
+    // Retry only for high-priority images to reduce repeated network requests.
+    if (priority === 'high' && maxRetries > 0) {
       const success = await retryImageLoad(imageSource.uri, maxRetries)
       if (success) {
         // Force re-render with the same URL
@@ -85,6 +100,7 @@ export default function ImageWithFallback({
       }
     }
     
+    failedImageCache.set(imageSource.uri, Date.now())
     setHasError(true)
     setIsLoading(false)
     onError?.(error)
@@ -95,6 +111,7 @@ export default function ImageWithFallback({
     setHasError(false)
     // Cache the successfully loaded image
     imageCache.add(source.uri)
+    failedImageCache.delete(source.uri)
     onLoad?.()
   }
 
@@ -122,7 +139,7 @@ export default function ImageWithFallback({
         source={{ uri }}
         style={style}
         contentFit={contentFit}
-        cachePolicy="disk"
+        cachePolicy="memory-disk"
         recyclingKey={uri}
         transition={0}
         onError={handleError}

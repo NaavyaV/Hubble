@@ -10,7 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { Picker } from '@react-native-picker/picker'
 import * as ImagePicker from 'expo-image-picker'
@@ -27,6 +27,7 @@ import {
 
 export default function EditProfileScreen({ navigation }: any) {
   const { theme } = useTheme()
+  const insets = useSafeAreaInsets()
   const [fullName, setFullName] = useState('')
   const [major, setMajor] = useState('')
   const [collegeId, setCollegeId] = useState('')
@@ -211,19 +212,32 @@ export default function EditProfileScreen({ navigation }: any) {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
+      <TouchableOpacity
+        style={[styles.editProfileBack, { top: insets.top + 8 }]}
+        onPress={() => navigation.goBack()}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+      >
+        <Ionicons name="arrow-back" size={24} color={theme.text} />
+      </TouchableOpacity>
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.content}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingTop: insets.top + 44 }}
+        >
           <View style={styles.form}>
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.text }]}>Profile Picture</Text>
               <TouchableOpacity style={styles.profileImageButton} onPress={pickProfileImage}>
                 {profileImageUri ? (
-                  <ImageWithFallback source={{ uri: profileImageUri }} style={StyleSheet.flatten([styles.profileImage, { borderColor: theme.primary }])} resizeMode="cover" />
+                  <ImageWithFallback source={{ uri: profileImageUri }} style={styles.profileImage} resizeMode="cover" />
                 ) : (
-                  <View style={[styles.profileImagePlaceholder, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
+                  <View style={[styles.profileImagePlaceholder, { backgroundColor: theme.surface }]}>
                     <Text style={[styles.profileImagePlaceholderText, { color: theme.textSecondary }]}>+</Text>
                   </View>
                 )}
@@ -268,7 +282,7 @@ export default function EditProfileScreen({ navigation }: any) {
                       styles.collegeOptionDisabled,
                       { 
                         backgroundColor: theme.surface,
-                        borderColor: theme.border
+                        borderWidth: 0,
                       }
                     ]}
                   >
@@ -312,8 +326,8 @@ export default function EditProfileScreen({ navigation }: any) {
                       key={year}
                       style={[
                         styles.chip,
-                        { backgroundColor: theme.surface, borderColor: theme.border },
-                        selected && { backgroundColor: theme.primary, borderColor: theme.primary }
+                        { backgroundColor: theme.surface, borderWidth: 0 },
+                        selected && { backgroundColor: theme.primary, borderWidth: 0 }
                       ]}
                       onPress={() => setGraduatingYear(year)}
                     >
@@ -369,6 +383,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  editProfileBack: {
+    position: 'absolute',
+    left: 12,
+    zIndex: 10,
+    padding: 8,
+  },
   keyboardView: {
     flex: 1,
   },
@@ -387,7 +407,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    borderWidth: 1,
+    borderWidth: 0,
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -405,7 +425,7 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    borderWidth: 3,
+    borderWidth: 0,
   },
   profileImagePlaceholder: {
     width: 100,
@@ -413,7 +433,7 @@ const styles = StyleSheet.create({
     borderRadius: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 3,
+    borderWidth: 0,
   },
   profileImagePlaceholderText: {
     fontSize: 32,
@@ -427,7 +447,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
     marginRight: 8,
-    borderWidth: 1,
+    borderWidth: 0,
   },
   chipSelected: {
     // Colors applied inline with theme
@@ -460,7 +480,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderRadius: 12,
-    borderWidth: 2,
+    borderWidth: 0,
     marginBottom: 12,
   },
   collegeLogo: {

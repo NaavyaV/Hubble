@@ -8,7 +8,11 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
+  ActivityIndicator,
 } from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native'
@@ -21,7 +25,13 @@ import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
 import { shouldShowPhoneNumber } from '../utils/phoneVisibility'
-import { formatEventTimeDisplay, isMidnightSpanningEvent } from '../utils/eventTimeUtils'
+import { isMidnightSpanningEvent } from '../utils/eventTimeUtils'
+import { formatInformalEventTime } from '../utils/informalEventTime'
+import {
+  normalizeInviteThemeKey,
+  getInviteThemeGradient,
+  getInviteThemeTextColors,
+} from '../utils/inviteEventTheme'
 import { deleteEventCompletely } from '../utils/eventDeletion'
 import EventInviteScreen from './EventInviteScreen'
 import CreateEventScreen from './CreateEventScreen'
@@ -50,8 +60,19 @@ type RootStackParamList = {
 
 type EventDetailRouteProp = RouteProp<RootStackParamList, 'EventDetail'>
 
+const attendanceCacheKey = (eventId: string, userId: string) =>
+  `hubble:event_attendance:${eventId}:${userId}`
+
+async function persistAttendanceCache(eventId: string, userId: string, status: 'going' | 'not_going' | null) {
+  try {
+    await AsyncStorage.setItem(attendanceCacheKey(eventId, userId), status ?? 'none')
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function EventDetailScreen() {
-  const { theme } = useTheme()
+  const { theme, isDark } = useTheme()
   const { isOrgMode } = useOrgMode()
   const navigation = useNavigation()
   // Hide default navigation header to remove extra space
@@ -77,7 +98,7 @@ export default function EventDetailScreen() {
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [hostProfile, setHostProfile] = useState<any>(null)
   const [hostOrganization, setHostOrganization] = useState<any>(null)
-  const [college, setCollege] = useState<any>(null)
+  const [hostCheckComplete, setHostCheckComplete] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
   const [isOrgOwner, setIsOrgOwner] = useState(false)
@@ -102,6 +123,10 @@ export default function EventDetailScreen() {
 
   useEffect(() => {
     if (event && event.id) {
+      setProfilesLoaded(false)
+      setHostCheckComplete(false)
+      setUserAttendance(null)
+
       // OPTIMIZED: Run all independent queries in parallel
       fetchCurrentUser()
       fetchAttendeesWithProfiles()
@@ -110,7 +135,6 @@ export default function EventDetailScreen() {
       Promise.all([
         fetchHostProfile(),
         fetchHostOrganization(),
-        fetchCollege(),
         checkIfInvited(),
         fetchEventPhotos()
       ]).catch(error => {
@@ -206,6 +230,8 @@ export default function EventDetailScreen() {
       }
     } catch (error) {
       console.error('Error fetching current user:', error)
+    } finally {
+      setHostCheckComplete(true)
     }
   }
 
@@ -248,7 +274,11 @@ export default function EventDetailScreen() {
       }
       
       const { data: { user: currentUser } } = await supabase.auth.getUser()
-      if (!currentUser) return
+      if (!currentUser) {
+        setProfilesLoaded(true)
+        setLoading(false)
+        return
+      }
       
       // Separate blocked users (users I blocked) from blockers (users who blocked me)
       const { data: blockedData } = await supabase
@@ -339,16 +369,19 @@ export default function EventDetailScreen() {
       setProfilesLoaded(true)
 
       // Find current user's attendance status (only if not host and not org event in org mode)
-      if (currentUser && !isHost && !(isOrgMode && isOrgEvent)) {
+      const userIsHost =
+        !isOrgEvent && !!event.host_id && currentUser.id === event.host_id
+      if (currentUser && !userIsHost && !(isOrgMode && isOrgEvent)) {
         const userAttendance = filteredAttendees.find(a => a.user_id === currentUser.id)
         // Set status based on attendance record
+        let next: 'going' | 'not_going' | null = null
         if (userAttendance?.status === 'going' || userAttendance?.status === 'maybe') {
-          setUserAttendance('going')
+          next = 'going'
         } else if (userAttendance?.status === 'not_going') {
-          setUserAttendance('not_going')
-        } else {
-          setUserAttendance(null)
+          next = 'not_going'
         }
+        setUserAttendance(next)
+        await persistAttendanceCache(event.id, currentUser.id, next)
       }
     } catch (error) {
       console.error('Error fetching attendees with profiles:', error)
@@ -398,23 +431,6 @@ export default function EventDetailScreen() {
       setHostOrganization(org)
     } catch (error) {
       console.error('Error fetching host organization:', error)
-    }
-  }
-
-  const fetchCollege = async () => {
-    try {
-      if ((event as any).college_id) {
-        const { data: collegeData, error } = await supabase
-          .from('colleges')
-          .select('id, name, logo_url')
-          .eq('id', (event as any).college_id)
-          .single()
-
-        if (error) throw error
-        setCollege(collegeData)
-      }
-    } catch (error) {
-      console.error('Error fetching college:', error)
     }
   }
 
@@ -599,6 +615,7 @@ export default function EventDetailScreen() {
 
       // OPTIMISTIC UPDATE: Update UI immediately
       setUserAttendance('going')
+      void persistAttendanceCache(event.id, user.id, 'going')
       
       // Optimistically add user to attendees list if not already present
       setAttendees(prev => {
@@ -639,6 +656,7 @@ export default function EventDetailScreen() {
         if (error) {
           // Rollback on error
           setUserAttendance(null)
+          void persistAttendanceCache(event.id, user.id, null)
           throw error
         }
       } else {
@@ -654,6 +672,7 @@ export default function EventDetailScreen() {
         if (error) {
           // Rollback on error
           setUserAttendance(null)
+          void persistAttendanceCache(event.id, user.id, null)
           throw error
         }
       }
@@ -668,6 +687,7 @@ export default function EventDetailScreen() {
       console.error('Error adding attendance:', error)
       // Rollback optimistic update
       setUserAttendance(null)
+      if (user) void persistAttendanceCache(event.id, user.id, null)
       if (user) {
         setAttendees(prev => prev.filter(a => a.user_id !== user.id || !a.id?.startsWith('temp-')))
       }
@@ -732,6 +752,7 @@ export default function EventDetailScreen() {
 
                   // OPTIMISTIC UPDATE: Update UI immediately
                   setUserAttendance('not_going')
+                  void persistAttendanceCache(event.id, user.id, 'not_going')
                   setAttendees(prev => {
                     const existingIndex = prev.findIndex(a => a.user_id === user.id)
                     if (existingIndex >= 0) {
@@ -779,6 +800,7 @@ export default function EventDetailScreen() {
       
       // OPTIMISTIC UPDATE: Update UI immediately
       setUserAttendance(null)
+      void persistAttendanceCache(event.id, user.id, null)
       setAttendees(prev => prev.filter(a => a.user_id !== user.id))
       
       const { error } = await supabase
@@ -808,22 +830,8 @@ export default function EventDetailScreen() {
   }
 
   const handleNotGoing = async () => {
-    // If user is already marked as "not going", allow them to change to "going"
     if (userAttendance === 'not_going') {
-      // User wants to mark as going - show alert confirmation
-      Alert.alert(
-        'Mark as Going',
-        'Do you want to mark yourself as going to this event?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Yes, I\'m Going',
-            onPress: async () => {
-              await addAttendance()
-            }
-          }
-        ]
-      )
+      await addAttendance()
       return
     }
 
@@ -877,6 +885,7 @@ export default function EventDetailScreen() {
 
               // OPTIMISTIC UPDATE: Update UI immediately
               setUserAttendance('not_going')
+              void persistAttendanceCache(event.id, user.id, 'not_going')
               setAttendees(prev => {
                 const existingIndex = prev.findIndex(a => a.user_id === user.id)
                 if (existingIndex >= 0) {
@@ -1419,7 +1428,7 @@ export default function EventDetailScreen() {
           <View style={styles.attendeeNameRow}>
             <Text style={[styles.attendeeName, { color: theme.text }]}>{user.full_name || 'Unknown'}</Text>
             {user.id === event.host_id && (
-              <View style={[styles.hostBadge, { backgroundColor: theme.warning }]}>
+              <View style={[styles.hostBadge, { backgroundColor: theme.primary }]}>
                 <Ionicons name="star" size={12} color={theme.buttonText} />
                 <Text style={[styles.hostBadgeText, { color: theme.buttonText }]}>Host</Text>
               </View>
@@ -1431,7 +1440,7 @@ export default function EventDetailScreen() {
         </View>
         <View style={[
           styles.statusIndicator,
-          { backgroundColor: attendee.status === 'not_going' ? theme.error : theme.success }
+          { backgroundColor: attendee.status === 'not_going' ? theme.error : theme.primary }
         ]} />
       </TouchableOpacity>
     )
@@ -1453,64 +1462,96 @@ export default function EventDetailScreen() {
     )
   }
 
+  const hasEventImage = Boolean(event.image_url)
+  const inviteKey = normalizeInviteThemeKey((event as any).invite_theme_color)
+  const useInviteScreen = inviteKey !== 'default'
+  const screenGradient = useInviteScreen ? getInviteThemeGradient(inviteKey, isDark) : null
+  const screenFg = useInviteScreen ? getInviteThemeTextColors(inviteKey, isDark) : null
+  const titleColor = screenFg?.title ?? theme.text
+  const headerIconColor = screenFg?.title ?? theme.text
+  const bodySecondary = screenFg?.secondary ?? theme.textSecondary
+  const informalWhen = formatInformalEventTime(
+    event.event_date,
+    event.start_time,
+    event.end_time
+  )
+  const detailIconColor = theme.textSecondary
+
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+    <View style={styles.screenRoot}>
+      {screenGradient ? (
+        <LinearGradient
+          colors={screenGradient}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+      ) : null}
+      <View style={[styles.container, { backgroundColor: screenGradient ? 'transparent' : theme.background }]}>
       {/* Minimal Top Bar with Back Button and Options */}
       <SafeAreaView edges={['top']}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, paddingVertical: 0 }}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 6 }}>
-            <Ionicons name="arrow-back" size={24} color={theme.text} />
+            <Ionicons name="arrow-back" size={24} color={headerIconColor} />
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setShowOptionsModal(true)} style={{ padding: 6 }}>
-            <Ionicons name="ellipsis-horizontal" size={24} color={theme.text} />
+            <Ionicons name="ellipsis-horizontal" size={24} color={headerIconColor} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Title and College ABOVE image */}
-        <View style={[styles.content, { paddingTop: 4, paddingBottom: 8 }]}>
-          {college && (
-            <View style={styles.collegeRow}>
-              {college.logo_url && (
-                <ImageWithFallback
-                  source={{ uri: college.logo_url }}
-                  style={styles.collegeLogo}
-                  resizeMode="contain"
-                />
-              )}
-              <Text style={[styles.collegeName, { color: theme.textSecondary }]}> {college.name}</Text>
-            </View>
-          )}
-          <View style={styles.titleRow}>
-            <Text style={[styles.eventTitle, { color: theme.text }]}>{event.title}</Text>
-            {event.privacy === 'invite_only' && (
-              <View style={styles.privacyBadge}>
-                <Ionicons name="lock-closed" size={16} color={theme.error} />
-                <Text style={styles.privacyText}>Friends Only</Text>
+      <ScrollView
+        style={[styles.scrollView, { backgroundColor: 'transparent' }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {hasEventImage ? (
+          <>
+            <ImageWithFallback source={{ uri: event.image_url! }} style={styles.eventImage} resizeMode="cover" />
+            <View style={[styles.content, styles.titleBlockBelowPhoto]}>
+              <View style={[styles.titleRow, styles.titleRowBelowPhoto]}>
+                <Text style={[styles.eventTitle, { color: titleColor }]}>{event.title}</Text>
+                {event.privacy === 'invite_only' && (
+                  <View style={[styles.privacyBadge, { backgroundColor: theme.error + '14' }]}>
+                    <Ionicons name="lock-closed" size={16} color={theme.error} />
+                    <Text style={[styles.privacyText, { color: theme.error }]}>Friends Only</Text>
+                  </View>
+                )}
               </View>
-            )}
+            </View>
+          </>
+        ) : (
+          <View style={[styles.content, styles.titleBlockNoPhoto]}>
+            <View style={styles.titleRow}>
+              <Text style={[styles.eventTitle, { color: titleColor }]}>{event.title}</Text>
+              {event.privacy === 'invite_only' && (
+                <View style={[styles.privacyBadge, { backgroundColor: theme.error + '14' }]}>
+                  <Ionicons name="lock-closed" size={16} color={theme.error} />
+                  <Text style={[styles.privacyText, { color: theme.error }]}>Friends Only</Text>
+                </View>
+              )}
+            </View>
           </View>
-        </View>
+        )}
 
-        {/* Event Image */}
-        {event.image_url ? (
-          <ImageWithFallback source={{ uri: event.image_url }} style={styles.eventImage} resizeMode="cover" />
-        ) : null}
-
-        {/* Event Content */}
         <View style={styles.content}>
-
           {/* Description */}
-          {event.description && (
-            <Text style={[styles.eventDescription, { color: theme.textSecondary }]}>{event.description}</Text>
-          )}
+          {event.description ? (
+            <Text
+              style={[
+                styles.eventDescription,
+                { color: bodySecondary },
+                (hasEventImage || useInviteScreen) ? styles.eventDescriptionAfterMedia : styles.eventDescriptionTight,
+              ]}
+            >
+              {event.description}
+            </Text>
+          ) : null}
 
           {/* Host Info */}
           {(hostProfile || hostOrganization) && (
             <View style={styles.hostSection}>
               <Text style={[styles.sectionTitle, { color: theme.text }]}>Hosted by</Text>
               {hostOrganization ? (
-                <View style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                <View style={[styles.hostInfo, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}>
                   <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
                     {hostOrganization.icon ? (
                       <ImageWithFallback source={{ uri: hostOrganization.icon }} style={styles.avatarImage} resizeMode="cover" />
@@ -1524,7 +1565,7 @@ export default function EventDetailScreen() {
                 </View>
               ) : hostProfile ? (
                 <TouchableOpacity 
-                  style={[styles.hostInfo, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.hostInfo, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}
                   onPress={() => handleUserPress(hostProfile)}
                 >
                   <View style={[styles.hostAvatar, { backgroundColor: theme.surface }]}>
@@ -1537,9 +1578,9 @@ export default function EventDetailScreen() {
                   <View style={styles.hostNameRow}>
                     <Text style={[styles.hostName, { color: theme.text }]}>{hostProfile.full_name || 'Unknown'}</Text>
                     {isHost && (
-                      <View style={styles.hostBadge}>
-                        <Ionicons name="star" size={12} color="white" />
-                        <Text style={styles.hostBadgeText}>You</Text>
+                      <View style={[styles.hostBadge, { backgroundColor: theme.primary }]}>
+                        <Ionicons name="star" size={12} color={theme.buttonText} />
+                        <Text style={[styles.hostBadgeText, { color: theme.buttonText }]}>You</Text>
                       </View>
                     )}
                   </View>
@@ -1548,60 +1589,78 @@ export default function EventDetailScreen() {
             </View>
           )}
 
-          {/* Event Details (no card background/border) */}
-          <View style={[styles.detailsSection, { backgroundColor: 'transparent', borderColor: 'transparent', borderWidth: 0, padding: 0 }]}>
-            <View style={styles.detailRow}>
-              <Ionicons name="calendar-outline" size={20} color={theme.primary} />
-              <Text style={[styles.detailText, { color: theme.text }]}>{formatDate(event.event_date)}</Text>
-            </View>
-            
-            <View style={styles.detailRow}>
-              <Ionicons name="time-outline" size={20} color={theme.warning} />
-              <Text style={[styles.detailText, { color: theme.text }]}>
-                {event.end_time
-                  ? `${formatTime(event.start_time)} - ${formatTime(event.end_time)}`
-                  : `${formatTime(event.start_time)}`}
-              </Text>
-              {event.end_time && isMidnightSpanningEvent(event.start_time, event.end_time) && (
-                <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
-                  <Ionicons name="moon" size={12} color={theme.primary} />
-                  <Text style={[styles.midnightText, { color: theme.primary }]}>
-                    Next day
-                  </Text>
-                </View>
-              )}
-            </View>
-            
-            <View style={styles.detailRow}>
-              <Ionicons name="location-outline" size={20} color={theme.error} />
+          {/* Informal timing — above scheduled details */}
+          <View
+            style={[
+              styles.informalTimingBlock,
+              { backgroundColor: theme.surface, borderColor: theme.border, shadowColor: theme.shadow },
+            ]}
+          >
+            <Ionicons name="sparkles-outline" size={18} color={theme.primary} />
+            <Text style={[styles.informalTimingText, { color: theme.text }]}>{informalWhen}</Text>
+          </View>
+
+          {/* Event details */}
+          <View
+            style={[
+              styles.detailCard,
+              {
+                backgroundColor: theme.surface,
+                shadowColor: theme.shadow,
+              },
+            ]}
+          >
+            <View style={[styles.detailRow, styles.detailRowPadded]}>
+              <Ionicons name="location-outline" size={20} color={detailIconColor} />
               <Text style={[styles.detailText, { color: theme.text }]}>{event.location}</Text>
             </View>
-            
-            {event.max_attendees && (
-              <View style={styles.detailRow}>
-                <Ionicons name="people-outline" size={20} color={theme.textSecondary} />
+
+            <View style={[styles.detailRow, styles.detailRowPadded]}>
+              <Ionicons name="calendar-outline" size={20} color={detailIconColor} />
+              <Text style={[styles.detailText, { color: theme.text }]}>{formatDate(event.event_date)}</Text>
+            </View>
+
+            <View
+              style={[
+                styles.detailRow,
+                styles.detailRowMultiline,
+                styles.detailRowPadded,
+                !event.max_attendees && styles.detailRowLast,
+              ]}
+            >
+              <Ionicons name="time-outline" size={20} color={detailIconColor} style={styles.detailIconAlignTop} />
+              <View style={styles.detailTextStack}>
+                <Text style={[styles.detailText, { color: theme.text, marginLeft: 0 }]}>
+                  {event.end_time
+                    ? `${formatTime(event.start_time)} – ${formatTime(event.end_time)}`
+                    : `${formatTime(event.start_time)}`}
+                </Text>
+                {event.end_time && isMidnightSpanningEvent(event.start_time, event.end_time) ? (
+                  <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '12', alignSelf: 'flex-start', marginTop: 6 }]}>
+                    <Ionicons name="moon" size={12} color={detailIconColor} />
+                    <Text style={[styles.midnightText, { color: theme.textSecondary }]}>Ends next calendar day</Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+
+            {event.max_attendees ? (
+              <View style={[styles.detailRow, styles.detailRowLast]}>
+                <Ionicons name="people-outline" size={20} color={detailIconColor} />
                 <Text style={[styles.detailText, { color: theme.text }]}>
                   Max {event.max_attendees} attendees
                 </Text>
               </View>
-            )}
+            ) : null}
+          </View>
 
-          {/* Event Tags */}
-          {Array.isArray((event as any).tags) && (event as any).tags.length > 0 && (
-            <View style={styles.tagsContainer}>
-              {(event as any).tags.map((tag: string, index: number) => (
-                <View key={index} style={styles.eventTag}>
-                  <Text style={styles.eventTagText}>{tag}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Attendance Actions - Don't show in org mode for org events */}
-          {!isHost && !(isOrgMode && (event as any).isOrgEvent) && (
+          {/* Attendance — wait for host check + attendee fetch so UI does not flash the wrong RSVP */}
+          {hostCheckComplete && !isHost && !(isOrgMode && (event as any).isOrgEvent) && (
             <View style={styles.attendanceSection}>
               <Text style={[styles.sectionTitle, { color: theme.text }]}>Your Attendance</Text>
-              {isEventFull() && !userAttendance ? (
+              {!profilesLoaded ? (
+                <ActivityIndicator style={styles.attendanceLoading} color={theme.primary} />
+              ) : isEventFull() && !userAttendance ? (
                 <View style={[styles.eventFullContainer, { backgroundColor: theme.error + '20', borderColor: theme.error }]}>
                   <View style={styles.eventFullHeader}>
                     <Ionicons name="people" size={24} color={theme.error} />
@@ -1614,9 +1673,10 @@ export default function EventDetailScreen() {
                     <TouchableOpacity
                       style={[
                         styles.goingButton,
-                        { 
-                          backgroundColor: userAttendance === 'going' ? theme.surface : theme.primary, 
-                          borderColor: userAttendance === 'going' ? theme.border : theme.primary 
+                        {
+                          backgroundColor: userAttendance === 'going' ? theme.surface : theme.primary,
+                          borderColor: userAttendance === 'going' ? theme.primary : theme.primary,
+                          borderWidth: userAttendance === 'going' ? 2 : 0,
                         }
                       ]}
                       onPress={handleAttendanceToggle}
@@ -1624,7 +1684,7 @@ export default function EventDetailScreen() {
                       <Ionicons 
                         name={userAttendance === 'going' ? "checkmark-circle-outline" : "checkmark-circle"} 
                         size={24} 
-                        color={userAttendance === 'going' ? theme.success : theme.buttonText} 
+                        color={userAttendance === 'going' ? theme.primary : theme.buttonText} 
                       />
                       <Text style={[
                         styles.goingButtonText,
@@ -1632,17 +1692,17 @@ export default function EventDetailScreen() {
                           color: userAttendance === 'going' ? theme.text : theme.buttonText 
                         }
                       ]}>
-                        {userAttendance === 'going' ? "I'm Going (Tap to Remove)" : "I'm Going"}
+                        {userAttendance === 'going' ? "You're going (tap to remove)" : 'Mark as going'}
                       </Text>
                     </TouchableOpacity>
                   </View>
                   {/* Show loading placeholder while checking phone visibility to prevent flash (not for org events) */}
                   {hostProfile?.phone_number && !hostOrganization && hostPhoneVisibilityLoading && (
-                    <View style={styles.contactHostSection}>
+                    <View style={[styles.contactHostSection, { borderTopColor: theme.divider }]}>
                       <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
                         Or contact the host directly:
                       </Text>
-                      <View style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                      <View style={[styles.contactHostButton, { backgroundColor: theme.surface }]}>
                         <Ionicons name="call" size={16} color={theme.textTertiary} />
                         <View style={[styles.loadingPlaceholder, { backgroundColor: theme.divider }]} />
                       </View>
@@ -1651,11 +1711,11 @@ export default function EventDetailScreen() {
 
                   {/* Only show phone number after loading completes and permission is granted */}
                   {hostProfile?.phone_number && !hostOrganization && !hostPhoneVisibilityLoading && showHostPhone && (
-                    <View style={styles.contactHostSection}>
+                    <View style={[styles.contactHostSection, { borderTopColor: theme.divider }]}>
                       <Text style={[styles.contactHostLabel, { color: theme.textSecondary }]}>
                         Or contact the host directly:
                       </Text>
-                      <TouchableOpacity style={[styles.contactHostButton, { backgroundColor: theme.surface, borderColor: theme.primary }]}>
+                      <TouchableOpacity style={[styles.contactHostButton, { backgroundColor: theme.surface }]}>
                         <Ionicons name="call" size={16} color={theme.primary} />
                         <Text style={[styles.contactHostText, { color: theme.primary }]}>
                           {hostProfile.phone_number}
@@ -1667,57 +1727,38 @@ export default function EventDetailScreen() {
               ) : (
                 <View style={styles.attendanceButtonsContainer}>
                   {userAttendance === 'not_going' ? (
-                    // When marked as "not going", show only full-width "Not Going" button
                     <TouchableOpacity
                       style={[
-                        styles.notGoingButton,
-                        { 
+                        styles.goingButton,
+                        {
                           backgroundColor: theme.surface,
-                          borderColor: theme.error,
-                          width: '100%'
+                          borderColor: theme.primary,
+                          borderWidth: 2,
+                          width: '100%',
                         }
                       ]}
                       onPress={handleNotGoing}
                     >
-                      <Ionicons 
-                        name="close-circle" 
-                        size={24} 
-                        color={theme.error} 
-                      />
-                      <Text style={[
-                        styles.notGoingButtonText,
-                        { color: theme.error }
-                      ]}>
-                        Not Going (Tap to Mark Going)
-                      </Text>
+                      <Ionicons name="checkmark-circle-outline" size={24} color={theme.primary} />
+                      <Text style={[styles.goingButtonText, { color: theme.primary }]}>Mark as going</Text>
                     </TouchableOpacity>
                   ) : userAttendance === 'going' ? (
-                    // When marked as "going", show only full-width "I'm Going" button (hide "Not Going")
                     <TouchableOpacity
                       style={[
                         styles.goingButton,
-                        { 
-                          backgroundColor: theme.surface, 
-                          borderColor: theme.border,
-                          width: '100%'
+                        {
+                          backgroundColor: theme.surface,
+                          borderColor: theme.primary,
+                          borderWidth: 2,
+                          width: '100%',
                         }
                       ]}
                       onPress={handleAttendanceToggle}
                     >
-                      <Ionicons 
-                        name="checkmark-circle-outline" 
-                        size={24} 
-                        color={theme.success} 
-                      />
-                      <Text style={[
-                        styles.goingButtonText,
-                        { color: theme.text }
-                      ]}>
-                        I'm Going (Tap to Remove)
-                      </Text>
+                      <Ionicons name="checkmark-circle-outline" size={24} color={theme.primary} />
+                      <Text style={[styles.goingButtonText, { color: theme.text }]}>You're going (tap to remove)</Text>
                     </TouchableOpacity>
                   ) : (
-                    // When no status, show "I'm Going" button (and "Not Going" if invited)
                     <>
                       <TouchableOpacity
                         style={[
@@ -1725,6 +1766,7 @@ export default function EventDetailScreen() {
                           { 
                             backgroundColor: theme.primary, 
                             borderColor: theme.primary,
+                            borderWidth: 0,
                             flex: 1,
                             marginRight: isInvited ? 8 : 0
                           }
@@ -1740,7 +1782,7 @@ export default function EventDetailScreen() {
                           styles.goingButtonText,
                           { color: theme.buttonText }
                         ]}>
-                          I'm Going
+                          Mark as going
                         </Text>
                       </TouchableOpacity>
                       {isInvited && (
@@ -1777,10 +1819,10 @@ export default function EventDetailScreen() {
 
           {/* Host Status */}
           {isHost && (
-            <View style={[styles.hostStatusContainer, { backgroundColor: theme.warning + '20', borderColor: theme.warning }]}>
+            <View style={[styles.hostStatusContainer, { backgroundColor: theme.primary + '16', shadowColor: theme.shadow }]}>
               <View style={styles.hostStatusHeader}>
-                <Ionicons name="star" size={20} color={theme.warning} />
-                <Text style={[styles.hostStatusTitle, { color: theme.warning }]}>You are the host</Text>
+                <Ionicons name="star" size={20} color={theme.primary} />
+                <Text style={[styles.hostStatusTitle, { color: theme.primary }]}>You are the host</Text>
               </View>
               <Text style={[styles.hostStatusText, { color: theme.text }]}>
                 You are automatically marked as going to this event.
@@ -1789,7 +1831,7 @@ export default function EventDetailScreen() {
           )}
 
           {/* Attendees Section - Only show going and maybe */}
-          <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, shadowColor: theme.shadow }]}>
             <View style={styles.attendeesHeader}>
               <Text style={[styles.attendeesTitle, { color: theme.text }]}>Who's Going</Text>
               <View style={styles.attendeeStats}>
@@ -1823,7 +1865,7 @@ export default function EventDetailScreen() {
 
           {/* Not Going Section - Only for private events */}
           {event.privacy === 'invite_only' && notGoingAttendees.length > 0 && (
-            <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, borderColor: theme.border, marginTop: 16 }]}>
+            <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, shadowColor: theme.shadow, marginTop: 16 }]}>
               <View style={styles.attendeesHeader}>
                 <Text style={[styles.attendeesTitle, { color: theme.text }]}>Who's Not Going</Text>
                 <View style={styles.attendeeStats}>
@@ -1850,7 +1892,7 @@ export default function EventDetailScreen() {
             if (pendingInvitedUsers.length === 0) return null
             
             return (
-              <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, borderColor: theme.border, marginTop: 16 }]}>
+              <View style={[styles.attendeesContainer, { backgroundColor: theme.surface, shadowColor: theme.shadow, marginTop: 16 }]}>
                 <View style={styles.attendeesHeader}>
                   <Text style={[styles.attendeesTitle, { color: theme.text }]}>Who's Invited</Text>
                   <View style={styles.attendeeStats}>
@@ -1884,7 +1926,6 @@ export default function EventDetailScreen() {
             )
           })()}
         </View>
-      </View>
       </ScrollView>
 
       {/* Options Modal */}
@@ -2073,8 +2114,9 @@ export default function EventDetailScreen() {
       {/* Edit Event Modal */}
       <Modal
         visible={showEditModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
+        transparent
+        animationType="fade"
+        presentationStyle="overFullScreen"
         onRequestClose={() => setShowEditModal(false)}
       >
         <CreateEventScreen
@@ -2193,10 +2235,15 @@ export default function EventDetailScreen() {
         contentType="event_photo"
       />
     </View>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
+  screenRoot: {
+    flex: 1,
+    position: 'relative',
+  },
   container: {
     flex: 1,
   },
@@ -2232,31 +2279,15 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     flex: 1,
   },
-  collegeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  collegeLogo: {
-    width: 24,
-    height: 24,
-    marginRight: 8,
-  },
-  collegeName: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
   privacyBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffe6e6',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
     marginLeft: 8,
   },
   privacyText: {
-    color: '#e74c3c',
     fontSize: 12,
     fontWeight: '600',
     marginLeft: 4,
@@ -2264,22 +2295,90 @@ const styles = StyleSheet.create({
   eventDescription: {
     fontSize: 16,
     lineHeight: 24,
-    marginBottom: 20,
+  },
+  eventDescriptionTight: {
+    marginTop: 2,
+    marginBottom: 16,
+  },
+  eventDescriptionAfterMedia: {
+    marginTop: 3,
+    marginBottom: 14,
+  },
+  titleBlockBelowPhoto: {
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  titleRowBelowPhoto: {
+    marginBottom: 6,
+  },
+  titleBlockNoPhoto: {
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
+  informalTimingBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: 6,
+    marginBottom: 14,
+    gap: 10,
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.06,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
+  },
+  informalTimingText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+  },
+  detailRowMultiline: {
+    alignItems: 'flex-start',
+  },
+  detailIconAlignTop: {
+    marginTop: 2,
+  },
+  detailTextStack: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  attendanceLoading: {
+    marginVertical: 20,
   },
   hostSection: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   hostInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 0,
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.07,
+        shadowRadius: 10,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
   },
   hostAvatar: {
     width: 40,
@@ -2302,27 +2401,45 @@ const styles = StyleSheet.create({
   hostBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f39c12',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 8,
   },
   hostBadgeText: {
-    color: 'white',
     fontSize: 10,
     fontWeight: '600',
     marginLeft: 2,
   },
-  detailsSection: {
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderWidth: 1,
+  detailCard: {
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    paddingBottom: 16,
+    borderRadius: 16,
+    marginBottom: 22,
+    borderWidth: 0,
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
   },
   detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  detailRowPadded: {
+    paddingBottom: 6,
+    marginBottom: 14,
+  },
+  detailRowLast: {
+    marginBottom: 0,
+    paddingBottom: 0,
   },
   detailText: {
     fontSize: 16,
@@ -2330,6 +2447,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   attendanceSection: {
+    marginTop: 8,
     marginBottom: 20,
   },
   attendanceButtons: {
@@ -2360,11 +2478,9 @@ const styles = StyleSheet.create({
     color: 'white',
   },
   eventFullContainer: {
-    backgroundColor: '#ffe6e6',
     padding: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e74c3c',
+    borderRadius: 16,
+    borderWidth: 0,
   },
   eventFullHeader: {
     flexDirection: 'row',
@@ -2387,7 +2503,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
   },
   contactHostLabel: {
     fontSize: 14,
@@ -2396,11 +2511,9 @@ const styles = StyleSheet.create({
   contactHostButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
-    padding: 12,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#3498db',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 0,
   },
   contactHostText: {
     fontSize: 16,
@@ -2420,12 +2533,20 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   hostStatusContainer: {
-    backgroundColor: '#fff3cd',
     padding: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f39c12',
+    borderRadius: 16,
+    borderWidth: 0,
     marginBottom: 20,
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
   },
   hostStatusHeader: {
     flexDirection: 'row',
@@ -2435,7 +2556,6 @@ const styles = StyleSheet.create({
   hostStatusTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#f39c12',
     marginLeft: 8,
   },
   hostStatusText: {
@@ -2443,9 +2563,20 @@ const styles = StyleSheet.create({
     color: '#2c3e50',
   },
   attendeesContainer: {
-    borderRadius: 8,
-    borderWidth: 1,
+    borderRadius: 16,
+    borderWidth: 0,
     padding: 16,
+    marginBottom: 4,
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.07,
+        shadowRadius: 10,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
   },
   attendeesHeader: {
     flexDirection: 'row',
@@ -2507,7 +2638,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   goingIndicator: {
-    backgroundColor: '#27ae60',
+    backgroundColor: 'transparent',
   },
   maybeIndicator: {
     backgroundColor: '#f39c12',
@@ -2538,34 +2669,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
-  // Tags styles
-  tagsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 20,
-  },
-  eventTag: {
-    backgroundColor: '#e3f2fd',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#bbdefb',
-  },
-  eventTagText: {
-    fontSize: 12,
-    color: '#1976d2',
-    fontWeight: '600',
-  },
   midnightIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 4,
-    borderWidth: 1,
+    borderRadius: 8,
+    borderWidth: 0,
   },
   midnightText: {
     fontSize: 12,

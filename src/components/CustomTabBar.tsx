@@ -1,5 +1,5 @@
 import React from 'react'
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native'
+import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -53,11 +53,12 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
 
   const renderTab = (route: any, index: number) => {
     const { options } = descriptors[route.key]
-    const label = options.tabBarLabel !== undefined
-      ? options.tabBarLabel
-      : options.title !== undefined
-      ? options.title
-      : route.name
+    const label =
+      options.tabBarLabel !== undefined
+        ? options.tabBarLabel
+        : options.title !== undefined
+          ? options.title
+          : route.name
 
     const isFocused = state.index === index
 
@@ -73,7 +74,18 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
       }
     }
 
-    // Special handling for Social tab with notification badge
+    const labelNode = (
+      <Text
+        style={[
+          styles.tabLabel,
+          { color: isFocused ? theme.tabBarActive : theme.tabBarInactive },
+        ]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    )
+
     if (route.name === 'Social') {
       return (
         <TouchableOpacity
@@ -81,7 +93,7 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
           onPress={onPress}
           style={styles.tabItem}
         >
-          <View style={{ position: 'relative' }}>
+          <View style={styles.iconWrap}>
             {getTabIcon(route.name, isFocused)}
             {pendingCount > 0 && (
               <View style={styles.badge}>
@@ -91,17 +103,11 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
               </View>
             )}
           </View>
-          <Text style={[
-            styles.tabLabel,
-            { color: isFocused ? theme.tabBarActive : theme.tabBarInactive }
-          ]}>
-            {label}
-          </Text>
+          {labelNode}
         </TouchableOpacity>
       )
     }
 
-    // Special handling for MyEvents tab with notification badge
     if (route.name === 'MyEvents') {
       return (
         <TouchableOpacity
@@ -109,7 +115,7 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
           onPress={onPress}
           style={styles.tabItem}
         >
-          <View style={{ position: 'relative' }}>
+          <View style={styles.iconWrap}>
             {getTabIcon(route.name, isFocused)}
             {eventInvitationsCount > 0 && (
               <View style={styles.badge}>
@@ -119,12 +125,7 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
               </View>
             )}
           </View>
-          <Text style={[
-            styles.tabLabel,
-            { color: isFocused ? theme.tabBarActive : theme.tabBarInactive }
-          ]}>
-            {label}
-          </Text>
+          {labelNode}
         </TouchableOpacity>
       )
     }
@@ -136,20 +137,18 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
         style={styles.tabItem}
       >
         {getTabIcon(route.name, isFocused)}
-        <Text style={[
-          styles.tabLabel,
-          { color: isFocused ? theme.tabBarActive : theme.tabBarInactive }
-        ]}>
-          {label}
-        </Text>
+        {labelNode}
       </TouchableOpacity>
     )
   }
 
+  const bottomPad = Platform.OS === 'android' ? Math.max(insets.bottom, 8) : insets.bottom
+
   return (
-    <View style={[styles.tabBar, { 
+    <View style={[styles.tabBar, {
       backgroundColor: theme.background,
-      paddingBottom: insets.bottom 
+      paddingBottom: bottomPad,
+      borderTopColor: theme.border,
     }]}>
       <View style={styles.tabBarContent}>
         {state.routes.map((route: any, index: number) => renderTab(route, index))}
@@ -160,30 +159,33 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
 
 const styles = StyleSheet.create({
   tabBar: {
-    height: 90,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 8,
+    borderTopWidth: 1,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
   tabBarContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 0,
-    flex: 1,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 2,
+    minHeight: 56,
   },
   tabItem: {
     alignItems: 'center',
+    justifyContent: 'center',
     flex: 1,
   },
   tabLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
-    marginTop: 6,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  iconWrap: {
+    position: 'relative',
   },
   badge: {
     position: 'absolute',

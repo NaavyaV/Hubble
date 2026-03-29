@@ -24,6 +24,7 @@ import notificationService from '../services/notifications'
 import { deleteOrgEventCompletely } from '../utils/eventDeletion'
 import EventCard from '../components/common/EventCard'
 import { groupEventsByTime, GroupedEvent } from '../utils/eventGrouping'
+import { sectionHeaderLargeStyle } from '../constants/sectionTypography'
 
 export default function OrgEventsScreen() {
   const { theme } = useTheme()
@@ -33,7 +34,6 @@ export default function OrgEventsScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(new Set())
 
   const fetchOrgEvents = async () => {
     try {
@@ -196,27 +196,12 @@ export default function OrgEventsScreen() {
     )
   }
 
-  const toggleExpanded = (eventId: string) => {
-    setExpandedEventIds(prev => {
-      const next = new Set(prev)
-      if (next.has(eventId)) next.delete(eventId)
-      else next.add(eventId)
-      return next
-    })
-  }
-
   const renderEvent = ({ item }: { item: EventWithAttendees }) => {
-    const isExpanded = expandedEventIds.has(item.id)
-    const orgName = currentOrg?.name || 'Organization'
-    
     return (
       <EventCard
         item={{ ...item, attendee_count: (item as any).attendee_count || 0 }}
-        hostOrg={{ id: (item as any).org_id || '', name: orgName }}
-        isExpanded={isExpanded}
         showDeleteButton={true}
         onDelete={() => handleDeleteEvent(item.id)}
-        onToggleExpand={() => toggleExpanded(item.id)}
         onPress={() => handleEventPress(item)}
       />
     )
@@ -259,7 +244,7 @@ export default function OrgEventsScreen() {
           renderItem={renderEvent}
           renderSectionHeader={({ section }) => (
             <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
+              <Text style={[styles.sectionHeaderText, sectionHeaderLargeStyle, { color: theme.text }]}>
                 {section.title}
               </Text>
             </View>
@@ -283,15 +268,17 @@ export default function OrgEventsScreen() {
       <TouchableOpacity
         style={[styles.createButton, { backgroundColor: theme.primary }]}
         onPress={() => setShowCreateModal(true)}
+        activeOpacity={0.88}
       >
-        <Ionicons name="add" size={28} color={theme.buttonText} />
+        <Ionicons name="add" size={32} color={theme.buttonText} />
       </TouchableOpacity>
 
       {/* Create Event Modal */}
       <Modal
         visible={showCreateModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
+        transparent
+        animationType="none"
+        presentationStyle="overFullScreen"
         onRequestClose={() => setShowCreateModal(false)}
       >
         <CreateEventScreen
@@ -315,10 +302,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingTop: 10,
   },
-  sectionHeaderText: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
+  sectionHeaderText: {},
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -469,21 +453,21 @@ const styles = StyleSheet.create({
   },
   createButton: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 22,
     right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 6,
     },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
-    elevation: 8,
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 10,
   },
 })
 

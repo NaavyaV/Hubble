@@ -293,8 +293,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     backgroundColor: theme.headerBackground,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.headerBorder,
+    borderBottomWidth: 0,
+    borderBottomColor: 'transparent',
   },
   backButton: {
     padding: 8,
@@ -325,13 +325,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 16,
     marginBottom: 12,
     backgroundColor: theme.surface,
-    borderWidth: 2,
-    borderColor: theme.border,
+    borderWidth: 0,
     minHeight: 80,
   },
   visibilityOptionSelected: {
     backgroundColor: theme.primary + '10',
-    borderColor: theme.primary,
+    borderWidth: 0,
   },
   visibilityOptionLeft: {
     flexDirection: 'row',
@@ -372,8 +371,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 16,
     marginTop: 8,
     marginBottom: 24,
-    borderWidth: 1,
-    borderColor: theme.border,
+    borderWidth: 0,
   },
   hostingToggleLeft: {
     flexDirection: 'row',

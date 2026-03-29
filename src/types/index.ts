@@ -21,6 +21,8 @@ export interface Event {
   location: string
   max_attendees?: number
   image_url?: string
+  /** Palette key for invite-style card when no cover image */
+  invite_theme_color?: string | null
   privacy?: 'public' | 'invite_only'
   tags?: string[]
   created_at: string

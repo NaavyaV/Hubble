@@ -10,6 +10,7 @@ import ReportModal, { ReportReason } from '../components/modals/ReportModal'
 import { useTheme } from '../context/ThemeContext'
 import { Organization } from '../context/OrgModeContext'
 import { setNetworkRestoredCallback } from '../utils/networkUtils'
+import { sectionHeaderLargeStyle } from '../constants/sectionTypography'
 
 interface ProfileRow {
   id: string
@@ -1596,7 +1597,7 @@ export default function SocialScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
       {/* Tabs */}
-      <View style={[styles.tabContainer, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
+      <View style={[styles.tabContainer, { backgroundColor: theme.background, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border }]}>
         <TouchableOpacity
           style={[
             styles.tab,
@@ -1635,8 +1636,7 @@ export default function SocialScreen() {
               styles.subTabButton,
               { 
                 backgroundColor: friendsSubTab === 'people' ? theme.primary : theme.surface,
-                borderWidth: friendsSubTab === 'people' ? 0 : 1,
-                borderColor: theme.border
+                borderWidth: 0,
               }
             ]}
             onPress={() => setFriendsSubTab('people')}
@@ -1653,8 +1653,7 @@ export default function SocialScreen() {
               styles.subTabButton,
               { 
                 backgroundColor: friendsSubTab === 'pending' ? theme.primary : theme.surface,
-                borderWidth: friendsSubTab === 'pending' ? 0 : 1,
-                borderColor: theme.border
+                borderWidth: 0,
               }
             ]}
             onPress={() => setFriendsSubTab('pending')}
@@ -1680,8 +1679,7 @@ export default function SocialScreen() {
               styles.subTabButton,
               { 
                 backgroundColor: friendsSubTab === 'friends' ? theme.primary : theme.surface,
-                borderWidth: friendsSubTab === 'friends' ? 0 : 1,
-                borderColor: theme.border
+                borderWidth: 0,
               }
             ]}
             onPress={() => setFriendsSubTab('friends')}
@@ -1704,8 +1702,7 @@ export default function SocialScreen() {
               styles.subTabButton,
               { 
                 backgroundColor: orgsSubTab === 'following' ? theme.primary : theme.surface,
-                borderWidth: orgsSubTab === 'following' ? 0 : 1,
-                borderColor: theme.border
+                borderWidth: 0,
               }
             ]}
             onPress={() => setOrgsSubTab('following')}
@@ -1741,7 +1738,7 @@ export default function SocialScreen() {
 
       {/* Search Bar */}
       <View style={[styles.searchContainer, { backgroundColor: theme.background }]}>
-        <View style={[styles.searchBarCapsule, { backgroundColor: theme.card, borderColor: theme.border }]}>
+        <View style={[styles.searchBarCapsule, { backgroundColor: theme.card }]}>
           <Ionicons name="search" size={20} color={theme.textSecondary} style={styles.searchIcon} />
           <TextInput
             style={[styles.searchInput, { color: theme.text }]}
@@ -1813,7 +1810,13 @@ export default function SocialScreen() {
                 if (section.data.length === 0) return null
                 return (
                   <View style={[styles.sectionHeader, { backgroundColor: theme.background }]}>
-                    <Text style={[styles.sectionHeaderText, { color: theme.textSecondary }]}>
+                    <Text
+                      style={[
+                        styles.sectionHeaderText,
+                        sectionHeaderLargeStyle,
+                        { color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
+                      ]}
+                    >
                       {section.title}
                     </Text>
                   </View>
@@ -1904,9 +1907,9 @@ export default function SocialScreen() {
             <TouchableOpacity 
               activeOpacity={1}
               onPress={(e) => e.stopPropagation()}
-              style={[styles.menuContent, { backgroundColor: theme.card, borderColor: theme.border }]}
+              style={[styles.menuContent, { backgroundColor: theme.card }]}
             >
-              <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <View style={[styles.menuHeader, { borderBottomWidth: 0 }]}>
                 <Text style={[styles.menuTitle, { color: theme.text }]}>Pending Request Options</Text>
                 <TouchableOpacity onPress={() => setFriendMenuVisible(null)}>
                   <Ionicons name="close" size={24} color={theme.textSecondary} />
@@ -1915,7 +1918,7 @@ export default function SocialScreen() {
               
               <View style={styles.menuItemsContainer}>
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const friendship = friendships.find(
                       f => (f.user_id === me && f.friend_id === friendMenuVisible) || (f.user_id === friendMenuVisible && f.friend_id === me)
@@ -1937,7 +1940,7 @@ export default function SocialScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const userId = friendMenuVisible
                     if (userId) {
@@ -1958,7 +1961,7 @@ export default function SocialScreen() {
 
                 {mutedUsers.has(friendMenuVisible || '') ? (
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                     onPress={() => {
                       const userId = friendMenuVisible
                       if (userId) {
@@ -1978,7 +1981,7 @@ export default function SocialScreen() {
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                     onPress={() => {
                       const userId = friendMenuVisible
                       if (userId) {
@@ -1999,7 +2002,7 @@ export default function SocialScreen() {
                 )}
 
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const userId = friendMenuVisible
                     if (userId) {
@@ -2041,9 +2044,9 @@ export default function SocialScreen() {
             <TouchableOpacity 
               activeOpacity={1}
               onPress={(e) => e.stopPropagation()}
-              style={[styles.menuContent, { backgroundColor: theme.card, borderColor: theme.border }]}
+              style={[styles.menuContent, { backgroundColor: theme.card }]}
             >
-              <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <View style={[styles.menuHeader, { borderBottomWidth: 0 }]}>
                 <Text style={[styles.menuTitle, { color: theme.text }]}>User Options</Text>
                 <TouchableOpacity onPress={() => setUserMenuVisible(null)}>
                   <Ionicons name="close" size={24} color={theme.textSecondary} />
@@ -2052,7 +2055,7 @@ export default function SocialScreen() {
               
               <View style={styles.menuItemsContainer}>
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     Alert.alert(
                       'Block User',
@@ -2084,7 +2087,7 @@ export default function SocialScreen() {
                 </TouchableOpacity>
                 
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const userId = userMenuVisible
                     if (userId) {
@@ -2107,7 +2110,7 @@ export default function SocialScreen() {
 
                 {mutedUsers.has(userMenuVisible || '') ? (
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                     onPress={() => {
                       const userId = userMenuVisible
                       if (userId) {
@@ -2126,7 +2129,7 @@ export default function SocialScreen() {
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                     onPress={() => {
                       const userId = userMenuVisible
                       if (userId) {
@@ -2166,9 +2169,9 @@ export default function SocialScreen() {
             <TouchableOpacity 
               activeOpacity={1}
               onPress={(e) => e.stopPropagation()}
-              style={[styles.menuContent, { backgroundColor: theme.card, borderColor: theme.border }]}
+              style={[styles.menuContent, { backgroundColor: theme.card }]}
             >
-              <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <View style={[styles.menuHeader, { borderBottomWidth: 0 }]}>
                 <Text style={[styles.menuTitle, { color: theme.text }]}>Friend Options</Text>
                 <TouchableOpacity onPress={() => setAcceptedFriendMenuVisible(null)}>
                   <Ionicons name="close" size={24} color={theme.textSecondary} />
@@ -2177,7 +2180,7 @@ export default function SocialScreen() {
               
               <View style={styles.menuItemsContainer}>
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const userId = acceptedFriendMenuVisible
                     if (userId) {
@@ -2198,7 +2201,7 @@ export default function SocialScreen() {
 
                 {mutedUsers.has(acceptedFriendMenuVisible || '') ? (
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                     onPress={() => {
                       const userId = acceptedFriendMenuVisible
                       if (userId) {
@@ -2218,7 +2221,7 @@ export default function SocialScreen() {
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                     onPress={() => {
                       const userId = acceptedFriendMenuVisible
                       if (userId) {
@@ -2239,7 +2242,7 @@ export default function SocialScreen() {
                 )}
 
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const userId = acceptedFriendMenuVisible
                     if (userId) {
@@ -2272,7 +2275,7 @@ export default function SocialScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const userId = acceptedFriendMenuVisible
                     if (userId) {
@@ -2323,9 +2326,9 @@ export default function SocialScreen() {
             <TouchableOpacity 
               activeOpacity={1}
               onPress={(e) => e.stopPropagation()}
-              style={[styles.menuContent, { backgroundColor: theme.card, borderColor: theme.border }]}
+              style={[styles.menuContent, { backgroundColor: theme.card }]}
             >
-              <View style={[styles.menuHeader, { borderBottomWidth: 1, borderBottomColor: theme.border }]}>
+              <View style={[styles.menuHeader, { borderBottomWidth: 0 }]}>
                 <Text style={[styles.menuTitle, { color: theme.text }]}>Organization Options</Text>
                 <TouchableOpacity onPress={() => setOrgMenuVisible(null)}>
                   <Ionicons name="close" size={24} color={theme.textSecondary} />
@@ -2334,7 +2337,7 @@ export default function SocialScreen() {
               
               <View style={styles.menuItemsContainer}>
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const orgId = orgMenuVisible
                     if (!orgId) return
@@ -2366,7 +2369,7 @@ export default function SocialScreen() {
                 </TouchableOpacity>
                 
                 <TouchableOpacity
-                  style={[styles.menuItemCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.menuItemCard, { backgroundColor: theme.surface }]}
                   onPress={() => {
                     const orgId = orgMenuVisible
                     if (orgId) {
@@ -2434,7 +2437,6 @@ const styles = StyleSheet.create({
   },
   tabContainer: {
     flexDirection: 'row',
-    borderBottomWidth: 1,
   },
   tab: {
     flex: 1,
@@ -2486,12 +2488,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingTop: 4,
   },
-  sectionHeaderText: {
-    fontSize: 14,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
+  sectionHeaderText: {},
   searchContainer: {
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -2502,7 +2499,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 20,
-    borderWidth: 1,
+    borderWidth: 0,
   },
   searchIcon: {
     marginRight: 8,
@@ -2521,12 +2518,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     marginBottom: 8,
-    borderWidth: 1,
+    borderWidth: 0,
   },
   orgCardContainer: {
     borderRadius: 12,
     marginBottom: 12,
-    borderWidth: 1,
+    borderWidth: 0,
     overflow: 'hidden',
   },
   orgCardHeader: {
@@ -2642,7 +2639,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 18,
-    borderWidth: 1,
+    borderWidth: 0,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2678,7 +2675,7 @@ const styles = StyleSheet.create({
   },
   menuContent: {
     borderRadius: 16,
-    borderWidth: 1,
+    borderWidth: 0,
     minWidth: 280,
     maxWidth: '90%',
     overflow: 'hidden',
@@ -2689,6 +2686,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     paddingBottom: 12,
+    borderBottomWidth: 0,
   },
   menuTitle: {
     fontSize: 18,
@@ -2700,7 +2698,7 @@ const styles = StyleSheet.create({
   },
   menuItemCard: {
     borderRadius: 12,
-    borderWidth: 1,
+    borderWidth: 0,
     overflow: 'hidden',
   },
   menuItemContent: {

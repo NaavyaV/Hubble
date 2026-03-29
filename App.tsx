@@ -28,6 +28,8 @@ import notificationService from './src/services/notifications'
 import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 import { OrgModeProvider, useOrgMode } from './src/context/OrgModeContext'
 import { isEventEnded } from './src/utils/eventTimeUtils'
+import { invalidateLeaderboardCache } from './src/services/leaderboardService'
+import { warmupTabCaches } from './src/services/appWarmup'
 
 // Import screens
 import AuthScreen from './src/screens/AuthScreen'
@@ -102,6 +104,10 @@ function MainTabNavigator() {
   const [pendingCount, setPendingCount] = useState(0)
   const [eventInvitationsCount, setEventInvitationsCount] = useState(0)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+
+  useEffect(() => {
+    warmupTabCaches()
+  }, [])
 
   useEffect(() => {
     // Initialize notifications ONLY after app has loaded and user exists
@@ -486,6 +492,7 @@ function MainTabNavigator() {
         tabBar={(props) => <CustomTabBar {...props} pendingCount={0} eventInvitationsCount={0} />}
         screenOptions={{
           headerShown: false,
+          lazy: false,
         }}
       >
         <Tab.Screen
@@ -524,6 +531,7 @@ function MainTabNavigator() {
         tabBar={(props) => <CustomTabBar {...props} pendingCount={pendingCount} eventInvitationsCount={eventInvitationsCount} />}
         screenOptions={{
           headerShown: false,
+          lazy: false,
         }}
       >
         <Tab.Screen
@@ -827,7 +835,7 @@ function AppContent() {
             await checkOtpVerification()
           }
         } else {
-          // No session - clear user state
+          invalidateLeaderboardCache()
           setUser(null)
         }
       }
@@ -1473,20 +1481,7 @@ function AppContent() {
                 name="EditProfile"
                 component={EditProfileScreen}
                 options={{
-                  headerShown: true,
-                  title: 'Edit Profile',
-                  headerStyle: { 
-                    backgroundColor: theme.headerBackground,
-                    elevation: 0,
-                    shadowOpacity: 0,
-                    borderBottomWidth: 1,
-                    borderBottomColor: theme.headerBorder,
-                  },
-                  headerTintColor: theme.headerText,
-                  headerTitleStyle: { 
-                    fontWeight: '600',
-                    fontSize: 18,
-                  },
+                  headerShown: false,
                 }}
               />
               <Stack.Screen

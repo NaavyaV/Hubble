@@ -2,6 +2,10 @@
  * Utility functions for handling event times, especially events that span across midnight
  */
 
+/** When `end_time` is omitted: event is "live" from 30 min before start through 3 hours after start. */
+export const NO_END_TIME_EARLY_MS = 30 * 60 * 1000
+export const NO_END_TIME_WINDOW_MS = 3 * 60 * 60 * 1000
+
 /**
  * Parses a date string (YYYY-MM-DD) as a local date (not UTC)
  * This prevents timezone issues when parsing date-only strings
@@ -58,8 +62,7 @@ export function getEventEndDate(eventDate: string, startTime: string, endTime?: 
   const startDate = getEventStartDate(eventDate, startTime)
   
   if (!endTime) {
-    // Default to 6 hours after start if no end time
-    return new Date(startDate.getTime() + 6 * 60 * 60 * 1000)
+    return new Date(startDate.getTime() + NO_END_TIME_WINDOW_MS)
   }
   
   if (isMidnightSpanningEvent(startTime, endTime)) {
@@ -96,22 +99,19 @@ export function getEventStartDate(eventDate: string, startTime: string): Date {
 }
 
 /**
- * Checks if an event is currently happening (between start and end times)
- * @param eventDate - Event date string in YYYY-MM-DD format
- * @param startTime - Start time string in HH:MM format
- * @param endTime - End time string in HH:MM format (optional)
- * @returns boolean indicating if the event is currently happening
+ * Whether the event is in its "live" window: with end time, between start and end;
+ * without end time, from 30 minutes before start through 3 hours after start.
  */
 export function isEventCurrentlyHappening(eventDate: string, startTime: string, endTime?: string): boolean {
   const now = new Date()
   const startDate = getEventStartDate(eventDate, startTime)
-  
-  // Special handling for events without end time: consider current for 12 hours
+
   if (!endTime) {
-    const twelveHoursLater = new Date(startDate.getTime() + 12 * 60 * 60 * 1000)
-    return now >= startDate && now <= twelveHoursLater
+    const windowStart = new Date(startDate.getTime() - NO_END_TIME_EARLY_MS)
+    const windowEnd = new Date(startDate.getTime() + NO_END_TIME_WINDOW_MS)
+    return now >= windowStart && now <= windowEnd
   }
-  
+
   const endDate = getEventEndDate(eventDate, startTime, endTime)
   return now >= startDate && now <= endDate
 }
@@ -125,14 +125,13 @@ export function isEventCurrentlyHappening(eventDate: string, startTime: string, 
  */
 export function isEventEnded(eventDate: string, startTime: string, endTime?: string): boolean {
   const now = new Date()
-  
-  // Special handling for events without end time: mark as ended after 12 hours
+
   if (!endTime) {
     const startDate = getEventStartDate(eventDate, startTime)
-    const twelveHoursLater = new Date(startDate.getTime() + 12 * 60 * 60 * 1000)
-    return now > twelveHoursLater
+    const windowEnd = new Date(startDate.getTime() + NO_END_TIME_WINDOW_MS)
+    return now > windowEnd
   }
-  
+
   const endDate = getEventEndDate(eventDate, startTime, endTime)
   return now > endDate
 }

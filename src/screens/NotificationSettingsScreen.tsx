@@ -238,7 +238,7 @@ export default function NotificationSettingsScreen() {
   }) => (
     <View style={[
       styles.settingRow, 
-      { backgroundColor: theme.surface, borderColor: theme.border },
+      { backgroundColor: theme.surface },
       disabled && { opacity: 0.6 }
     ]}>
       <View style={styles.settingLeft}>
@@ -263,7 +263,7 @@ export default function NotificationSettingsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomWidth: 0 }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
           <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
@@ -274,10 +274,7 @@ export default function NotificationSettingsScreen() {
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.text }]}>General</Text>
-          <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>
-            Overall notification preferences
-          </Text>
-          
+
           <SettingRow
             title="Push Notifications"
             description="Enable or disable all push notifications"
@@ -290,10 +287,7 @@ export default function NotificationSettingsScreen() {
 
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.text }]}>Push Notifications</Text>
-          <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>
-            Control which notifications you receive
-          </Text>
-          
+
           <SettingRow
             title="Event Reminders"
             description="Get reminded 15 minutes before events you're going to"
@@ -380,7 +374,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: 1,
+    borderBottomWidth: 0,
   },
   backButton: {
     padding: 4,
@@ -413,7 +407,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderRadius: 12,
-    borderWidth: 1,
+    borderWidth: 0,
     marginBottom: 12,
   },
   settingLeft: {

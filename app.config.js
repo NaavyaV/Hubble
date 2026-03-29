@@ -5,7 +5,7 @@ export default ({ config }) => {
     ...config,
     name: isDev ? "Hubble Dev" : "Hubble",
     slug: "hubble",
-    version: "1.0.1",
+    version: "1.1.0",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "automatic",

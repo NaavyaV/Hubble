@@ -17,7 +17,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { LinearGradient } from 'expo-linear-gradient'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { useNavigation, useFocusEffect } from '@react-navigation/native'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
 import { safeBlockOrQuery } from '../utils/queryHelpers'
 import { EventWithAttendees } from '../types'
@@ -26,8 +26,10 @@ import { getEventEndDate, isEventEnded, isEventInFuture, parseLocalDate } from '
 import GeneralPhotoGalleryScreen from './GeneralPhotoGalleryScreen'
 import { PREDEFINED_TAGS } from '../constants/tags'
 import EventCard from '../components/common/EventCard'
+import { sectionHeaderLargeStyle } from '../constants/sectionTypography'
 import { ImageWithFallback } from '../components'
-import { groupEventsByTime, GroupedEvent } from '../utils/eventGrouping'
+import { groupHomeEventsByTime, GroupedEvent } from '../utils/eventGrouping'
+import { prefetchImageUris } from '../utils/imagePrefetch'
 import CreateEventScreen from './CreateEventScreen'
 import { withNetworkErrorHandling, isNetworkError } from '../utils/networkUtils'
 
@@ -70,16 +72,6 @@ export default function EventsListScreen() {
     selectedTags: [],
   })
   const [sortBy, setSortBy] = useState<SortType>('date_asc')
-  const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(new Set())
-
-  const toggleExpanded = (eventId: string) => {
-    setExpandedEventIds(prev => {
-      const next = new Set(prev)
-      if (next.has(eventId)) next.delete(eventId)
-      else next.add(eventId)
-      return next
-    })
-  }
 
   const handleCreateEvent = () => {
     setShowCreateModal(true)
@@ -94,26 +86,14 @@ export default function EventsListScreen() {
     fetchEvents()
   }, [])
 
-  // Refresh events only when tab is focused (no polling); realtime + pull-to-refresh provide fresh data
-  useFocusEffect(
-    React.useCallback(() => {
-      fetchEvents()
-      return () => {}
-    }, [])
-  )
-
   useEffect(() => {
     filterEvents(events, 'all')
   }, [events, userAttendances, advancedFilters, sortBy])
 
   const onRefresh = async () => {
     setRefreshing(true)
-    // Preserve expanded state during refresh
-    const preservedExpandedIds = new Set(expandedEventIds)
     try {
       await fetchEvents()
-      // Restore expanded state after refresh
-      setExpandedEventIds(preservedExpandedIds)
     } catch (error: any) {
       // Only log errors if it's not a network error (network errors are handled by wrapper)
       if (!isNetworkError(error)) {
@@ -205,7 +185,6 @@ export default function EventsListScreen() {
             )
           `)
           .eq('privacy', 'public')
-          .neq('host_id', user.id)
           .order('event_date', { ascending: true }),
         // Fetch org events (organization data will be fetched separately if join fails)
         supabase
@@ -229,8 +208,14 @@ export default function EventsListScreen() {
       ])
 
       // Extract data from results
-      const attendingEventIds = new Set((userAttendancesResult.data || []).map(a => a.event_id))
-      const attendingOrgEventIds = new Set((orgUserAttendancesResult.data || []).map(a => a.event_id))
+      const combinedAttendances: Record<string, string> = {}
+      ;(userAttendancesResult.data || []).forEach(a => {
+        combinedAttendances[a.event_id] = 'going'
+      })
+      ;(orgUserAttendancesResult.data || []).forEach(a => {
+        combinedAttendances[a.event_id] = 'going'
+      })
+      setUserAttendances(combinedAttendances)
       const followedOrgIds = new Set((followedOrgsResult.data || []).map(f => f.org_id))
       const blockedOrgIds = new Set((blockedOrgsResult.data || []).map(b => b.org_id))
       // Separate blocked users (users I blocked) from blockers (users who blocked me)
@@ -269,7 +254,6 @@ export default function EventsListScreen() {
             )
           `)
           .eq('privacy', 'public')
-          .neq('host_id', user.id)
           .order('event_date', { ascending: true })
         
         if (eventsError) throw eventsError
@@ -334,6 +318,73 @@ export default function EventsListScreen() {
         if (!event.host_id) return true
         return !blockerIds.has(event.host_id)
       })
+
+      const invitedIdList = Array.isArray(invitedEventIds) ? invitedEventIds : []
+      const invitedIdSet = new Set(invitedIdList)
+
+      // Private (invite-only) on Home: invited via event_invitations OR you are the host (hosts are often not in invitations)
+      const hostJoinOk = !publicEventsResult.error
+      const mapPrivateRow = (event: any) => ({
+        ...event,
+        hostProfile: hostJoinOk ? event.host || null : null,
+      })
+
+      let invitedPrivateEvents: any[] = []
+
+      const fetchInviteOnlyPrivate = async (predicate: { invitedIds?: string[]; hostId?: string }) => {
+        const selectWithHost = `
+              *,
+              attendees:event_attendees(
+                id,
+                user_id,
+                status
+              ),
+              host:profiles(
+                id,
+                full_name,
+                username,
+                avatar_url
+              )
+            `
+        const selectNoHost = `
+              *,
+              attendees:event_attendees(
+                id,
+                user_id,
+                status
+              )
+            `
+        let q = supabase
+          .from('events')
+          .select(hostJoinOk ? selectWithHost : selectNoHost)
+          .eq('privacy', 'invite_only')
+          .order('event_date', { ascending: true })
+        if (predicate.invitedIds && predicate.invitedIds.length > 0) {
+          q = q.in('id', predicate.invitedIds)
+        }
+        if (predicate.hostId) {
+          q = q.eq('host_id', predicate.hostId)
+        }
+        const { data, error } = await q
+        if (error) throw error
+        return (data || []).map(mapPrivateRow)
+      }
+
+      if (invitedIdList.length > 0) {
+        invitedPrivateEvents.push(...(await fetchInviteOnlyPrivate({ invitedIds: invitedIdList })))
+      }
+      invitedPrivateEvents.push(...(await fetchInviteOnlyPrivate({ hostId: user.id })))
+
+      const seenPrivateId = new Set<string>()
+      invitedPrivateEvents = invitedPrivateEvents.filter((event) => {
+        if (seenPrivateId.has(event.id)) return false
+        seenPrivateId.add(event.id)
+        if (!event.host_id) return true
+        if (blockerIds.has(event.host_id)) return false
+        if (blockedUserIds.has(event.host_id)) return false
+        return true
+      })
+      publicEvents = [...publicEvents, ...invitedPrivateEvents]
       
       // Sort org events: followed orgs first, then others (both sorted by date)
       orgEvents.sort((a, b) => {
@@ -346,17 +397,13 @@ export default function EventsListScreen() {
         return parseLocalDate(a.event_date).getTime() - parseLocalDate(b.event_date).getTime()
       })
 
-      // Combine all events and remove duplicates
-      // NOTE: Only include public events and org events - private events are excluded
-      // Private events should only appear in MyEvents tab (Invited/Hosting/Attending)
+      // Combine all events and remove duplicates (public + invite-only when invited + org)
       const allEvents = [...publicEvents, ...orgEvents]
       const uniqueEvents = allEvents.filter((event, index, self) => 
         index === self.findIndex(e => e.id === event.id)
       )
 
-      // Filter out events user is already attending (both personal and org events)
-      // Also explicitly exclude any private events (safety check)
-      // Exclude events hosted by blocked users AND blockers
+      // Exclude events hosted by blocked users AND blockers; invite-only if invited or you host it
       const filteredEvents = uniqueEvents.filter(event => {
         // Exclude events hosted by users I have blocked
         if (!(event as any).isOrgEvent && blockedUserIds.has(event.host_id)) {
@@ -368,17 +415,12 @@ export default function EventsListScreen() {
           return false
         }
         
-        // Exclude events user is already attending
         if ((event as any).isOrgEvent) {
-          if (attendingOrgEventIds.has(event.id)) {
-            return false
-          }
+          // Keep org events, including ones the user is already attending.
         } else {
-          if (attendingEventIds.has(event.id)) {
-            return false
-          }
-          // Explicitly exclude private events - they should only show in MyEvents tab
-          if (event.privacy === 'invite_only') {
+          const isOwnPrivate =
+            event.privacy === 'invite_only' && event.host_id === user.id
+          if (event.privacy === 'invite_only' && !invitedIdSet.has(event.id) && !isOwnPrivate) {
             return false
           }
         }
@@ -410,6 +452,10 @@ export default function EventsListScreen() {
       setEvents(eventsWithCounts)
       setLoading(false)
 
+      prefetchImageUris(
+        eventsWithCounts.map(e => (e as any).image_url).filter(Boolean) as string[]
+      )
+
       // Build host profiles map from already-fetched data and fetch any missing ones
       // Preserve existing profiles to prevent flickering during auto-refresh
       const hostProfilesMap: Record<string, any> = {}
@@ -438,6 +484,10 @@ export default function EventsListScreen() {
           })
         }
       }
+
+      prefetchImageUris(
+        Object.values(hostProfilesMap).map((p: any) => p?.avatar_url).filter(Boolean) as string[]
+      )
       
       // Update state by merging existing profiles with new ones (preserves existing during refresh)
       setHostProfiles(prev => {
@@ -659,6 +709,8 @@ export default function EventsListScreen() {
         .eq('otp_verified', true) // Only show OTP verified users
 
       if (profiles) {
+        prefetchImageUris(profiles.map(p => p.avatar_url))
+
         const profilesMap = profiles.reduce((acc, profile) => {
           acc[profile.id] = profile
           return acc
@@ -835,7 +887,7 @@ export default function EventsListScreen() {
             </Text>
           </View>
           <View style={styles.pastEventBadge}>
-            <Ionicons name="checkmark-circle" size={16} color="#27ae60" />
+            <Ionicons name="checkmark-circle" size={16} color={theme.primary} />
             <Text style={styles.pastEventBadgeText}>Completed</Text>
           </View>
         </View>
@@ -846,7 +898,7 @@ export default function EventsListScreen() {
             style={styles.attendedButton}
             onPress={toggleShowAttendees}
           >
-            <Ionicons name="people" size={16} color="#27ae60" />
+            <Ionicons name="people" size={16} color={theme.primary} />
             <Text style={styles.attendedText}>{attendedCount} attended</Text>
             <Ionicons 
               name={showAttendees ? "chevron-up" : "chevron-down"} 
@@ -907,24 +959,18 @@ export default function EventsListScreen() {
   }
 
   const renderEventCard = ({ item }: { item: EventListItem }) => {
-    const hostProfile = hostProfiles[item.host_id]
-    // For org events, look up by event.id
-    const hostOrg = (item as any).isOrgEvent ? hostOrganizations[item.id] : null
-    const userAttendance = userAttendances[item.id]
-    const isInvited = userInvitations.has(item.id)
+    const immediateAttendance = currentUserId
+      ? item.attendees?.find((attendee: any) => attendee.user_id === currentUserId)?.status
+      : null
+    const userAttendance = userAttendances[item.id] || immediateAttendance || null
     const isHost = item.host_id === currentUserId
-    const isExpanded = expandedEventIds.has(item.id)
-
     return (
       <EventCard
         item={item}
-        hostProfile={hostProfile}
-        hostOrg={hostOrg}
-        userAttendance={userAttendance}
-        isInvited={isInvited}
         isHost={isHost}
-        isExpanded={isExpanded}
-        onToggleExpand={() => toggleExpanded(item.id)}
+        userAttendance={userAttendance}
+        viewerId={currentUserId}
+        isInvited={userInvitations.has(item.id)}
         onPress={() => (navigation as any).navigate('EventDetail', { event: item })}
       />
     )
@@ -947,7 +993,7 @@ export default function EventsListScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Events List - student and org events combined, pull-to-refresh */}
       {(() => {
-        const groupedEvents = groupEventsByTime<EventListItem>(filteredEvents)
+        const groupedEvents = groupHomeEventsByTime<EventListItem>(filteredEvents)
         
         if (groupedEvents.length === 0) {
           return (
@@ -980,7 +1026,7 @@ export default function EventsListScreen() {
             renderItem={renderEventCard}
             renderSectionHeader={({ section }) => (
               <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
+                <Text style={[styles.sectionHeaderText, sectionHeaderLargeStyle, { color: theme.text }]}>
                   {section.title}
                 </Text>
               </View>
@@ -997,10 +1043,14 @@ export default function EventsListScreen() {
               />
             }
             showsVerticalScrollIndicator={false}
-            extraData={expandedEventIds.size}
             maintainVisibleContentPosition={{
               minIndexForVisible: 0,
             }}
+            initialNumToRender={8}
+            maxToRenderPerBatch={8}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={true}
             stickySectionHeadersEnabled={false}
           />
         )
@@ -1010,14 +1060,16 @@ export default function EventsListScreen() {
       <TouchableOpacity
         style={[styles.createButton, { backgroundColor: theme.primary }]}
         onPress={handleCreateEvent}
+        activeOpacity={0.88}
       >
-        <Ionicons name="add" size={28} color={theme.buttonText} />
+        <Ionicons name="add" size={32} color={theme.buttonText} />
       </TouchableOpacity>
 
       <Modal
         visible={showCreateModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
+        transparent
+        animationType="none"
+        presentationStyle="overFullScreen"
         onRequestClose={() => setShowCreateModal(false)}
       >
         <CreateEventScreen
@@ -1446,8 +1498,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: 'white',
   },
   myEventsButtonActive: {
-    backgroundColor: '#4CAF50', // Subtle green
-    borderColor: '#4CAF50',
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
   },
   myEventsTextActive: {
     color: 'white',
@@ -1497,18 +1549,18 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   createButton: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 22,
     right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 10,
   },
   pastEventsEmptyState: {
     flex: 1,
@@ -1602,10 +1654,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingVertical: 12,
     paddingTop: 10,
   },
-  sectionHeaderText: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
+  sectionHeaderText: {},
   eventsFlatList: {
     flex: 1,
   },
@@ -1731,16 +1780,16 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.textSecondary,
   },
   invitedBadge: {
-    backgroundColor: theme.success + '20',
+    backgroundColor: theme.primary + '20',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.success + '40',
+    borderColor: theme.primary + '40',
   },
   invitedText: {
     fontSize: 12,
-    color: theme.success,
+    color: theme.primary,
     fontWeight: '500',
   },
   eventDescription: {
@@ -2039,7 +2088,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     shadowRadius: 2,
     elevation: 3,
     borderLeftWidth: 3,
-    borderLeftColor: '#27ae60',
+    borderLeftColor: theme.primary,
   },
   pastEventHeader: {
     flexDirection: 'row',
@@ -2069,14 +2118,14 @@ const createStyles = (theme: any) => StyleSheet.create({
   pastEventBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#27ae60' + '20',
+    backgroundColor: theme.primary + '20',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
   },
   pastEventBadgeText: {
     fontSize: 12,
-    color: '#27ae60',
+    color: theme.primary,
     fontWeight: '600',
     marginLeft: 4,
   },
@@ -2088,7 +2137,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   attendedButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#27ae60' + '15',
+    backgroundColor: theme.primary + '15',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,
@@ -2097,7 +2146,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   attendedText: {
     fontSize: 14,
-    color: '#27ae60',
+    color: theme.primary,
     fontWeight: '600',
     marginLeft: 6,
     marginRight: 6,

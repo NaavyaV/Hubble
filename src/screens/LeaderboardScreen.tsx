@@ -1,116 +1,44 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   View,
   Text,
   FlatList,
-  TouchableOpacity,
   StyleSheet,
-  Image,
   RefreshControl,
-  Dimensions,
   ActivityIndicator,
+  Platform,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
-import { supabase } from '../services/supabase'
-import { safeBlockOrQuery } from '../utils/queryHelpers'
+import { getLeaderboard, LeaderboardEntry } from '../services/leaderboardService'
+import { prefetchImageUris } from '../utils/imagePrefetch'
 import { ImageWithFallback } from '../components'
 
-const { width: screenWidth } = Dimensions.get('window')
-
-interface LeaderboardEntry {
-  host_id: string
-  full_name: string
-  username: string
-  avatar_url: string
-  major: string
-  graduating_year: string
-  total_rsvps: number
-  total_events_hosted: number
-  rank: number
-}
+type ListRow = LeaderboardEntry & { __selfFooter?: boolean }
 
 export default function LeaderboardScreen() {
   const { theme } = useTheme()
+  const insets = useSafeAreaInsets()
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [currentUserRank, setCurrentUserRank] = useState<LeaderboardEntry | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
 
-  const fetchLeaderboard = async () => {
+  const fetchLeaderboard = async (options?: { force?: boolean }) => {
     try {
-      setLoading(true)
-      
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      
-      setCurrentUserId(user.id)
-
-      // Fetch all leaderboard data
-      const { data: leaderboardData, error: leaderboardError } = await supabase
-        .from('host_leaderboard')
-        .select('*')
-        .order('rank', { ascending: true })
-
-      if (leaderboardError) throw leaderboardError
-
-      // Get all host IDs from leaderboard
-      const hostIds = leaderboardData?.map(entry => entry.host_id) || []
-      
-      // Fetch only OTP verified profiles
-      const { data: verifiedProfiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('id')
-        .in('id', hostIds)
-        .eq('otp_verified', true)
-
-      if (profilesError) throw profilesError
-
-      // Separate blocked users (users I blocked) from blockers (users who blocked me)
-      const { data: blockedData } = await supabase
-        .from('user_blocks')
-        .select('blocked_id, blocker_id')
-        .or(safeBlockOrQuery(user.id))
-
-      const blockedUserIds = new Set<string>() // Users I have blocked
-      const blockerIds = new Set<string>() // Users who have blocked me
-      if (blockedData) {
-        blockedData.forEach((b: any) => {
-          if (b.blocker_id === user.id) {
-            blockedUserIds.add(b.blocked_id) // I blocked them
-          }
-          if (b.blocked_id === user.id) {
-            blockerIds.add(b.blocker_id) // They blocked me
-          }
-        })
+      if (!options?.force) {
+        setLoading(true)
       }
+      const data = await getLeaderboard({ force: options?.force })
+      if (!data) return
 
-      // Filter leaderboard to only include OTP verified users and exclude blocked users AND blockers
-      // If Person A blocks Person B, Person B should not see Person A on leaderboard
-      const verifiedHostIds = new Set(verifiedProfiles?.map(p => p.id) || [])
-      const filteredLeaderboard = leaderboardData?.filter(entry => 
-        verifiedHostIds.has(entry.host_id) && 
-        !blockedUserIds.has(entry.host_id) && 
-        !blockerIds.has(entry.host_id) // Exclude users who have blocked me
-      ) || []
-      
-      // Re-rank the filtered leaderboard to show consecutive numbers
-      const reRankedLeaderboard = filteredLeaderboard.map((entry, index) => ({
-        ...entry,
-        rank: index + 1 // Re-rank starting from 1
-      }))
-      
-      // Show only OTP verified users in leaderboard format
-      setLeaderboard(reRankedLeaderboard)
-      
-      // Find current user's rank (only if they're OTP verified)
-      const userEntry = reRankedLeaderboard.find(entry => entry.host_id === user.id)
-      setCurrentUserRank(userEntry || null)
-
+      setLeaderboard(data.leaderboard)
+      setCurrentUserRank(data.currentUserRank)
+      setCurrentUserId(data.currentUserId)
+      prefetchImageUris(data.leaderboard.map((e) => e.avatar_url))
     } catch (error) {
       console.error('Error fetching leaderboard:', error)
     } finally {
@@ -125,302 +53,396 @@ export default function LeaderboardScreen() {
 
   const onRefresh = () => {
     setRefreshing(true)
-    fetchLeaderboard()
+    fetchLeaderboard({ force: true })
   }
 
-  const getRankIcon = (rank: number) => {
-    switch (rank) {
-      case 1:
-        return { name: 'trophy', color: '#FFD700' }
-      case 2:
-        return { name: 'medal', color: '#C0C0C0' }
-      case 3:
-        return { name: 'medal', color: '#CD7F32' }
-      default:
-        return { name: 'person', color: theme.textSecondary }
+  const topThree = useMemo(() => leaderboard.slice(0, 3), [leaderboard])
+  const first = topThree[0]
+  const second = topThree[1]
+  const third = topThree[2]
+
+  const listData = useMemo((): ListRow[] => {
+    const ranks4Through10 = leaderboard.slice(3, 10)
+    const userOut =
+      !!currentUserId &&
+      !!currentUserRank &&
+      currentUserRank.rank > 10 &&
+      !ranks4Through10.some((e) => e.host_id === currentUserId)
+
+    if (userOut) {
+      return [...ranks4Through10, { ...currentUserRank, __selfFooter: true }]
     }
+    return ranks4Through10
+  }, [leaderboard, currentUserId, currentUserRank])
+
+  const podiumGradient = useMemo(
+    () => [theme.primary, theme.background] as [string, string],
+    [theme.primary, theme.background]
+  )
+
+  if (loading) {
+    return (
+      <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.background }]}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+          <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading leaderboard…</Text>
+        </View>
+      </SafeAreaView>
+    )
   }
 
-  const getRankBackground = (rank: number) => {
-    switch (rank) {
-      case 1:
-        return ['#FFD700', '#FFA500']
-      case 2:
-        return ['#C0C0C0', '#A8A8A8']
-      case 3:
-        return ['#CD7F32', '#B8860B']
-      default:
-        return [theme.surface, theme.surface]
+  const renderPodiumSlot = (
+    entry: LeaderboardEntry | undefined,
+    rank: number,
+    opts: { avatarSize: number; pedestal: number; highlight?: boolean }
+  ) => {
+    if (!entry) {
+      return <View style={[styles.podiumColumn, { paddingBottom: opts.pedestal, width: 110 }]} />
     }
-  }
-
-  const renderLeaderboardItem = ({ item, index }: { item: LeaderboardEntry; index: number }) => {
-    const isCurrentUser = item.host_id === currentUserId
-    const rankIcon = getRankIcon(item.rank)
-    const rankBackground = getRankBackground(item.rank)
+    const isYou = currentUserId === entry.host_id
+    const score = entry.total_rsvps
 
     return (
-      <View
-        style={[
-          styles.leaderboardItem,
-          { 
-            backgroundColor: isCurrentUser ? theme.primary + '08' : 'transparent',
-            borderLeftColor: isCurrentUser ? theme.primary : 'transparent',
-            borderLeftWidth: isCurrentUser ? 4 : 0,
-          }
-        ]}
-      >
-        <View style={styles.rankContainer}>
-          {item.rank <= 3 ? (
-            <LinearGradient
-              colors={rankBackground as [string, string]}
-              style={styles.rankBadge}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
-              <Ionicons name={rankIcon.name as any} size={16} color="white" />
-            </LinearGradient>
+      <View style={[styles.podiumColumn, { paddingBottom: opts.pedestal }]}>
+        {opts.highlight ? (
+          <View style={styles.crownWrap}>
+            <Ionicons name="trophy" size={rank === 1 ? 26 : 20} color="#FFD55A" />
+          </View>
+        ) : (
+          <View style={{ height: 26 }} />
+        )}
+        <View
+          style={[
+            styles.podiumAvatarRing,
+            {
+              width: opts.avatarSize + 8,
+              height: opts.avatarSize + 8,
+              borderRadius: (opts.avatarSize + 8) / 2,
+              borderColor:
+                rank === 1 ? '#FFD55A' : rank === 2 ? '#9ea3ad' : rank === 3 ? '#b87333' : theme.primary,
+            },
+          ]}
+        >
+          {entry.avatar_url ? (
+            <ImageWithFallback
+              source={{ uri: entry.avatar_url }}
+              style={{
+                width: opts.avatarSize,
+                height: opts.avatarSize,
+                borderRadius: opts.avatarSize / 2,
+              }}
+              fallbackIcon="person"
+              fallbackText=""
+              resizeMode="cover"
+              skipValidation={true}
+              priority="high"
+            />
           ) : (
-            <View style={[styles.rankNumber, { backgroundColor: theme.border }]}>
-              <Text style={[styles.rankNumberText, { color: theme.text }]}>
-                {item.rank}
-              </Text>
+            <View
+              style={{
+                width: opts.avatarSize,
+                height: opts.avatarSize,
+                borderRadius: opts.avatarSize / 2,
+                backgroundColor: theme.primary,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              <Ionicons name="person" size={opts.avatarSize * 0.35} color="white" />
             </View>
           )}
         </View>
-
-        <View style={styles.userInfo}>
-          <View style={styles.avatarContainer}>
-            {item.avatar_url ? (
-              <ImageWithFallback 
-                source={{ uri: item.avatar_url }} 
-                style={styles.avatar}
-                fallbackIcon="person"
-                fallbackText=""
-                resizeMode="cover"
-                skipValidation={true}
-                priority="high"
-              />
-            ) : (
-              <View style={[styles.avatarPlaceholder, { backgroundColor: theme.primary }]}>
-                <Ionicons name="person" size={18} color="white" />
-              </View>
-            )}
-          </View>
-          
-          <View style={styles.userDetails}>
-            <Text style={[styles.userName, { color: theme.text }]} numberOfLines={1}>
-              {item.full_name || item.username || 'Anonymous'}
-            </Text>
-            {item.major && (
-              <Text style={[styles.userMajor, { color: theme.textSecondary }]} numberOfLines={1}>
-                {item.major}
-                {item.graduating_year && ` • ${item.graduating_year}`}
-              </Text>
-            )}
-          </View>
+        <View style={[styles.rankPill, { backgroundColor: theme.primary }]}>
+          <Text style={styles.rankPillText}>{rank}</Text>
         </View>
-
-        <View style={styles.statsContainer}>
-          <View style={styles.statRow}>
-            <Text style={[styles.statValue, { color: theme.text }]}>
-              {item.total_rsvps}
-            </Text>
-            <Text style={[styles.statLabel, { color: theme.textSecondary }]}>
-              RSVPs
-            </Text>
-          </View>
-          <View style={styles.statRow}>
-            <Text style={[styles.statValue, { color: theme.text }]}>
-              {item.total_events_hosted}
-            </Text>
-            <Text style={[styles.statLabel, { color: theme.textSecondary }]}>
-              Events
-            </Text>
-          </View>
-        </View>
+        <Text style={[styles.podiumName, { color: '#fff' }]} numberOfLines={1}>
+          {entry.full_name || entry.username || 'Host'}
+        </Text>
+        {isYou ? (
+          <Text style={[styles.youTag, { color: '#a8e8ff' }]}>You</Text>
+        ) : null}
+        <Text style={[styles.podiumScore, { color: '#fff' }]}>{score}</Text>
+        <Text style={styles.podiumScoreLabel}>RSVPs</Text>
       </View>
     )
   }
 
-
+  const renderListRow = ({ item }: { item: ListRow }) => {
+    const isSelfRow = !!item.__selfFooter
+    const score = item.total_rsvps
+    return (
+      <View
+        style={[
+          styles.listRow,
+          {
+            backgroundColor: isSelfRow ? theme.primary + '18' : theme.card,
+          },
+        ]}
+      >
+        <Text style={[styles.listRank, { color: theme.textSecondary }]}>
+          {isSelfRow ? `#${item.rank}` : item.rank}
+        </Text>
+        {item.avatar_url ? (
+          <ImageWithFallback
+            source={{ uri: item.avatar_url }}
+            style={styles.listAvatar}
+            fallbackIcon="person"
+            fallbackText=""
+            resizeMode="cover"
+            skipValidation={true}
+            priority="normal"
+          />
+        ) : (
+          <View style={[styles.listAvatar, { backgroundColor: theme.primary, justifyContent: 'center', alignItems: 'center' }]}>
+            <Ionicons name="person" size={16} color="white" />
+          </View>
+        )}
+        <View style={styles.listMiddle}>
+          <Text style={[styles.listName, { color: theme.text }]} numberOfLines={1}>
+            {item.full_name || item.username || 'Anonymous'}
+          </Text>
+          <View style={styles.listPointsRow}>
+            <Ionicons name="star" size={14} color="#f4c430" />
+            <Text style={[styles.listPoints, { color: theme.textSecondary, marginLeft: 6 }]}>{score} RSVPs</Text>
+          </View>
+        </View>
+        {isSelfRow ? (
+          <Text style={[styles.selfHint, { color: theme.primary }]}>Your rank</Text>
+        ) : (
+          <View style={{ width: 8 }} />
+        )}
+      </View>
+    )
+  }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.background }]}>
-        <View style={styles.headerContent}>
-          <View style={styles.titleContainer}>
-            <Ionicons name="trophy" size={32} color={theme.primary} />
-            <Text style={[styles.title, { color: theme.text }]}>Top Hosts</Text>
+    <View style={[styles.screenRoot, { backgroundColor: theme.background }]}>
+      <LinearGradient
+        colors={podiumGradient}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={styles.podiumSection}
+      >
+        <SafeAreaView edges={['top']} style={styles.podiumSafe}>
+          <Text style={styles.heroTitle}>LEADERBOARD</Text>
+          <Text style={styles.heroSubtitle}>Top hosts by RSVPs</Text>
+          <View style={styles.podiumRow}>
+            {renderPodiumSlot(second, 2, { avatarSize: 72, pedestal: 18 })}
+            {renderPodiumSlot(first, 1, { avatarSize: 92, pedestal: 36, highlight: true })}
+            {renderPodiumSlot(third, 3, { avatarSize: 72, pedestal: 18 })}
           </View>
-          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-            Ranked by total RSVPs received
-          </Text>
-        </View>
+        </SafeAreaView>
+      </LinearGradient>
+
+      <View style={[styles.listSheet, { backgroundColor: theme.background }]}>
+        <Text style={[styles.listHeading, { color: theme.text }]}>Rankings</Text>
+        <FlatList
+          data={listData}
+          keyExtractor={(item) => (item.__selfFooter ? `${item.host_id}-self` : item.host_id)}
+          renderItem={renderListRow}
+          style={styles.list}
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 12 }]}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />
+          }
+          showsVerticalScrollIndicator
+          ListEmptyComponent={
+            <View style={styles.emptyInline}>
+              <Ionicons name="trophy-outline" size={40} color={theme.textTertiary} />
+              <Text style={[styles.emptyInlineText, { color: theme.textSecondary }]}>
+                Not enough hosts yet for a full table.
+              </Text>
+            </View>
+          }
+        />
       </View>
-
-
-      <FlatList
-        data={leaderboard}
-        renderItem={renderLeaderboardItem}
-        keyExtractor={(item) => item.host_id}
-        contentContainerStyle={styles.listContainer}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={theme.primary}
-            progressViewOffset={0}
-          />
-        }
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="trophy-outline" size={64} color={theme.textSecondary} />
-            <Text style={[styles.emptyTitle, { color: theme.text }]}>No Users Yet</Text>
-            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-              Users will appear here as they join the app!
-            </Text>
-          </View>
-        }
-      />
-    </SafeAreaView>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screenRoot: {
     flex: 1,
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    marginBottom: 8,
+  podiumSection: {
+    paddingBottom: 14,
   },
-  headerContent: {
+  podiumSafe: {
+    paddingHorizontal: 16,
+  },
+  heroTitle: {
+    marginTop: 8,
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    color: '#ffffff',
+    textAlign: 'center',
+  },
+  heroSubtitle: {
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.78)',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  podiumRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    minHeight: 240,
+    paddingHorizontal: 4,
+  },
+  podiumColumn: {
     alignItems: 'center',
+    width: 112,
+    marginHorizontal: 2,
   },
-  titleContainer: {
+  crownWrap: {
+    marginBottom: 4,
+    height: 28,
+    justifyContent: 'flex-end',
+  },
+  podiumAvatarRing: {
+    borderWidth: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+      },
+      android: { elevation: 6 },
+    }),
+  },
+  rankPill: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  rankPillText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  podiumName: {
+    fontSize: 15,
+    fontWeight: '600',
+    maxWidth: 108,
+    textAlign: 'center',
+  },
+  youTag: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  podiumScore: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  podiumScoreLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.65)',
+    marginTop: 2,
+  },
+  listSheet: {
+    flex: 1,
+    paddingTop: 4,
+  },
+  listHeading: {
+    fontSize: 17,
+    fontWeight: '600',
+    paddingHorizontal: 18,
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  list: {
+    flex: 1,
+  },
+  listContent: {
+    paddingHorizontal: 14,
+    flexGrow: 1,
+  },
+  listRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    marginBottom: 10,
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.06,
+        shadowRadius: 4,
+      },
+      android: { elevation: 1 },
+    }),
+  },
+  listRank: {
+    width: 32,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  listAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginRight: 12,
+  },
+  listMiddle: {
+    flex: 1,
+    minWidth: 0,
+  },
+  listName: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  listPointsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  listPoints: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  selfHint: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   loadingContainer: {
+    flex: 1,
     paddingVertical: 20,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   loadingText: {
     marginTop: 8,
-    fontSize: 14,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginLeft: 12,
-  },
-  subtitle: {
     fontSize: 16,
+    fontWeight: '500',
+  },
+  container: {
+    flex: 1,
+  },
+  emptyInline: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  emptyInlineText: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: '500',
     textAlign: 'center',
-  },
-  listContainer: {
-    paddingBottom: 20,
-  },
-  leaderboardItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
-    backgroundColor: 'rgba(255,255,255,0.5)',
-    minHeight: 60,
-  },
-  rankContainer: {
-    marginRight: 16,
-  },
-  rankBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  rankNumber: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  rankNumberText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  userInfo: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatarContainer: {
-    marginRight: 10,
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-  },
-  avatarPlaceholder: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  userDetails: {
-    flex: 1,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  userMajor: {
-    fontSize: 14,
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minWidth: 100,
-    justifyContent: 'space-between',
-  },
-  statRow: {
-    alignItems: 'center',
-    marginHorizontal: 4,
-  },
-  statValue: {
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  statLabel: {
-    fontSize: 9,
-    marginTop: 1,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 24,
-    paddingHorizontal: 32,
+    paddingHorizontal: 24,
   },
 })

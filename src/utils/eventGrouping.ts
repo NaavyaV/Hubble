@@ -1,7 +1,9 @@
 import { EventWithAttendees } from '../types'
-import { getEventStartDate } from './eventTimeUtils'
+import { getEventStartDate, isEventCurrentlyHappening } from './eventTimeUtils'
 
 export type TimeSection = 'today' | 'thisWeek' | 'nextWeek'
+
+export type HomeTimeSection = 'rightNow' | 'restOfToday' | 'thisWeek' | 'nextWeek'
 
 export interface GroupedEvent<T = EventWithAttendees> {
   title: string
@@ -60,7 +62,6 @@ function getEventTimeSection(eventDate: string, startTime?: string): TimeSection
     ? getEventStartDate(eventDate, startTime)
     : getEventStartDate(eventDate, '00:00')
   
-  const now = new Date()
   const startOfToday = getStartOfToday()
   const endOfToday = getEndOfToday()
   const endOfThisWeek = getEndOfThisWeek()
@@ -89,9 +90,9 @@ function getEventTimeSection(eventDate: string, startTime?: string): TimeSection
  * Groups events by time sections: Today, This Week, Next Week On
  */
 export function groupEventsByTime<T extends EventWithAttendees>(events: T[]): GroupedEvent<T>[] {
-  const today: EventWithAttendees[] = []
-  const thisWeek: EventWithAttendees[] = []
-  const nextWeek: EventWithAttendees[] = []
+  const today: T[] = []
+  const thisWeek: T[] = []
+  const nextWeek: T[] = []
   
   events.forEach(event => {
     const section = getEventTimeSection(event.event_date, event.start_time)
@@ -109,7 +110,7 @@ export function groupEventsByTime<T extends EventWithAttendees>(events: T[]): Gr
     }
   })
   
-  const grouped: GroupedEvent[] = []
+  const grouped: GroupedEvent<T>[] = []
   
   if (today.length > 0) {
     grouped.push({ title: 'Today', data: today })
@@ -123,6 +124,95 @@ export function groupEventsByTime<T extends EventWithAttendees>(events: T[]): Gr
     grouped.push({ title: 'Next Week On', data: nextWeek })
   }
   
+  return grouped
+}
+
+/**
+ * Home feed sections: Right Now, Rest of today, This week, Next week on.
+ */
+export function getHomeTimeSection(
+  eventDate: string,
+  startTime: string,
+  endTime?: string | null
+): HomeTimeSection {
+  if (isEventCurrentlyHappening(eventDate, startTime, endTime || undefined)) {
+    return 'rightNow'
+  }
+
+  const eventStart = getEventStartDate(eventDate, startTime)
+  const endOfToday = getEndOfToday()
+  const endOfThisWeek = getEndOfThisWeek()
+  const startOfNextWeek = getStartOfNextWeek()
+
+  if (eventStart >= getStartOfToday() && eventStart <= endOfToday) {
+    return 'restOfToday'
+  }
+
+  if (eventStart > endOfToday && eventStart <= endOfThisWeek) {
+    return 'thisWeek'
+  }
+
+  if (eventStart >= startOfNextWeek) {
+    return 'nextWeek'
+  }
+
+  return 'nextWeek'
+}
+
+export function groupHomeEventsByTime<T extends EventWithAttendees>(
+  events: T[]
+): GroupedEvent<T>[] {
+  const rightNow: T[] = []
+  const restOfToday: T[] = []
+  const thisWeek: T[] = []
+  const nextWeek: T[] = []
+
+  events.forEach(event => {
+    const section = getHomeTimeSection(
+      event.event_date,
+      event.start_time,
+      event.end_time
+    )
+    switch (section) {
+      case 'rightNow':
+        rightNow.push(event)
+        break
+      case 'restOfToday':
+        restOfToday.push(event)
+        break
+      case 'thisWeek':
+        thisWeek.push(event)
+        break
+      case 'nextWeek':
+        nextWeek.push(event)
+        break
+    }
+  })
+
+  const sortByStart = (a: T, b: T) =>
+    getEventStartDate(a.event_date, a.start_time).getTime() -
+    getEventStartDate(b.event_date, b.start_time).getTime()
+
+  rightNow.sort(sortByStart)
+  restOfToday.sort(sortByStart)
+  thisWeek.sort(sortByStart)
+  nextWeek.sort(sortByStart)
+
+  const grouped: GroupedEvent<T>[] = []
+
+  if (rightNow.length > 0) {
+    grouped.push({ title: 'Right Now', data: rightNow })
+  }
+  if (restOfToday.length > 0) {
+    grouped.push({ title: 'Rest of today', data: restOfToday })
+  }
+  if (thisWeek.length > 0) {
+    grouped.push({ title: 'This week', data: thisWeek })
+  }
+  if (nextWeek.length > 0) {
+    grouped.push({ title: 'Next week on', data: nextWeek })
+  }
+
   return grouped
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useRef } from 'react'
 import {
   View,
   Text,
@@ -25,11 +25,7 @@ export default function ProfileScreen() {
   const [organization, setOrganization] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    fetchUserData()
-  }, [])
-
-  // Refresh when screen comes into focus (e.g., returning from EditProfile)
+  // Initial load + refresh when screen comes into focus (e.g., returning from EditProfile)
   useFocusEffect(
     React.useCallback(() => {
       fetchUserData()
@@ -292,8 +288,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 3,
-    borderColor: theme.primary,
+    borderWidth: 0,
   },
   avatarText: {
     fontSize: 32,
@@ -366,8 +361,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 16,
     paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.divider,
+    borderBottomWidth: 0,
+    borderBottomColor: 'transparent',
   },
   menuItemText: {
     fontSize: 16,

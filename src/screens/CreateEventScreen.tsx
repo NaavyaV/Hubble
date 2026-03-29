@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   ScrollView,
   Alert,
@@ -11,8 +12,11 @@ import {
   Platform,
   Switch,
   Modal,
+  Animated,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { LinearGradient } from 'expo-linear-gradient'
+import RNModal from 'react-native-modal'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import * as ImagePicker from 'expo-image-picker'
@@ -23,7 +27,6 @@ import { ImageWithFallback } from '../components'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay, getEventStartDate, parseLocalDate } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
-import { PREDEFINED_TAGS } from '../constants/tags'
 import { buildEventInvitationNotification, buildBatchNotifications, buildOrgEventCreatedNotification, buildEventEditDeleteNotification } from '../utils/notificationTemplates'
 import EventInviteScreen from './EventInviteScreen'
 import { validateContentWithAlert } from '../utils/contentFilter'
@@ -32,6 +35,12 @@ import {
   MAX_EVENT_DESCRIPTION_LENGTH,
   MAX_LOCATION_LENGTH,
 } from '../constants/validation'
+import {
+  type InviteThemeKey,
+  getInviteThemeGradient,
+  nextInviteThemeKey,
+  normalizeInviteThemeKey,
+} from '../utils/inviteEventTheme'
 
 interface CreateEventScreenProps {
   onBack: () => void
@@ -47,7 +56,29 @@ interface CreateEventScreenProps {
 
 export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent = false, orgId, eventId, existingEvent, isEditMode = false }: CreateEventScreenProps) {
   const { theme, isDark } = useTheme()
+  const insets = useSafeAreaInsets()
   const navigation = useNavigation()
+  const fadeOpacity = useRef(new Animated.Value(0)).current
+  const scheduleDismissToExitRef = useRef(false)
+  const eventDateBeforePickerRef = useRef<Date | null>(null)
+
+  const closeWithFade = useCallback(() => {
+    Animated.timing(fadeOpacity, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) onBack()
+    })
+  }, [fadeOpacity, onBack])
+
+  useEffect(() => {
+    Animated.timing(fadeOpacity, {
+      toValue: 1,
+      duration: 165,
+      useNativeDriver: true,
+    }).start()
+  }, [fadeOpacity])
   const getRoundedToNextFiveMinutes = () => {
     const d = new Date()
     const minutes = d.getMinutes()
@@ -76,17 +107,22 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [location, setLocation] = useState('')
-  const [maxAttendees, setMaxAttendees] = useState('')
+  const [maxGuestCount, setMaxGuestCount] = useState(0)
   const [eventDate, setEventDate] = useState(new Date())
   const initialStart = getRoundedToNextFiveMinutes()
   const [startTime, setStartTime] = useState(initialStart)
   const [endTime, setEndTime] = useState(getRoundedEndTimeFrom(initialStart))
   const [hasEndTime, setHasEndTime] = useState(false)
-  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [scheduleStep, setScheduleStep] = useState<'choose' | 'form'>(isEditMode ? 'form' : 'choose')
+  const [scheduleSheetOpen, setScheduleSheetOpen] = useState(true)
+  const [timingMode, setTimingMode] = useState<'now' | 'later' | null>(isEditMode ? 'later' : null)
+  const [durationHours, setDurationHours] = useState(1)
+  const [nowUseEndTime, setNowUseEndTime] = useState(false)
   const [privacy, setPrivacy] = useState<'public' | 'invite_only'>(isOrgEvent ? 'public' : 'public')
   const [invitedUsers, setInvitedUsers] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [imageUri, setImageUri] = useState<string | null>(null)
+  const [inviteThemeKey, setInviteThemeKey] = useState<InviteThemeKey>('default')
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [showStartTimePicker, setShowStartTimePicker] = useState(false)
   const [showEndTimePicker, setShowEndTimePicker] = useState(false)
@@ -98,7 +134,11 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       setTitle(existingEvent.title || '')
       setDescription(existingEvent.description || '')
       setLocation(existingEvent.location || '')
-      setMaxAttendees(existingEvent.max_attendees ? existingEvent.max_attendees.toString() : '')
+      setMaxGuestCount(
+        existingEvent.max_attendees != null && existingEvent.max_attendees > 0
+          ? Number(existingEvent.max_attendees)
+          : 0
+      )
       setEventDate(parseLocalDate(existingEvent.event_date))
       
       // Parse start time
@@ -118,13 +158,13 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
         setHasEndTime(false)
       }
       
-      setSelectedTags(existingEvent.tags || [])
       setPrivacy(existingEvent.privacy || 'public')
       
       // Set image if exists
       if (existingEvent.image_url) {
         setImageUri(existingEvent.image_url)
       }
+      setInviteThemeKey(normalizeInviteThemeKey(existingEvent.invite_theme_color))
       
       // Load existing invited users for private events
       if (existingEvent.privacy === 'invite_only' && !isOrgEvent) {
@@ -150,12 +190,27 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     }
   }
 
-  const toggleTag = (tag: string) => {
-    setSelectedTags(prev => 
-      prev.includes(tag) 
-        ? prev.filter(t => t !== tag)
-        : [...prev, tag]
-    )
+  const adjustDuration = (delta: number) => {
+    setDurationHours((h) => {
+      const next = Math.round((h + delta) * 2) / 2
+      return Math.max(0.5, next)
+    })
+  }
+
+  const handleScheduleNow = () => {
+    const n = new Date()
+    setTimingMode('now')
+    setScheduleStep('form')
+    setEventDate(n)
+    setStartTime(new Date(n.getTime()))
+    setNowUseEndTime(false)
+    setDurationHours(1)
+    setHasEndTime(false)
+  }
+
+  const handleScheduleLater = () => {
+    setTimingMode('later')
+    setScheduleStep('form')
   }
 
   const handleInviteUsers = () => {
@@ -177,9 +232,9 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [16, 9],
-        quality: 0.8,
+        allowsEditing: false,
+        // JPEG quality only (no native image-manipulator — works in Expo Go and all dev clients)
+        quality: 0.72,
       })
 
       if (!result.canceled) {
@@ -234,10 +289,6 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     return isMidnightSpanningEvent(startTimeStr, endTimeStr)
   }
 
-  const toggleDatePicker = () => {
-    setShowDatePicker(!showDatePicker)
-  }
-
   const toggleStartTimePicker = () => {
     setShowStartTimePicker(!showStartTimePicker)
   }
@@ -274,11 +325,31 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       return
     }
 
-    // Validate event times if end time is provided
-    if (hasEndTime) {
+    const isNowCreate = !isEditMode && timingMode === 'now'
+    if (isNowCreate) {
+      if (nowUseEndTime) {
+        const now = new Date()
+        const endCandidate = new Date(now)
+        endCandidate.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0)
+        if (endCandidate.getTime() <= now.getTime()) {
+          Alert.alert('Invalid end time', 'End time must be after now.')
+          return
+        }
+        const startTimeStr = now.toTimeString().split(' ')[0].substring(0, 5)
+        const endTimeStr = endCandidate.toTimeString().split(' ')[0].substring(0, 5)
+        const validation = validateEventTimes(startTimeStr, endTimeStr)
+        if (!validation.isValid) {
+          Alert.alert('Invalid Times', validation.errorMessage || 'Please check your event times')
+          return
+        }
+      } else if (durationHours < 0.5) {
+        Alert.alert('Duration', 'Duration must be at least 30 minutes.')
+        return
+      }
+    } else if (hasEndTime) {
       const startTimeStr = startTime.toTimeString().split(' ')[0].substring(0, 5)
       const endTimeStr = endTime.toTimeString().split(' ')[0].substring(0, 5)
-      
+
       const validation = validateEventTimes(startTimeStr, endTimeStr)
       if (!validation.isValid) {
         Alert.alert('Invalid Times', validation.errorMessage || 'Please check your event times')
@@ -411,9 +482,10 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
             end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
-            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            max_attendees: maxGuestCount > 0 ? maxGuestCount : null,
             image_url: imageUrl,
-            tags: selectedTags.length > 0 ? selectedTags : null,
+            invite_theme_color: inviteThemeKey === 'default' ? null : inviteThemeKey,
+            tags: null,
             updated_at: new Date().toISOString()
           })
           .eq('id', eventId)
@@ -430,9 +502,10 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
             end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
-            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            max_attendees: maxGuestCount > 0 ? maxGuestCount : null,
             image_url: imageUrl,
-            tags: selectedTags.length > 0 ? selectedTags : null,
+            invite_theme_color: inviteThemeKey === 'default' ? null : inviteThemeKey,
+            tags: null,
             updated_at: new Date().toISOString()
           })
           .eq('id', eventId)
@@ -625,6 +698,34 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
         .eq('id', user.id)
         .single()
 
+      let insertEventDate = eventDate
+      let insertStartTime = startTime
+      let insertEndTime: Date | null = null
+      let insertHasEnd = false
+
+      if (!isEditMode && timingMode === 'now') {
+        const now = new Date()
+        insertEventDate = now
+        insertStartTime = new Date(now.getTime())
+        if (nowUseEndTime) {
+          const end = new Date(now)
+          end.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0)
+          if (end.getTime() <= insertStartTime.getTime()) {
+            Alert.alert('Invalid end time', 'End time must be after now.')
+            setLoading(false)
+            return
+          }
+          insertEndTime = end
+          insertHasEnd = true
+        } else {
+          insertEndTime = new Date(insertStartTime.getTime() + durationHours * 60 * 60 * 1000)
+          insertHasEnd = true
+        }
+      } else {
+        insertHasEnd = hasEndTime
+        if (hasEndTime) insertEndTime = endTime
+      }
+
       // Create event - use org_events table for org events, events table for personal events
       let event
       if (isOrgEvent && orgId) {
@@ -636,14 +737,15 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             college_id: profileData?.college_id || null,
             title: title.trim(),
             description: description.trim() || null,
-            event_date: formatDateForDatabase(eventDate),
-            start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
-            end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+            event_date: formatDateForDatabase(insertEventDate),
+            start_time: insertStartTime.toTimeString().split(' ')[0].substring(0, 5),
+            end_time: insertHasEnd && insertEndTime ? insertEndTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
-            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            max_attendees: maxGuestCount > 0 ? maxGuestCount : null,
             image_url: imageUrl,
+            invite_theme_color: inviteThemeKey === 'default' ? null : inviteThemeKey,
             privacy: 'public',
-            tags: selectedTags.length > 0 ? selectedTags : null,
+            tags: null,
           })
           .select()
           .single()
@@ -659,14 +761,15 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             college_id: profileData?.college_id || null,
             title: title.trim(),
             description: description.trim() || null,
-            event_date: formatDateForDatabase(eventDate),
-            start_time: startTime.toTimeString().split(' ')[0].substring(0, 5),
-            end_time: hasEndTime ? endTime.toTimeString().split(' ')[0].substring(0, 5) : null,
+            event_date: formatDateForDatabase(insertEventDate),
+            start_time: insertStartTime.toTimeString().split(' ')[0].substring(0, 5),
+            end_time: insertHasEnd && insertEndTime ? insertEndTime.toTimeString().split(' ')[0].substring(0, 5) : null,
             location: location.trim(),
-            max_attendees: maxAttendees ? parseInt(maxAttendees) : null,
+            max_attendees: maxGuestCount > 0 ? maxGuestCount : null,
             image_url: imageUrl,
+            invite_theme_color: inviteThemeKey === 'default' ? null : inviteThemeKey,
             privacy: privacy,
-            tags: selectedTags.length > 0 ? selectedTags : null,
+            tags: null,
           })
           .select()
           .single()
@@ -895,14 +998,18 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             setTitle('')
             setDescription('')
             setLocation('')
-            setMaxAttendees('')
+            setMaxGuestCount(0)
             setEventDate(new Date())
             setStartTime(roundedStart)
             setEndTime(roundedEnd)
             setHasEndTime(false)
             setImageUri(null)
-            setSelectedTags([])
             setPrivacy('public')
+            setScheduleStep('choose')
+            setScheduleSheetOpen(true)
+            setTimingMode(null)
+            setDurationHours(1)
+            setNowUseEndTime(false)
             setInvitedUsers([])
             // Pass the created event to the callback so it can be added immediately
             onEventCreated(event)
@@ -917,33 +1024,203 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     }
   }
 
-  return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* Slim Sticky Header */}
-      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
-        <Text style={[styles.headerTitle, { color: theme.text }]}>
-          {isEditMode ? 'Edit Event' : 'Create Event'}
-        </Text>
-        <TouchableOpacity
-          onPress={onBack}
-          style={styles.closeButton}
-        >
-          <Ionicons name="close" size={24} color={theme.text} />
-        </TouchableOpacity>
-      </View>
+  const showForm = isEditMode || scheduleStep === 'form'
+  const isNowFlow = !isEditMode && timingMode === 'now'
 
+  const appleTitle = [
+    styles.appleField,
+    styles.appleTitle,
+    { backgroundColor: theme.surface, color: theme.text },
+  ]
+  const appleBody = [
+    styles.appleField,
+    styles.appleBody,
+    { backgroundColor: theme.surface, color: theme.text },
+  ]
+  const appleLine = [styles.appleField, { backgroundColor: theme.surface, color: theme.text }]
+
+  const rootBg =
+    isEditMode || scheduleStep === 'form' ? theme.background : 'transparent'
+  const formInviteBackdrop =
+    showForm && inviteThemeKey !== 'default'
+      ? getInviteThemeGradient(inviteThemeKey, isDark)
+      : null
+
+  return (
+    <Animated.View style={[styles.animatedRoot, { opacity: fadeOpacity }]}>
+      {formInviteBackdrop ? (
+        <LinearGradient
+          colors={formInviteBackdrop}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={styles.formBackdropFill}
+        />
+      ) : null}
+      <SafeAreaView
+        style={[
+          styles.container,
+          {
+            backgroundColor:
+              showForm && formInviteBackdrop ? 'transparent' : rootBg,
+          },
+        ]}
+        edges={['bottom', 'left', 'right']}
+      >
+      {showForm ? (
+        <TouchableOpacity
+          onPress={closeWithFade}
+          style={[
+            styles.floatingClose,
+            {
+              top: insets.top + 4,
+              backgroundColor: theme.surface,
+              shadowColor: theme.shadow,
+            },
+          ]}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        >
+          <Ionicons name="close" size={22} color={theme.text} />
+        </TouchableOpacity>
+      ) : null}
+
+      <RNModal
+        isVisible={!isEditMode && scheduleStep === 'choose' && scheduleSheetOpen}
+        onBackdropPress={() => {
+          scheduleDismissToExitRef.current = true
+          setScheduleSheetOpen(false)
+        }}
+        onModalHide={() => {
+          if (scheduleDismissToExitRef.current) {
+            scheduleDismissToExitRef.current = false
+            onBack()
+          }
+        }}
+        style={styles.scheduleRNModal}
+        backdropColor="#000"
+        animationIn="slideInUp"
+        animationOut="fadeOut"
+        animationInTiming={280}
+        animationOutTiming={220}
+        backdropTransitionInTiming={220}
+        backdropTransitionOutTiming={220}
+        useNativeDriver
+        useNativeDriverForBackdrop={false}
+        propagateSwipe={false}
+        avoidKeyboard={false}
+        hideModalContentWhileAnimating={false}
+        coverScreen
+        backdropOpacity={0.38}
+      >
+        <View style={[styles.scheduleSheetWrap, { backgroundColor: theme.card, paddingBottom: Math.max(24, insets.bottom + 16) }]}>
+          <TouchableOpacity
+            style={styles.scheduleSheetClose}
+            onPress={() => {
+              scheduleDismissToExitRef.current = true
+              setScheduleSheetOpen(false)
+            }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="close" size={22} color={theme.textSecondary} />
+          </TouchableOpacity>
+          <Text style={[styles.scheduleQuestion, { color: theme.text }]}>When is this?</Text>
+          <View style={styles.scheduleCirclesRow}>
+            <Pressable style={styles.scheduleOption} onPress={handleScheduleLater}>
+              <View
+                style={[
+                  styles.scheduleCircle,
+                  { backgroundColor: isDark ? theme.surface : theme.background },
+                ]}
+              >
+                <Ionicons name="calendar-outline" size={32} color={theme.primary} />
+              </View>
+              <Text style={[styles.scheduleLabel, { color: theme.textSecondary }]}>Later</Text>
+            </Pressable>
+            <Pressable style={styles.scheduleOption} onPress={handleScheduleNow}>
+              <View
+                style={[
+                  styles.scheduleCircle,
+                  { backgroundColor: isDark ? theme.surface : theme.background },
+                ]}
+              >
+                <Ionicons name="flash" size={32} color={theme.primary} />
+              </View>
+              <Text style={[styles.scheduleLabel, { color: theme.textSecondary }]}>Now</Text>
+            </Pressable>
+          </View>
+        </View>
+      </RNModal>
+
+      {showForm ? (
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.content}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scrollInner,
+            { paddingTop: insets.top + 36 },
+          ]}
+        >
           <View style={styles.form}>
-            {/* Event Title */}
+            {/* Cover: hero first; compact color + photo row (~50% width, Apple Invites–style) */}
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Event Title *</Text>
+              {imageUri ? (
+                <View style={styles.coverHeroWrap}>
+                  <ImageWithFallback source={{ uri: imageUri }} style={styles.coverHeroImage} resizeMode="cover" />
+                  <LinearGradient
+                    colors={['rgba(0,0,0,0.12)', 'rgba(0,0,0,0.5)']}
+                    style={styles.coverHeroScrim}
+                  />
+                  <TouchableOpacity
+                    style={styles.coverRemoveInside}
+                    onPress={() => setImageUri(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#fff" />
+                    <Text style={[styles.coverRemoveInsideText, { marginLeft: 6 }]}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              <View style={styles.coverCompactRow}>
+                <Pressable
+                  style={[
+                    styles.colorChipOuter,
+                    {
+                      borderColor: !isDark ? 'rgba(255,255,255,0.88)' : theme.surface,
+                    },
+                  ]}
+                  onPress={() => setInviteThemeKey((k) => nextInviteThemeKey(k))}
+                  accessibilityLabel="Cycle invite background color"
+                >
+                  <LinearGradient
+                    colors={getInviteThemeGradient(inviteThemeKey, isDark)}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.colorChipGradientInner}
+                  />
+                </Pressable>
+                <TouchableOpacity
+                  style={[styles.choosePhotoCapsule, { backgroundColor: theme.surface }]}
+                  onPress={pickImage}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.choosePhotoCapsuleText, { color: theme.text }]} numberOfLines={1}>
+                    {imageUri ? 'Change photo' : 'Choose photo'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Title</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter event title"
+                style={appleTitle}
+                placeholder="What's the event?"
                 placeholderTextColor={theme.inputPlaceholder}
                 value={title}
                 onChangeText={setTitle}
@@ -952,28 +1229,26 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
               />
             </View>
 
-            {/* Description */}
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Description</Text>
+              <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Notes</Text>
               <TextInput
-                style={[styles.input, styles.textArea, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter event description"
+                style={appleBody}
+                placeholder="Add details (optional)"
                 placeholderTextColor={theme.inputPlaceholder}
                 value={description}
                 onChangeText={setDescription}
                 multiline
-                numberOfLines={4}
+                textAlignVertical="top"
                 autoCorrect={false}
                 spellCheck={false}
               />
             </View>
 
-            {/* Location */}
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Location *</Text>
+              <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Where</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder, color: theme.inputText }]}
-                placeholder="Enter event location"
+                style={appleLine}
+                placeholder="Place or address"
                 placeholderTextColor={theme.inputPlaceholder}
                 value={location}
                 onChangeText={setLocation}
@@ -982,50 +1257,15 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
               />
             </View>
 
-            {/* Event Image */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Event Image (Optional)</Text>
-              <View style={[styles.imageContainer, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-                {imageUri ? (
-                  <View style={styles.imagePreviewContainer}>
-                    <TouchableOpacity style={styles.imagePreviewTouchable} onPress={pickImage}>
-                      <ImageWithFallback source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="cover" />
-                      <View style={styles.imageOverlay}>
-                        <View style={styles.imageOverlayContent}>
-                          <Ionicons name="camera" size={24} color="white" />
-                          <Text style={styles.imageOverlayText}>Tap to change</Text>
-                        </View>
-                      </View>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={[styles.deleteImageButton, { backgroundColor: theme.error }]}
-                      onPress={() => setImageUri(null)}
-                    >
-                      <Ionicons name="trash" size={16} color="white" />
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
-                    <View style={styles.imagePlaceholder}>
-                      <Ionicons name="camera" size={32} color={theme.textSecondary} />
-                      <Text style={[styles.imagePlaceholderText, { color: theme.textSecondary }]}>Tap to add image</Text>
-                    </View>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-
-            {/* Privacy Settings - Hidden for org events and edit mode */}
             {!isOrgEvent && !isEditMode && (
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
+              <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Privacy</Text>
               <View style={styles.privacyButtonsContainer}>
                 <TouchableOpacity
                   style={[
                     styles.privacyButton,
-                    { 
-                      backgroundColor: privacy === 'public' ? theme.primary : theme.surface, 
-                      borderColor: privacy === 'public' ? theme.primary : theme.border 
+                    {
+                      backgroundColor: privacy === 'public' ? theme.primary : theme.surface,
                     }
                   ]}
                   onPress={() => setPrivacy('public')}
@@ -1042,18 +1282,17 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                     Public
                   </Text>
                 </TouchableOpacity>
-                
+
                 <TouchableOpacity
                   style={[
                     styles.privacyButton,
-                    { 
-                      backgroundColor: privacy === 'invite_only' ? theme.primary : theme.surface, 
-                      borderColor: privacy === 'invite_only' ? theme.primary : theme.border 
+                    {
+                      backgroundColor: privacy === 'invite_only' ? theme.primary : theme.surface,
                     }
                   ]}
                   onPress={() => {
                     setPrivacy('invite_only')
-                    setMaxAttendees('') // Clear max attendees when switching to invite-only
+                    setMaxGuestCount(0)
                   }}
                 >
                   <Ionicons
@@ -1069,19 +1308,13 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                   </Text>
                 </TouchableOpacity>
               </View>
-              <Text style={[styles.privacyDescription, { color: theme.textSecondary }]}>
-                {privacy === 'public' 
-                  ? 'Anyone can see and join this event' 
-                  : 'Only invited people can see and join this event'}
-              </Text>
             </View>
             )}
 
-            {/* Privacy Display (Read-only) - Show in edit mode */}
             {!isOrgEvent && isEditMode && (
               <View style={styles.inputGroup}>
-                <Text style={[styles.label, { color: theme.text }]}>Privacy</Text>
-                <View style={[styles.privacyDisplay, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Privacy</Text>
+                <View style={[styles.privacyDisplay, { backgroundColor: theme.surface }]}>
                   <Ionicons
                     name={privacy === 'public' ? 'globe' : 'lock-closed'}
                     size={20}
@@ -1091,172 +1324,283 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                     {privacy === 'public' ? 'Public' : 'Private (Invite Only)'}
                   </Text>
                 </View>
-                <Text style={[styles.privacyDescription, { color: theme.textSecondary }]}>
-                  Privacy cannot be changed when editing an event
-                </Text>
               </View>
             )}
 
-            {/* Invitation Section - Only show when invite only is selected and not org event */}
             {!isOrgEvent && privacy === 'invite_only' && (
               <View style={styles.inputGroup}>
-                <Text style={[styles.label, { color: theme.text }]}>Invitations</Text>
+                <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Invitations</Text>
                 <TouchableOpacity
-                  style={[styles.inviteButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.inviteButton, { backgroundColor: theme.surface }]}
                   onPress={handleInviteUsers}
                 >
                   <Ionicons name="people" size={20} color={theme.primary} />
                   <Text style={[styles.inviteButtonText, { color: theme.text }]}>
-                    {invitedUsers.length === 0 
-                      ? 'Invite Friends' 
+                    {invitedUsers.length === 0
+                      ? 'Invite friends'
                       : `${invitedUsers.length} friend${invitedUsers.length === 1 ? '' : 's'} invited`}
                   </Text>
                   <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
                 </TouchableOpacity>
-                {invitedUsers.length > 0 && (
-                  <Text style={[styles.inviteDescription, { color: theme.textSecondary }]}>
-                    Tap to manage invitations
-                  </Text>
-                )}
               </View>
             )}
 
-            {/* Notify Friends Section - Only show when public is selected and not org event */}
             {!isOrgEvent && privacy === 'public' && (
               <View style={styles.inputGroup}>
-                <Text style={[styles.label, { color: theme.text }]}>Notify Friends</Text>
+                <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Notify friends</Text>
                 <TouchableOpacity
-                  style={[styles.inviteButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                  style={[styles.inviteButton, { backgroundColor: theme.surface }]}
                   onPress={handleInviteUsers}
                 >
                   <Ionicons name="notifications" size={20} color={theme.primary} />
                   <Text style={[styles.inviteButtonText, { color: theme.text }]}>
-                    {invitedUsers.length === 0 
-                      ? 'Notify Friends' 
+                    {invitedUsers.length === 0
+                      ? 'Choose who to notify'
                       : `${invitedUsers.length} friend${invitedUsers.length === 1 ? '' : 's'} to notify`}
                   </Text>
                   <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
                 </TouchableOpacity>
-                {invitedUsers.length > 0 && (
-                  <Text style={[styles.inviteDescription, { color: theme.textSecondary }]}>
-                    Tap to manage notifications
-                  </Text>
-                )}
               </View>
             )}
 
-            {/* Event Date */}
+            {!isNowFlow ? (
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Date</Text>
+              <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Date</Text>
               <TouchableOpacity
-                style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                onPress={toggleDatePicker}
+                style={[styles.dateTimeButton, { backgroundColor: theme.surface }]}
+                onPress={() => {
+                  eventDateBeforePickerRef.current = new Date(eventDate.getTime())
+                  setShowDatePicker(true)
+                }}
+                activeOpacity={0.85}
               >
                 <Ionicons name="calendar" size={20} color={theme.primary} />
                 <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatDate(eventDate)}</Text>
               </TouchableOpacity>
-              {showDatePicker && (
+              {Platform.OS === 'ios' ? (
+                <Modal
+                  visible={showDatePicker}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => {
+                    const snap = eventDateBeforePickerRef.current
+                    if (snap) setEventDate(new Date(snap.getTime()))
+                    setShowDatePicker(false)
+                  }}
+                >
+                  <View style={styles.dateModalRoot}>
+                    <Pressable
+                      style={StyleSheet.absoluteFill}
+                      onPress={() => {
+                        const snap = eventDateBeforePickerRef.current
+                        if (snap) setEventDate(new Date(snap.getTime()))
+                        setShowDatePicker(false)
+                      }}
+                    />
+                    <View
+                      style={[
+                        styles.dateModalSheet,
+                        {
+                          backgroundColor: theme.card,
+                          zIndex: 2,
+                          elevation: 10,
+                          paddingBottom: Math.max(insets.bottom, 12),
+                        },
+                      ]}
+                    >
+                      <View style={styles.dateModalToolbar}>
+                        <TouchableOpacity
+                          style={[styles.dateModalCircleBtn, { backgroundColor: theme.surface }]}
+                          onPress={() => {
+                            const snap = eventDateBeforePickerRef.current
+                            if (snap) setEventDate(new Date(snap.getTime()))
+                            setShowDatePicker(false)
+                          }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="close" size={20} color={theme.textSecondary} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.dateModalDoneSmall, { backgroundColor: theme.primary }]}
+                          onPress={() => setShowDatePicker(false)}
+                        >
+                          <Text style={[styles.dateModalDoneSmallText, { color: theme.buttonText }]}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        value={eventDate}
+                        mode="date"
+                        display="inline"
+                        onChange={(_, selectedDate) => {
+                          if (selectedDate) setEventDate(selectedDate)
+                        }}
+                        minimumDate={new Date()}
+                        themeVariant={isDark ? 'dark' : 'light'}
+                        style={styles.datePickerInlineIOS}
+                      />
+                    </View>
+                  </View>
+                </Modal>
+              ) : showDatePicker ? (
                 <DateTimePicker
                   value={eventDate}
                   mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  display="default"
                   onChange={(event, selectedDate) => {
-                    setShowDatePicker(Platform.OS === 'ios')
-                    if (selectedDate) {
-                      setEventDate(selectedDate)
-                    }
+                    setShowDatePicker(false)
+                    if (event.type === 'dismissed') return
+                    if (selectedDate) setEventDate(selectedDate)
                   }}
                   minimumDate={new Date()}
-                  textColor={theme.text}
-                  themeVariant={isDark ? 'dark' : 'light'}
                 />
-              )}
+              ) : null}
             </View>
+            ) : null}
 
-            {/* Max Attendees - Only show for public events */}
             {privacy === 'public' && (
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={[styles.label, { color: theme.text }]}>Max Attendees</Text>
-                <TextInput
-                  style={[
-                    styles.input, 
-                    { 
-                        backgroundColor: theme.inputBackground, 
-                        borderColor: theme.inputBorder, 
-                        color: theme.inputText 
-                    }
-                  ]}
-                    placeholder="Optional"
+            <View style={styles.inputGroup}>
+              <View style={[styles.maxGuestsRow, { backgroundColor: theme.surface }]}>
+                <Text style={[styles.maxGuestsLabelSide, { color: theme.textSecondary }]}>Max guests</Text>
+                <View style={styles.maxGuestsFieldSlot}>
+                  <TextInput
+                    style={[
+                      styles.maxGuestsField,
+                      { backgroundColor: theme.inputBackground, color: theme.text },
+                    ]}
+                    placeholder="optional"
                     placeholderTextColor={theme.inputPlaceholder}
-                    value={maxAttendees}
-                    onChangeText={setMaxAttendees}
-                  keyboardType="numeric"
-                  autoCorrect={false}
-                  spellCheck={false}
-                />
+                    value={maxGuestCount === 0 ? '' : String(maxGuestCount)}
+                    onChangeText={(t) => {
+                      const d = t.replace(/[^0-9]/g, '')
+                      if (d === '') {
+                        setMaxGuestCount(0)
+                        return
+                      }
+                      const n = parseInt(d, 10)
+                      if (!Number.isNaN(n)) setMaxGuestCount(Math.min(99999, n))
+                    }}
+                    keyboardType="number-pad"
+                    autoCorrect={false}
+                  />
+                </View>
+                <View style={styles.maxGuestsCounter}>
+                  <TouchableOpacity
+                    style={[styles.maxGuestsCounterBtn, { marginLeft: 0 }]}
+                    onPress={() => setMaxGuestCount((n) => Math.max(0, n - 1))}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name="remove"
+                      size={22}
+                      color={maxGuestCount === 0 ? theme.border : theme.primary}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.maxGuestsCounterBtn}
+                    onPress={() => setMaxGuestCount((n) => n + 1)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="add" size={22} color={theme.primary} />
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
             )}
 
-            {/* Start Time */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Start Time</Text>
-              <TouchableOpacity
-                style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                onPress={toggleStartTimePicker}
-              >
-                <Ionicons name="time" size={20} color={theme.primary} />
-                <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(startTime)}</Text>
-              </TouchableOpacity>
-              {showStartTimePicker && (
-                <DateTimePicker
-                  value={startTime}
-                  mode="time"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedTime) => {
-                    setShowStartTimePicker(Platform.OS === 'ios')
-                    if (selectedTime) {
-                      setStartTime(selectedTime)
-                    }
-                  }}
-                  textColor={theme.text}
-                  themeVariant={isDark ? 'dark' : 'light'}
-                  minuteInterval={5}
-                />
-              )}
-            </View>
+            {isNowFlow ? (
+              <>
+                <View style={[styles.inputGroup, nowUseEndTime && styles.dimmedBlock]}>
+                  <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Duration</Text>
+                  <View style={[styles.durationRow, { backgroundColor: theme.surface }]}>
+                    <TouchableOpacity
+                      onPress={() => adjustDuration(-0.5)}
+                      style={styles.durationBtn}
+                      disabled={nowUseEndTime}
+                    >
+                      <Ionicons name="remove" size={24} color={nowUseEndTime ? theme.border : theme.primary} />
+                    </TouchableOpacity>
+                    <Text style={[styles.durationValue, { color: theme.text }]}>
+                      {durationHours % 1 === 0 ? durationHours.toFixed(0) : durationHours.toFixed(1)} h
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => adjustDuration(0.5)}
+                      style={styles.durationBtn}
+                      disabled={nowUseEndTime}
+                    >
+                      <Ionicons name="add" size={24} color={nowUseEndTime ? theme.border : theme.primary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
 
-            {/* End Time */}
-            <View style={[styles.inputGroup, styles.endTimeGroup]}>
-              <View style={styles.endTimeHeader}>
-                <Text style={[styles.label, { color: theme.text, flex: 1 }]}>End Time</Text>
-                <Switch
-                  value={hasEndTime}
-                  onValueChange={setHasEndTime}
-                  trackColor={{ false: theme.border, true: theme.primary }}
-                  thumbColor={hasEndTime ? theme.buttonText : theme.textSecondary}
-                  ios_backgroundColor={theme.border}
-                />
-              </View>
-              {hasEndTime && (
-                <>
+                <View style={styles.inputGroup}>
+                  <View style={styles.endTimeHeader}>
+                    <Text style={[styles.labelMinimal, { color: theme.textSecondary, flex: 1 }]}>End time instead</Text>
+                    <Switch
+                      value={nowUseEndTime}
+                      onValueChange={(v) => {
+                        setNowUseEndTime(v)
+                        if (v) {
+                          const n = new Date()
+                          const def = new Date(n.getTime() + 60 * 60 * 1000)
+                          setEndTime(def)
+                        }
+                      }}
+                      trackColor={{ false: theme.border, true: theme.primary }}
+                      thumbColor={nowUseEndTime ? theme.buttonText : theme.textSecondary}
+                      ios_backgroundColor={theme.border}
+                    />
+                  </View>
+                </View>
+
+                {nowUseEndTime ? (
+                  <View style={[styles.inputGroup, styles.nowEndPickWrap]}>
+                    <TouchableOpacity
+                      style={[styles.dateTimeButton, { backgroundColor: theme.surface }]}
+                      onPress={toggleEndTimePicker}
+                    >
+                      <Ionicons name="time" size={20} color={theme.primary} />
+                      <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(endTime)}</Text>
+                    </TouchableOpacity>
+                    {showEndTimePicker && (
+                      <DateTimePicker
+                        value={endTime}
+                        mode="time"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={(event, selectedTime) => {
+                          setShowEndTimePicker(Platform.OS === 'ios')
+                          if (selectedTime) {
+                            setEndTime(selectedTime)
+                          }
+                        }}
+                        textColor={theme.text}
+                        themeVariant={isDark ? 'dark' : 'light'}
+                        minuteInterval={5}
+                      />
+                    )}
+                  </View>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* Start Time */}
+                <View style={styles.inputGroup}>
+                  <Text style={[styles.labelMinimal, { color: theme.textSecondary }]}>Start time</Text>
                   <TouchableOpacity
-                    style={[styles.dateTimeButton, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                    onPress={toggleEndTimePicker}
+                    style={[styles.dateTimeButton, { backgroundColor: theme.surface }]}
+                    onPress={toggleStartTimePicker}
                   >
                     <Ionicons name="time" size={20} color={theme.primary} />
-                    <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(endTime)}</Text>
+                    <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(startTime)}</Text>
                   </TouchableOpacity>
-                  {showEndTimePicker && (
+                  {showStartTimePicker && (
                     <DateTimePicker
-                      value={endTime}
+                      value={startTime}
                       mode="time"
                       display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                       onChange={(event, selectedTime) => {
-                        setShowEndTimePicker(Platform.OS === 'ios')
+                        setShowStartTimePicker(Platform.OS === 'ios')
                         if (selectedTime) {
-                          setEndTime(selectedTime)
+                          setStartTime(selectedTime)
                         }
                       }}
                       textColor={theme.text}
@@ -1264,44 +1608,57 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
                       minuteInterval={5}
                     />
                   )}
-                  {/* Midnight spanning indicator */}
-                  {isCurrentlyMidnightSpanning() && (
-                    <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
-                      <Ionicons name="moon" size={16} color={theme.primary} />
-                      <Text style={[styles.midnightText, { color: theme.primary }]}>
-                        Event spans to next day
-                      </Text>
-                    </View>
-                  )}
-                </>
-              )}
-            </View>
+                </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.text }]}>Tags</Text>
-              <Text style={[styles.tagsDescription, { color: theme.textSecondary }]}>Select relevant tags for your event</Text>
-              <View style={styles.tagsContainer}>
-                {PREDEFINED_TAGS.map((tag) => (
-                  <TouchableOpacity
-                    key={tag}
-                    style={[
-                      styles.tagButton,
-                      { backgroundColor: theme.surface, borderColor: theme.border },
-                      selectedTags.includes(tag) && { backgroundColor: theme.primary, borderColor: theme.primary }
-                    ]}
-                    onPress={() => toggleTag(tag)}
-                  >
-                    <Text style={[
-                      styles.tagText,
-                      { color: theme.textSecondary },
-                      selectedTags.includes(tag) && { color: theme.buttonText }
-                    ]}>
-                      {tag}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
+                <View style={[styles.inputGroup, styles.endTimeGroup]}>
+                  <View style={styles.endTimeHeader}>
+                    <Text style={[styles.labelMinimal, { color: theme.textSecondary, flex: 1 }]}>End time</Text>
+                    <Switch
+                      value={hasEndTime}
+                      onValueChange={setHasEndTime}
+                      trackColor={{ false: theme.border, true: theme.primary }}
+                      thumbColor={hasEndTime ? theme.buttonText : theme.textSecondary}
+                      ios_backgroundColor={theme.border}
+                    />
+                  </View>
+                  {hasEndTime && (
+                    <>
+                      <TouchableOpacity
+                        style={[styles.dateTimeButton, { backgroundColor: theme.surface }]}
+                        onPress={toggleEndTimePicker}
+                      >
+                        <Ionicons name="time" size={20} color={theme.primary} />
+                        <Text style={[styles.dateTimeText, { color: theme.text }]}>{formatTime(endTime)}</Text>
+                      </TouchableOpacity>
+                      {showEndTimePicker && (
+                        <DateTimePicker
+                          value={endTime}
+                          mode="time"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={(event, selectedTime) => {
+                            setShowEndTimePicker(Platform.OS === 'ios')
+                            if (selectedTime) {
+                              setEndTime(selectedTime)
+                            }
+                          }}
+                          textColor={theme.text}
+                          themeVariant={isDark ? 'dark' : 'light'}
+                          minuteInterval={5}
+                        />
+                      )}
+                      {isCurrentlyMidnightSpanning() && (
+                        <View style={[styles.midnightIndicator, { backgroundColor: theme.primary + '20', borderColor: theme.primary }]}>
+                          <Ionicons name="moon" size={16} color={theme.primary} />
+                          <Text style={[styles.midnightText, { color: theme.primary }]}>
+                            Event spans to next day
+                          </Text>
+                        </View>
+                      )}
+                    </>
+                  )}
+                </View>
+              </>
+            )}
 
             <TouchableOpacity
               style={[
@@ -1321,6 +1678,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      ) : null}
 
       {/* Event Invite Modal */}
       <Modal
@@ -1337,40 +1695,42 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
         />
       </Modal>
     </SafeAreaView>
+    </Animated.View>
   )
 }
 
 
 const styles = StyleSheet.create({
-  container: {
+  animatedRoot: {
     flex: 1,
-  },
-  header: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
     position: 'relative',
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    letterSpacing: -0.5,
+  formBackdropFill: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
   },
-  closeButton: {
+  container: {
+    flex: 1,
+    zIndex: 1,
+  },
+  floatingClose: {
     position: 'absolute',
-    right: 20,
-    padding: 4,
+    right: 14,
+    zIndex: 40,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.12,
+        shadowRadius: 3,
+      },
+      android: { elevation: 3 },
+    }),
   },
   keyboardView: {
     flex: 1,
@@ -1378,19 +1738,95 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  scrollInner: {
+    flexGrow: 1,
+  },
   form: {
-    padding: 20,
+    paddingHorizontal: 18,
+    paddingTop: 0,
+    paddingBottom: 28,
   },
   inputGroup: {
     marginBottom: 20,
   },
   endTimeGroup: {
-    marginBottom: 30,
+    marginBottom: 12,
+  },
+  nowEndPickWrap: {
+    marginTop: -4,
+    marginBottom: 16,
+  },
+  maxGuestsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  maxGuestsLabelSide: {
+    flexShrink: 0,
+    marginRight: 10,
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  maxGuestsFieldSlot: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
+    alignItems: 'center',
+  },
+  maxGuestsField: {
+    width: '75%',
+    maxWidth: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    fontSize: 16,
+    borderWidth: 0,
+    textAlign: 'center',
+  },
+  maxGuestsCounter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  maxGuestsCounterBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    marginLeft: 6,
   },
   label: {
     fontSize: 16,
     fontWeight: '500',
     marginBottom: 8,
+  },
+  labelMinimal: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  appleField: {
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    fontSize: 17,
+    borderWidth: 0,
+  },
+  appleTitle: {
+    fontSize: 22,
+    fontWeight: '600',
+    letterSpacing: -0.4,
+  },
+  appleBody: {
+    minHeight: 130,
+    paddingTop: 12,
+    paddingBottom: 14,
+    fontSize: 17,
+    lineHeight: 24,
   },
   input: {
     borderRadius: 8,
@@ -1403,6 +1839,142 @@ const styles = StyleSheet.create({
     height: 100,
     textAlignVertical: 'top',
   },
+  scheduleRNModal: {
+    justifyContent: 'flex-end',
+    margin: 0,
+  },
+  scheduleSheetWrap: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 22,
+    paddingTop: 6,
+    paddingBottom: 28,
+  },
+  scheduleSheetClose: {
+    position: 'absolute',
+    right: 14,
+    top: 10,
+    zIndex: 2,
+    padding: 6,
+  },
+  scheduleQuestion: {
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 22,
+    letterSpacing: -0.3,
+    marginTop: 8,
+  },
+  scheduleCirclesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'flex-start',
+  },
+  scheduleOption: {
+    alignItems: 'center',
+    minWidth: 120,
+  },
+  scheduleCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  scheduleLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  coverCompactRow: {
+    width: '50%',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  colorChipOuter: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 3.5,
+    overflow: 'hidden',
+  },
+  colorChipGradientInner: {
+    flex: 1,
+    borderRadius: 16,
+  },
+  choosePhotoCapsule: {
+    flex: 1,
+    marginLeft: 8,
+    minWidth: 0,
+    height: 40,
+    paddingHorizontal: 12,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  choosePhotoCapsuleText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  coverRemoveInside: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+  },
+  coverRemoveInsideText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  coverHeroWrap: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    position: 'relative',
+    width: '100%',
+    height: 220,
+    backgroundColor: '#111',
+  },
+  coverHeroImage: {
+    width: '100%',
+    height: '100%',
+  },
+  coverHeroScrim: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  inviteColorPreview: {
+    width: '100%',
+    height: 112,
+    borderRadius: 14,
+    marginTop: 2,
+  },
+  durationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  durationBtn: {
+    padding: 14,
+  },
+  durationValue: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  dimmedBlock: {
+    opacity: 0.38,
+  },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1410,30 +1982,10 @@ const styles = StyleSheet.create({
   halfWidth: {
     width: '48%',
   },
-  tagsDescription: {
-    fontSize: 14,
-    marginBottom: 12,
-  },
-  tagsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  tagButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    marginBottom: 8,
-  },
-  tagText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
   privacyButtonsContainer: {
     flexDirection: 'row',
     gap: 12,
-    marginTop: 8,
+    marginTop: 4,
   },
   privacyButton: {
     flex: 1,
@@ -1442,8 +1994,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 16,
     paddingVertical: 14,
-    borderRadius: 8,
-    borderWidth: 1,
+    borderRadius: 24,
+    borderWidth: 0,
   },
   privacyButtonText: {
     fontSize: 16,
@@ -1460,9 +2012,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 0,
+    marginTop: 4,
   },
   privacyDisplayText: {
     fontSize: 16,
@@ -1474,10 +2026,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 0,
+    marginTop: 4,
   },
   inviteButtonText: {
     fontSize: 16,
@@ -1496,7 +2048,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   createButton: {
-    borderRadius: 8,
+    borderRadius: 24,
     paddingVertical: 16,
     alignItems: 'center',
     marginTop: 20,
@@ -1574,14 +2126,52 @@ const styles = StyleSheet.create({
   dateTimeButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderWidth: 1,
+    borderWidth: 0,
   },
   dateTimeText: {
     fontSize: 16,
     marginLeft: 12,
+  },
+  dateModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  dateModalSheet: {
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingTop: 4,
+  },
+  dateModalToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  dateModalCircleBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dateModalDoneSmall: {
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+  },
+  dateModalDoneSmallText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  datePickerInlineIOS: {
+    width: '100%',
+    height: 360,
   },
   endTimeHeader: {
     flexDirection: 'row',
@@ -1595,8 +2185,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 6,
-    borderWidth: 1,
+    borderRadius: 8,
+    borderWidth: 0,
   },
   midnightText: {
     fontSize: 14,

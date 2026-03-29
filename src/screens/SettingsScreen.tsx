@@ -212,13 +212,6 @@ export default function SettingsScreen() {
         {/* Theme Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Appearance</Text>
-          
-          <View style={styles.themeContainer}>
-            <Text style={styles.themeLabel}>Theme</Text>
-            <Text style={styles.themeDescription}>
-              Choose how the app looks
-            </Text>
-          </View>
 
           {themeOptions.map((option) => (
             <TouchableOpacity
@@ -413,8 +406,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     backgroundColor: theme.headerBackground,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.headerBorder,
+    borderBottomWidth: 0,
+    borderBottomColor: 'transparent',
   },
   backButton: {
     padding: 8,
@@ -443,19 +436,6 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.text,
     marginBottom: 16,
   },
-  themeContainer: {
-    marginBottom: 8,
-  },
-  themeLabel: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: theme.text,
-    marginBottom: 4,
-  },
-  themeDescription: {
-    fontSize: 14,
-    color: theme.textSecondary,
-  },
   themeOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -465,12 +445,11 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 12,
     marginBottom: 8,
     backgroundColor: theme.surface,
-    borderWidth: 1,
-    borderColor: theme.border,
+    borderWidth: 0,
   },
   themeOptionSelected: {
     backgroundColor: theme.primary + '10',
-    borderColor: theme.primary,
+    borderWidth: 0,
   },
   themeOptionLeft: {
     flexDirection: 'row',
@@ -504,8 +483,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.surface,
     borderRadius: 12,
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: theme.border,
+    borderWidth: 0,
   },
   settingLeft: {
     flexDirection: 'row',
@@ -577,8 +555,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginBottom: 12,
   },
   editPhoneInput: {
-    borderWidth: 1,
-    borderColor: theme.inputBorder,
+    borderWidth: 0,
+    borderColor: 'transparent',
     backgroundColor: theme.inputBackground,
     color: theme.inputText,
     borderRadius: 8,
@@ -596,13 +574,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: theme.border,
+    borderWidth: 0,
     backgroundColor: theme.surface,
   },
   editPhonePrimary: {
     backgroundColor: theme.buttonPrimary,
-    borderColor: theme.buttonPrimary,
+    borderWidth: 0,
   },
   editPhoneButtonText: {
     color: theme.text,
