@@ -16,6 +16,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import * as ImagePicker from 'expo-image-picker'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { uploadBytesToBucket } from '../utils/upload'
 import { ImageWithFallback } from '../components'
 
@@ -133,7 +134,7 @@ export default function EventPhotoGalleryScreen() {
     setIsUploading(true)
     
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         Alert.alert('Error', 'You must be logged in to upload photos.')
         return
@@ -154,7 +155,8 @@ export default function EventPhotoGalleryScreen() {
             bucket: 'photos',
             filePath: filename,
             uri: imageUri,
-            contentType: 'image/jpeg'
+            contentType: 'image/jpeg',
+            purpose: 'gallery',
           })
           
           // Save photo metadata to database

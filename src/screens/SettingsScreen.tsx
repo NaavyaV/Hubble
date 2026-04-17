@@ -16,6 +16,7 @@ import { useNavigation } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import notificationService from '../services/notifications'
 import Constants from 'expo-constants'
 
@@ -63,7 +64,7 @@ export default function SettingsScreen() {
 
   const openEditPhoneNumber = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         Alert.alert('Error', 'User not found')
         return
@@ -83,7 +84,7 @@ export default function SettingsScreen() {
   const savePhoneNumber = async () => {
     try {
       setSavingPhone(true)
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         Alert.alert('Error', 'User not found')
         return
@@ -135,7 +136,7 @@ export default function SettingsScreen() {
   const deleteProfile = async () => {
     setDeleting(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         Alert.alert('Error', 'User not found')
         return

@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { safeFriendshipUserOrQuery, safeBlockOrQuery } from '../utils/queryHelpers'
 import { ImageWithFallback } from '../components'
 import { useTheme } from '../context/ThemeContext'
@@ -122,7 +123,7 @@ export default function EventInviteScreen(props?: EventInviteScreenProps) {
 
   const fetchFriends = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Optimize: Filter for accepted friendships in the query instead of in memory

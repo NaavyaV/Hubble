@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
@@ -45,7 +46,7 @@ export default function OrgEventsScreen() {
       }
 
       // Get the logged-in user to verify ownership
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         setLoading(false)
         setRefreshing(false)
@@ -64,7 +65,7 @@ export default function OrgEventsScreen() {
       const { data: eventsData, error } = await supabase
         .from('org_events')
         .select(`
-          *,
+          id, title, event_date, start_time, end_time, location, image_url, org_id, privacy, max_attendees, created_at, tags,
           attendees:org_event_attendees(
             id,
             user_id,
@@ -101,11 +102,7 @@ export default function OrgEventsScreen() {
     }
   }
 
-  useEffect(() => {
-    fetchOrgEvents()
-  }, [currentOrg?.id])
-
-  // Refresh events when the tab is focused
+  // Refresh events when the tab is focused (also handles mount + dependency changes)
   useFocusEffect(
     React.useCallback(() => {
       fetchOrgEvents()
@@ -144,7 +141,7 @@ export default function OrgEventsScreen() {
     if (!eventToDelete) return
 
     // Only allow deletion if user owns the org
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getCachedUser()
     if (!user || !currentOrg) return
 
     // Verify user owns this org

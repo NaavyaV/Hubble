@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { safeFriendshipOrQuery, safeFriendshipUserOrQuery } from '../utils/queryHelpers'
 import { ProfileModal, ImageWithFallback, OrgDetailModal, FriendCard, OrganizationCard } from '../components'
 import ReportModal, { ReportReason } from '../components/modals/ReportModal'
@@ -95,12 +96,40 @@ export default function SocialScreen() {
   const hasInitialized = useRef(false)
   const previousActiveTab = useRef<TabType | null>(null)
   const friendsSubTabRef = useRef<'people' | 'pending' | 'friends'>('people')
+  const friendshipRealtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const directorySearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prevDirectoryQueryRef = useRef('')
 
   useEffect(() => {
     // Don't set a timeout that forces loading to false
     // Let init() handle loading state properly
     init()
   }, [])
+
+  // Server-side directory search (2+ chars); restore capped list when cleared after search.
+  useEffect(() => {
+    if (!me || activeTab !== 'friends' || friendsSubTab !== 'people') return
+    const q = query.trim()
+    if (directorySearchDebounceRef.current) {
+      clearTimeout(directorySearchDebounceRef.current)
+      directorySearchDebounceRef.current = null
+    }
+    if (q.length >= 2) {
+      directorySearchDebounceRef.current = setTimeout(() => {
+        directorySearchDebounceRef.current = null
+        fetchAllUsers(true, me, q)
+      }, 350)
+    } else if (prevDirectoryQueryRef.current.length >= 2 && q.length < 2) {
+      fetchAllUsers(true, me, '')
+    }
+    prevDirectoryQueryRef.current = q
+    return () => {
+      if (directorySearchDebounceRef.current) {
+        clearTimeout(directorySearchDebounceRef.current)
+        directorySearchDebounceRef.current = null
+      }
+    }
+  }, [query, me, activeTab, friendsSubTab])
 
   // Set up network restoration callback to refresh when network comes back
   useEffect(() => {
@@ -169,6 +198,21 @@ export default function SocialScreen() {
       
       // No polling; realtime + focus + pull-to-refresh provide fresh data
       // Set up real-time subscription for friendships changes - always update
+      // Only subscribe to tables in supabase_realtime publication:
+      // friendships is published; profiles, organizations, org_followers,
+      // user_blocks, user_mutes, org_blocks are NOT — those refresh on focus
+      // and pull-to-refresh only.
+      const scheduleFriendshipRefresh = () => {
+        if (activeTab !== 'friends' || !me) return
+        if (friendshipRealtimeDebounceRef.current) {
+          clearTimeout(friendshipRealtimeDebounceRef.current)
+        }
+        friendshipRealtimeDebounceRef.current = setTimeout(() => {
+          friendshipRealtimeDebounceRef.current = null
+          fetchFriendships(me)
+        }, 450)
+      }
+
       const channel = supabase
         .channel('social-friendships-changes')
         .on(
@@ -179,12 +223,7 @@ export default function SocialScreen() {
             table: 'friendships',
             filter: `user_id=eq.${me}`
           },
-          () => {
-            if (activeTab === 'friends') {
-              fetchFriendships(me)
-              fetchAllUsers() // Also refresh users list on friendship changes
-            }
-          }
+          scheduleFriendshipRefresh
         )
         .on(
           'postgres_changes',
@@ -194,104 +233,15 @@ export default function SocialScreen() {
             table: 'friendships',
             filter: `friend_id=eq.${me}`
           },
-          () => {
-            if (activeTab === 'friends') {
-              fetchFriendships(me)
-              fetchAllUsers() // Also refresh users list on friendship changes
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'profiles',
-            filter: `id=eq.${me}`
-          },
-          () => {
-            // Only refetch when current user's profile changes (avoids global fan-out)
-            if (activeTab === 'friends') {
-              fetchAllUsers()
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'organizations'
-          },
-          () => {
-            if (activeTab === 'organizations') {
-              fetchOrganizations()
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'org_followers',
-            filter: `user_id=eq.${me}`
-          },
-          () => {
-            // Refresh followed orgs when follows change
-            if (activeTab === 'organizations') {
-              fetchFollowedOrgs()
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'user_blocks',
-            filter: `blocker_id=eq.${me}`
-          },
-          () => {
-            // Refresh blocked users when blocks change
-            if (activeTab === 'friends') {
-              fetchBlockedUsers()
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'user_mutes',
-            filter: `muter_id=eq.${me}`
-          },
-          () => {
-            // Refresh muted users when mutes change
-            if (activeTab === 'friends') {
-              fetchMutedUsers()
-            }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'org_blocks',
-            filter: `user_id=eq.${me}`
-          },
-          () => {
-            // Refresh blocked orgs when blocks change
-            if (activeTab === 'organizations') {
-              fetchBlockedOrgs()
-            }
-          }
+          scheduleFriendshipRefresh
         )
         .subscribe()
 
       return () => {
+        if (friendshipRealtimeDebounceRef.current) {
+          clearTimeout(friendshipRealtimeDebounceRef.current)
+          friendshipRealtimeDebounceRef.current = null
+        }
         supabase.removeChannel(channel)
       }
     }, [me, activeTab])
@@ -301,7 +251,7 @@ export default function SocialScreen() {
     try {
       setLoading(true) // Ensure loading is true at start
       
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         setLoading(false)
         return
@@ -376,7 +326,11 @@ export default function SocialScreen() {
     }
   }
 
-  const fetchAllUsers = async (forceRefreshBlockers = false, userId?: string) => {
+  const fetchAllUsers = async (
+    forceRefreshBlockers = false,
+    userId?: string,
+    directorySearch = '',
+  ) => {
     try {
       // Use provided userId or fall back to me state
       const targetUserId = userId || me
@@ -392,14 +346,24 @@ export default function SocialScreen() {
       const blockers = await fetchBlockersForUser(targetUserId)
       setBlockersSet(blockers)
       
-      // OPTIMIZED: Fetch only essential fields, limit to reasonable size, add pagination support
-      // The RLS policy on profiles should already exclude blockers, but we filter client-side too
-      const { data, error } = await supabase
+      const search = directorySearch.trim()
+      const escaped = search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+      let profileQuery = supabase
         .from('profiles')
-        .select(`id, full_name, avatar_url, phone_number, major, graduating_year, bio`)
+        .select(`id, full_name, username, avatar_url, phone_number, major, graduating_year, bio`)
         .eq('otp_verified', true)
         .order('full_name')
-        .limit(500)
+
+      if (search.length >= 2) {
+        profileQuery = profileQuery.or(
+          `full_name.ilike.%${escaped}%,username.ilike.%${escaped}%`,
+        )
+        profileQuery = profileQuery.limit(60)
+      } else {
+        profileQuery = profileQuery.limit(150)
+      }
+
+      const { data, error } = await profileQuery
 
       if (error) {
         console.error('Error fetching users:', error)
@@ -432,7 +396,10 @@ export default function SocialScreen() {
       const { data, error } = await supabase
         .from('friendships')
         .select(`
-          *,
+          id,
+          user_id,
+          friend_id,
+          status,
           user:profiles!friendships_user_id_fkey(
             id,
             full_name,
@@ -480,14 +447,18 @@ export default function SocialScreen() {
       const outgoingMap: Record<string, ProfileRow> = {}
       
       incomingRequests.forEach(f => {
-        if (f.user) {
-          incomingMap[f.user_id] = f.user
+        const row = f.user as ProfileRow | ProfileRow[] | null | undefined
+        const profile = Array.isArray(row) ? row[0] : row
+        if (profile?.id) {
+          incomingMap[f.user_id] = profile
         }
       })
       
       outgoingRequests.forEach(f => {
-        if (f.friend) {
-          outgoingMap[f.friend_id] = f.friend
+        const row = f.friend as ProfileRow | ProfileRow[] | null | undefined
+        const profile = Array.isArray(row) ? row[0] : row
+        if (profile?.id) {
+          outgoingMap[f.friend_id] = profile
         }
       })
       
@@ -896,7 +867,7 @@ export default function SocialScreen() {
   const fetchBlockers = async (): Promise<Set<string>> => {
     // Use me from state, or fall back to fetching current user
     if (!me) {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         console.warn('[BLOCKERS] ⚠️ No user ID available, returning empty set')
         return new Set()

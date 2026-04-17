@@ -9,7 +9,7 @@ export async function warmupTabCaches(): Promise<void> {
   try {
     const data = await getLeaderboard()
     if (data?.leaderboard?.length) {
-      prefetchImageUris(data.leaderboard.map(e => e.avatar_url))
+      prefetchImageUris(data.leaderboard.map(e => e.avatar_url), 16)
     }
   } catch {
     // Offline or transient errors — ignore; screens retry on focus/refresh.

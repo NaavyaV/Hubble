@@ -73,6 +73,7 @@ export default function OrgEditScreen({ navigation }: any) {
             filePath,
             uri,
             contentType,
+            purpose: 'avatar',
           })
 
           setIcon(uploadedUrl)

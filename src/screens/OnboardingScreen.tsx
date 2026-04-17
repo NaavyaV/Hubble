@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
+import { getCachedUser, getCachedSession } from '../services/sessionService'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
 import { ImageWithFallback } from '../components'
@@ -204,7 +205,7 @@ export default function OnboardingScreen({ navigation }: any) {
       setCollegesLoading(true)
       const { data: collegesData, error } = await supabase
         .from('colleges')
-        .select('*')
+        .select('id, name, email_domain, logo_url, short_name')
         .order('name')
       
       if (error) {
@@ -329,7 +330,7 @@ export default function OnboardingScreen({ navigation }: any) {
           const maxAttempts = 30 // Increased attempts to ensure we get authenticated
           
           while (!sessionEstablished && attempts < maxAttempts) {
-            const { data: { session: currentSession } } = await supabase.auth.getSession()
+            const currentSession = await getCachedSession()
             if (currentSession) {
               console.log('Session established successfully - user is authenticated')
               session = currentSession
@@ -373,14 +374,12 @@ export default function OnboardingScreen({ navigation }: any) {
               let uploadSession = session
               if (!uploadSession) {
                 console.log('Session not available, refreshing...')
-                const { data: { session: refreshedSession } } = await supabase.auth.getSession()
+                const refreshedSession = await getCachedSession()
                 if (!refreshedSession) {
-                  // Try to get user to refresh session
-                  const { data: { user: currentUser } } = await supabase.auth.getUser()
+                  const currentUser = await getCachedUser()
                   if (currentUser) {
-                    // User exists, try getting session again with a small delay
                     await new Promise(resolve => setTimeout(resolve, 200))
-                    const { data: { session: retrySession } } = await supabase.auth.getSession()
+                    const retrySession = await getCachedSession()
                     uploadSession = retrySession
                   }
                 } else {
@@ -388,8 +387,7 @@ export default function OnboardingScreen({ navigation }: any) {
                 }
               }
               
-              // Verify user is authenticated one more time
-              const { data: { user: verifyUser } } = await supabase.auth.getUser()
+              const verifyUser = await getCachedUser()
               if (!verifyUser) {
                 throw new Error('User authentication lost')
               }
@@ -425,6 +423,7 @@ export default function OnboardingScreen({ navigation }: any) {
                   filePath,
                   uri: data.profileImageUri,
                   contentType,
+                  purpose: 'avatar',
                 })
                 
                 console.log('Profile image uploaded successfully:', avatarUrl)
@@ -558,7 +557,7 @@ export default function OnboardingScreen({ navigation }: any) {
 
         // Step 5: Refresh session before following orgs and creating notification preferences
         // Ensure we have a valid session for RLS policies
-        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        const currentSession = await getCachedSession()
         if (!currentSession) {
           console.error('Session lost before following orgs - cannot proceed')
           Alert.alert(
@@ -569,8 +568,7 @@ export default function OnboardingScreen({ navigation }: any) {
           return
         }
         
-        // Verify user is authenticated
-        const { data: { user: currentUser } } = await supabase.auth.getUser()
+        const currentUser = await getCachedUser()
         if (!currentUser || currentUser.id !== authData.user.id) {
           console.error('User authentication mismatch')
           Alert.alert(

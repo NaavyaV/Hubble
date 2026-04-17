@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { Picker } from '@react-native-picker/picker'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 import { useTheme } from '../context/ThemeContext'
 import { ImageWithFallback } from '../components'
@@ -58,7 +59,7 @@ export default function EditProfileScreen({ navigation }: any) {
     try {
       const { data: collegesData, error } = await supabase
         .from('colleges')
-        .select('*')
+        .select('id, name, email_domain, logo_url, short_name')
         .order('name')
       
       if (error) {
@@ -73,12 +74,12 @@ export default function EditProfileScreen({ navigation }: any) {
 
   const fetchUserProfile = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (user) {
         // Fetch profile data from profiles table
         const { data: profileData, error } = await supabase
           .from('profiles')
-          .select('*')
+          .select('id, full_name, major, college_id, graduating_year, bio, avatar_url')
           .eq('id', user.id)
           .single()
         
@@ -133,6 +134,7 @@ export default function EditProfileScreen({ navigation }: any) {
         filePath,
         uri,
         contentType,
+        purpose: 'avatar',
       })
 
       return publicUrl
@@ -175,7 +177,7 @@ export default function EditProfileScreen({ navigation }: any) {
 
     setLoading(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       let avatarUrl = null
       if (profileImageUri && !profileImageUri.startsWith('http')) {
         // Only upload if it's a new local image

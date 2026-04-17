@@ -22,6 +22,7 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import * as ImagePicker from 'expo-image-picker'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { useTheme } from '../context/ThemeContext'
 import { ImageWithFallback } from '../components'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
@@ -371,7 +372,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
     if (!eventId) return
 
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         Alert.alert('Error', 'You must be logged in to edit an event')
         return
@@ -431,7 +432,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
   const performEditEvent = async (goingUserIds: string[], isOrgEvent: boolean) => {
     setLoading(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user || !eventId) {
         Alert.alert('Error', 'You must be logged in to edit an event')
         return
@@ -445,18 +446,13 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
           const contentType = guessContentTypeFromUri(imageUri)
           const filePath = `events/${Date.now()}-${Math.random().toString(36).substring(7)}.${contentType.split('/')[1]}`
           
-          await uploadBytesToBucket({
+          imageUrl = await uploadBytesToBucket({
             bucket: 'event-images',
             filePath,
             uri: imageUri,
-            contentType
+            contentType,
+            purpose: 'cover',
           })
-          
-          const { data } = supabase.storage
-            .from('event-images')
-            .getPublicUrl(filePath)
-          
-          imageUrl = data.publicUrl
         } catch (error) {
           console.warn('Image upload failed:', error)
           // Continue with existing image if upload fails
@@ -660,7 +656,7 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
         return
       }
 
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         Alert.alert('Error', 'You must be logged in to create an event')
         setLoading(false)
@@ -673,18 +669,13 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
           const contentType = guessContentTypeFromUri(imageUri)
           const filePath = `events/${Date.now()}-${Math.random().toString(36).substring(7)}.${contentType.split('/')[1]}`
           
-          await uploadBytesToBucket({
+          imageUrl = await uploadBytesToBucket({
             bucket: 'event-images',
             filePath,
             uri: imageUri,
-            contentType
+            contentType,
+            purpose: 'cover',
           })
-          
-          const { data } = supabase.storage
-            .from('event-images')
-            .getPublicUrl(filePath)
-          
-          imageUrl = data.publicUrl
         } catch (error) {
           console.warn('Image upload failed:', error)
           // Continue without image if upload fails

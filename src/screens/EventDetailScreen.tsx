@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { safeBlockOrQuery } from '../utils/queryHelpers'
 import NotificationService from '../services/notifications'
 import { ProfileModal, ImageWithFallback } from '../components'
@@ -193,7 +194,7 @@ export default function EventDetailScreen() {
 
   const fetchCurrentUser = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       setCurrentUserId(user?.id || null)
       
       // Check if this is an org event (from org_events table or has isOrgEvent flag)
@@ -237,7 +238,7 @@ export default function EventDetailScreen() {
 
   const ensureHostIsAttending = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Check if host is already in attendees
@@ -273,7 +274,7 @@ export default function EventDetailScreen() {
         setLoading(true)
       }
       
-      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      const currentUser = await getCachedUser()
       if (!currentUser) {
         setProfilesLoaded(true)
         setLoading(false)
@@ -441,6 +442,7 @@ export default function EventDetailScreen() {
         .select('id, image_url, caption')
         .eq('event_id', event.id)
         .order('created_at', { ascending: false })
+        .limit(120)
 
       if (error) throw error
       setEventPhotos(photos || [])
@@ -470,7 +472,7 @@ export default function EventDetailScreen() {
 
   const checkIfInvited = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         setIsInvited(false)
         return
@@ -529,7 +531,7 @@ export default function EventDetailScreen() {
 
   const handleAttendanceToggle = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // If user is currently going, remove their attendance
@@ -571,7 +573,7 @@ export default function EventDetailScreen() {
       const timer = setTimeout(async () => {
         try {
           // Check current attendance state after 2 minutes
-          const { data: { user: currentUser } } = await supabase.auth.getUser()
+          const currentUser = await getCachedUser()
           if (!currentUser) return
 
           const { data: currentAttendance } = await supabase
@@ -605,7 +607,7 @@ export default function EventDetailScreen() {
   const addAttendance = async () => {
     let user: any = null
     try {
-      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      const currentUser = await getCachedUser()
       if (!currentUser) return
       user = currentUser
 
@@ -699,7 +701,7 @@ export default function EventDetailScreen() {
 
   const removeAttendance = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Check if this is an org event
@@ -846,7 +848,7 @@ export default function EventDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              const { data: { user } } = await supabase.auth.getUser()
+              const user = await getCachedUser()
               if (!user) return
 
               // Check if this is an org event
@@ -931,7 +933,7 @@ export default function EventDetailScreen() {
 
   const sendNotGoingNotification = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user || !event.host_id || user.id === event.host_id) return
 
       // Get user's profile data for the notification
@@ -983,7 +985,7 @@ export default function EventDetailScreen() {
 
   const handleReportEvent = async (reason: ReportReason, comments?: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Confirmation alert is handled in ReportModal, so just submit
@@ -1009,7 +1011,7 @@ export default function EventDetailScreen() {
 
   const handleReportPhoto = async (reason: ReportReason, comments?: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user || !selectedPhotoUrl) return
 
       // Confirmation alert is handled in ReportModal, so just submit
@@ -1039,7 +1041,7 @@ export default function EventDetailScreen() {
 
   const handleInvitesUpdated = async (newInvitedUsers: string[]) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user || !isHost) return
 
       setShowInviteModal(false)
@@ -1164,7 +1166,7 @@ export default function EventDetailScreen() {
 
   const handleDeleteEvent = async () => {
     // Only allow deletion if user is hosting this event or owns the org
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getCachedUser()
     if (!user || (!isHost && !isOrgOwner)) {
       Alert.alert('Error', 'You can only delete events you are hosting or own')
       return
@@ -1241,7 +1243,7 @@ export default function EventDetailScreen() {
 
   const sendAttendanceChangeNotification = async (currentState: 'going' | null) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Check if this is an org event

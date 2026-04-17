@@ -1,4 +1,5 @@
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 
 export interface ImageValidationResult {
   isValid: boolean
@@ -98,7 +99,7 @@ function generateFallbackUrl(originalUrl: string): string | undefined {
  */
 export async function cleanupCorruptedImages(eventId?: string): Promise<number> {
   try {
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getCachedUser()
     if (!user) return 0
 
     let query = supabase

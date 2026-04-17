@@ -26,6 +26,9 @@ export default function CustomTabBar({ state, descriptors, navigation, pendingCo
       case 'ComingEvents':
         iconName = focused ? 'home' : 'home-outline'
         break
+      case 'Dining':
+        iconName = focused ? 'restaurant' : 'restaurant-outline'
+        break
       case 'Leaderboard':
         iconName = focused ? 'trophy' : 'trophy-outline'
         break

@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { getCachedUser } from './sessionService'
 import { safeBlockOrQuery } from '../utils/queryHelpers'
 
 export interface LeaderboardEntry {
@@ -58,13 +59,14 @@ export async function getLeaderboard(options?: {
 }
 
 async function fetchLeaderboardFromNetwork(): Promise<LeaderboardResult | null> {
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getCachedUser()
   if (!user) return null
 
   const { data: leaderboardData, error: leaderboardError } = await supabase
     .from('host_leaderboard')
-    .select('*')
+    .select('host_id, full_name, username, avatar_url, major, graduating_year, total_rsvps, total_events_hosted, rank')
     .order('rank', { ascending: true })
+    .limit(50)
 
   if (leaderboardError) throw leaderboardError
 

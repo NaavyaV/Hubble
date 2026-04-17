@@ -1,7 +1,7 @@
 import 'react-native-url-polyfill/auto'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createClient } from '@supabase/supabase-js'
-import { isNetworkError, showNetworkErrorAlert, checkNetworkConnection } from '../utils/networkUtils'
+import { isNetworkError, showNetworkErrorAlert, checkNetworkConnection, getIsOnline, setIsOnline } from '../utils/networkUtils'
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!
@@ -20,62 +20,51 @@ export function isInvalidRefreshTokenError(error: any): boolean {
   )
 }
 
-// Wrapper for fetch that handles network errors globally
+// Wrapper for fetch that handles network errors globally.
+// Uses cached connectivity state to avoid blocking every request with a
+// separate HTTP probe. A fresh check only runs when a request fails.
 async function fetchWithNetworkHandling(url: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
-  try {
-    // Check network connection first
+  if (!getIsOnline()) {
     const connected = await checkNetworkConnection()
     if (!connected) {
       if (!isHandlingNetworkError) {
         isHandlingNetworkError = true
         showNetworkErrorAlert(() => {
           isHandlingNetworkError = false
-          // User can retry manually - the request will be retried when they tap retry
         })
       }
       throw new Error('Network request failed: No internet connection')
     }
-    
-    // Make the request with timeout
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout
-    
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      })
-      
-      clearTimeout(timeoutId)
-      isHandlingNetworkError = false // Reset flag on success
-      return response
-    } catch (fetchError: any) {
-      clearTimeout(timeoutId)
-      
-      // Check if it's a network error
-      if (isNetworkError(fetchError)) {
-        if (!isHandlingNetworkError) {
-          isHandlingNetworkError = true
-          showNetworkErrorAlert(() => {
-            isHandlingNetworkError = false
-            // User can retry manually
-          })
-        }
+  }
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 30000)
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+
+    clearTimeout(timeoutId)
+    isHandlingNetworkError = false
+    setIsOnline(true)
+    return response
+  } catch (fetchError: any) {
+    clearTimeout(timeoutId)
+
+    if (isNetworkError(fetchError)) {
+      setIsOnline(false)
+      const stillOffline = !(await checkNetworkConnection())
+      if (stillOffline && !isHandlingNetworkError) {
+        isHandlingNetworkError = true
+        showNetworkErrorAlert(() => {
+          isHandlingNetworkError = false
+        })
       }
-      
-      throw fetchError
     }
-  } catch (error: any) {
-    // If it's a network error, show alert
-    if (isNetworkError(error) && !isHandlingNetworkError) {
-      isHandlingNetworkError = true
-      showNetworkErrorAlert(() => {
-        isHandlingNetworkError = false
-        // User can retry manually
-      })
-    }
-    
-    throw error
+
+    throw fetchError
   }
 }
 

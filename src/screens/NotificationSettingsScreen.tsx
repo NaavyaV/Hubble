@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
 
@@ -53,13 +54,15 @@ export default function NotificationSettingsScreen() {
   const fetchNotificationSettings = async () => {
     try {
       setLoading(true)
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Fetch notification preferences from database
       const { data: preferences, error } = await supabase
         .from('notification_preferences')
-        .select('*')
+        .select(
+          'user_id, push_notifications, event_reminders, going_status_updates, friend_requests, event_invitations, event_deletions',
+        )
         .eq('user_id', user.id)
         .single()
 
@@ -138,7 +141,7 @@ export default function NotificationSettingsScreen() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Check if push notifications are being enabled and if user previously had them disabled

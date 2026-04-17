@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { RouteProp } from '@react-navigation/native'
 import { supabase, safeRefreshSession } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { useTheme } from '../context/ThemeContext'
 import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
 
@@ -183,7 +184,7 @@ export default function AccountVerificationScreen({ navigation, route }: Account
 
           // Process pending onboarding data (notification preferences, org follows, profile image)
           try {
-            const { data: { user: currentUser } } = await supabase.auth.getUser()
+            const currentUser = await getCachedUser()
             if (!currentUser) {
               return
             }
@@ -253,6 +254,7 @@ export default function AccountVerificationScreen({ navigation, route }: Account
                   filePath,
                   uri: imageUri,
                   contentType,
+                  purpose: 'avatar',
                 })
                 
                 if (avatarUrl) {

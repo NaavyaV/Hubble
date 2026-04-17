@@ -13,6 +13,7 @@ import { useNavigation } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 
 export default function PhoneVisibilityScreen() {
   const navigation = useNavigation()
@@ -56,7 +57,7 @@ export default function PhoneVisibilityScreen() {
   const fetchUserProfile = async () => {
     try {
       setLoading(true)
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       const { data: profile, error } = await supabase
@@ -98,7 +99,7 @@ export default function PhoneVisibilityScreen() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       const { error } = await supabase

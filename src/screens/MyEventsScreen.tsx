@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import notificationService from '../services/notifications'
@@ -24,6 +25,18 @@ import { deleteEventCompletely } from '../utils/eventDeletion'
 import { EmptyState } from '../components'
 import EventCard from '../components/common/EventCard'
 import { sectionHeaderLargeStyle } from '../constants/sectionTypography'
+
+/** Cap rows per primary query; date floor avoids unbounded history scans. */
+const MY_EVENTS_MAX_ROWS = 120
+const MY_EVENTS_INVITED_CAP = 100
+const MY_EVENTS_NOT_GOING_CAP = 80
+const MY_EVENTS_ORG_EVENTS_CAP = 400
+
+function myEventsHistoryDateFloor(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 180)
+  return d.toISOString().slice(0, 10)
+}
 
 export default function MyEventsScreen() {
   const { theme } = useTheme()
@@ -36,10 +49,11 @@ export default function MyEventsScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [viewerId, setViewerId] = useState<string | null>(null)
+  const refreshTimerRef = useRef<NodeJS.Timeout | null>(null)
 
   const fetchMyEvents = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       setViewerId(user.id)
@@ -57,7 +71,7 @@ export default function MyEventsScreen() {
         supabase
           .from('events')
           .select(`
-            *,
+            id, title, event_date, start_time, end_time, location, image_url, host_id, privacy, max_attendees, created_at, tags, invite_theme_color,
             attendees:event_attendees(
               id,
               user_id,
@@ -65,8 +79,10 @@ export default function MyEventsScreen() {
             )
           `)
           .eq('host_id', user.id)
+          .gte('event_date', myEventsHistoryDateFloor())
           .order('event_date', { ascending: true })
-          .order('start_time', { ascending: true }),
+          .order('start_time', { ascending: true })
+          .limit(MY_EVENTS_MAX_ROWS),
         // Fetch events user is going to (personal events)
         supabase
           .from('event_attendees')
@@ -74,7 +90,7 @@ export default function MyEventsScreen() {
             event_id,
             status,
             events:events!event_attendees_event_id_fkey(
-              *,
+              id, title, event_date, start_time, end_time, location, image_url, host_id, privacy, max_attendees, created_at, tags, invite_theme_color,
               attendees:event_attendees(
                 id,
                 user_id,
@@ -83,7 +99,9 @@ export default function MyEventsScreen() {
             )
           `)
           .eq('user_id', user.id)
-          .eq('status', 'going'),
+          .eq('status', 'going')
+          .filter('events.event_date', 'gte', myEventsHistoryDateFloor())
+          .limit(MY_EVENTS_MAX_ROWS),
         // Fetch org events user is going to
         supabase
           .from('org_event_attendees')
@@ -91,7 +109,7 @@ export default function MyEventsScreen() {
             event_id,
             status,
             org_events:org_events!org_event_attendees_event_id_fkey(
-              *,
+              id, title, event_date, start_time, end_time, location, image_url, org_id, privacy, max_attendees, created_at, tags,
               attendees:org_event_attendees(
                 id,
                 user_id,
@@ -100,12 +118,15 @@ export default function MyEventsScreen() {
             )
           `)
           .eq('user_id', user.id)
-          .eq('status', 'going'),
+          .eq('status', 'going')
+          .filter('org_events.event_date', 'gte', myEventsHistoryDateFloor())
+          .limit(MY_EVENTS_MAX_ROWS),
         // Fetch all invited events
         supabase
           .from('event_invitations')
           .select('event_id')
-          .eq('user_id', user.id),
+          .eq('user_id', user.id)
+          .limit(400),
         // Fetch orgs user follows with notifications
         supabase
           .from('org_followers')
@@ -147,6 +168,7 @@ export default function MyEventsScreen() {
             .from('org_events')
             .select('id, org_id, created_at')
             .in('org_id', orgIds)
+            .limit(MY_EVENTS_ORG_EVENTS_CAP)
 
           if (orgEvents) {
             // Filter events created after user started following (or all if we can't determine)
@@ -157,20 +179,22 @@ export default function MyEventsScreen() {
       
       let invitedEventsData: any[] = []
       if (invitedEventIds.size > 0) {
+        const invitedIdsList = Array.from(invitedEventIds).slice(0, MY_EVENTS_INVITED_CAP)
         const { data: invitedEventsResult, error: invitedEventsError } = await supabase
           .from('events')
           .select(`
-            *,
+            id, title, event_date, start_time, end_time, location, image_url, host_id, privacy, max_attendees, created_at, tags, invite_theme_color,
             attendees:event_attendees(
               id,
               user_id,
               status
             )
           `)
-          .in('id', Array.from(invitedEventIds))
+          .in('id', invitedIdsList)
           .neq('host_id', user.id) // Exclude events user is hosting
           .order('event_date', { ascending: true })
           .order('start_time', { ascending: true })
+          .limit(MY_EVENTS_MAX_ROWS)
 
         if (invitedEventsError) {
           console.error('Error fetching invited events:', invitedEventsError)
@@ -224,7 +248,7 @@ export default function MyEventsScreen() {
           event_id,
           status,
           events:events!event_attendees_event_id_fkey(
-            *,
+            id, title, event_date, start_time, end_time, location, image_url, host_id, privacy, max_attendees, created_at, tags, invite_theme_color,
             attendees:event_attendees(
               id,
               user_id,
@@ -234,6 +258,8 @@ export default function MyEventsScreen() {
         `)
         .eq('user_id', user.id)
         .eq('status', 'not_going')
+        .filter('events.event_date', 'gte', myEventsHistoryDateFloor())
+        .limit(MY_EVENTS_NOT_GOING_CAP)
 
       if (notGoingError) throw notGoingError
 
@@ -387,21 +413,29 @@ export default function MyEventsScreen() {
     fetchMyEvents()
   }, [])
 
+  const scheduleMyEventsRefresh = useCallback((delayMs = 400) => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current)
+    }
+    refreshTimerRef.current = setTimeout(() => {
+      fetchMyEvents()
+    }, delayMs)
+  }, [])
+
   // Set up real-time subscriptions for constant refreshing
   useEffect(() => {
     let eventsChannel: any = null
     let attendeesChannel: any = null
     let orgAttendeesChannel: any = null
     let invitationsChannel: any = null
-    let notGoingChannel: any = null
 
     const setupSubscriptions = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       // Subscribe to events table changes (for hosting events)
       eventsChannel = supabase
-        .channel('my-events-changes')
+        .channel(`my-events-changes-${user.id}`)
         .on(
           'postgres_changes',
           {
@@ -410,15 +444,13 @@ export default function MyEventsScreen() {
             table: 'events',
             filter: `host_id=eq.${user.id}`
           },
-          () => {
-            fetchMyEvents()
-          }
+          () => scheduleMyEventsRefresh()
         )
         .subscribe()
 
       // Subscribe to event_attendees changes (for attending events)
       attendeesChannel = supabase
-        .channel('my-attending-changes')
+        .channel(`my-attending-changes-${user.id}`)
         .on(
           'postgres_changes',
           {
@@ -427,15 +459,13 @@ export default function MyEventsScreen() {
             table: 'event_attendees',
             filter: `user_id=eq.${user.id}`
           },
-          () => {
-            fetchMyEvents()
-          }
+          () => scheduleMyEventsRefresh()
         )
         .subscribe()
 
       // Subscribe to org_event_attendees changes (for org attending events)
       orgAttendeesChannel = supabase
-        .channel('my-org-attending-changes')
+        .channel(`my-org-attending-changes-${user.id}`)
         .on(
           'postgres_changes',
           {
@@ -444,15 +474,13 @@ export default function MyEventsScreen() {
             table: 'org_event_attendees',
             filter: `user_id=eq.${user.id}`
           },
-          () => {
-            fetchMyEvents()
-          }
+          () => scheduleMyEventsRefresh()
         )
         .subscribe()
 
       // Subscribe to event_invitations changes (for invited events)
       invitationsChannel = supabase
-        .channel('my-invitations-changes')
+        .channel(`my-invitations-changes-${user.id}`)
         .on(
           'postgres_changes',
           {
@@ -461,26 +489,7 @@ export default function MyEventsScreen() {
             table: 'event_invitations',
             filter: `user_id=eq.${user.id}`
           },
-          () => {
-            fetchMyEvents()
-          }
-        )
-        .subscribe()
-
-      // Subscribe to event_attendees changes for "not going" status
-      notGoingChannel = supabase
-        .channel('my-not-going-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'event_attendees',
-            filter: `user_id=eq.${user.id}`
-          },
-          () => {
-            fetchMyEvents()
-          }
+          () => scheduleMyEventsRefresh()
         )
         .subscribe()
     }
@@ -492,9 +501,9 @@ export default function MyEventsScreen() {
       if (attendeesChannel) supabase.removeChannel(attendeesChannel)
       if (orgAttendeesChannel) supabase.removeChannel(orgAttendeesChannel)
       if (invitationsChannel) supabase.removeChannel(invitationsChannel)
-      if (notGoingChannel) supabase.removeChannel(notGoingChannel)
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
     }
-  }, [])
+  }, [scheduleMyEventsRefresh])
 
   const onRefresh = () => {
     setRefreshing(true)
@@ -512,7 +521,7 @@ export default function MyEventsScreen() {
     if (!eventToDelete) return
 
     // Only allow deletion if user is hosting this event
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getCachedUser()
     if (!user || eventToDelete.host_id !== user.id) {
       Alert.alert('Error', 'You can only delete events you are hosting')
       return

@@ -11,6 +11,7 @@ import {
 import Modal from 'react-native-modal'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../services/supabase'
+import { getCachedUser } from '../../services/sessionService'
 import { useTheme } from '../../context/ThemeContext'
 import { shouldShowPhoneNumber } from '../../utils/phoneVisibility'
 import { safeFriendshipOrQuery } from '../../utils/queryHelpers'
@@ -68,7 +69,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const checkBlockStatus = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       const { data } = await supabase
@@ -87,7 +88,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const checkMuteStatus = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       const { data } = await supabase
@@ -106,7 +107,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const handleMuteUser = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       const { error } = await supabase
@@ -130,7 +131,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const handleUnmuteUser = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       const { error } = await supabase
@@ -153,7 +154,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const handleReport = async (reason: ReportReason, comments?: string) => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       const { error } = await supabase
@@ -181,7 +182,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const handleBlockUser = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       // Create ONE-WAY block only (blocker blocks blocked, but blocked doesn't know)
@@ -233,7 +234,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const handleUnblockUser = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       // Delete one-way block (only the block we created)
@@ -262,7 +263,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
     
     setPhoneVisibilityLoading(true)
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) {
         setPhoneVisibilityLoading(false)
         return
@@ -281,7 +282,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
   const checkFriendshipStatus = async () => {
     if (!user) return
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       const { data } = await supabase
@@ -304,7 +305,7 @@ export default function ProfileModal({ isVisible, onClose, user, isHostingEvent 
     if (!user) return
     setLoading(true)
     try {
-      const { data: { user: me } } = await supabase.auth.getUser()
+      const me = await getCachedUser()
       if (!me) return
 
       if (friendshipStatus === 'none') {

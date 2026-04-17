@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react'
-import { safeFriendshipOrQuery } from '../utils/queryHelpers'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -13,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { useTheme } from '../context/ThemeContext'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { ImageWithFallback } from '../components'
 
 interface PhotoWithEvent {
@@ -37,31 +37,34 @@ interface PhotoWithEvent {
   }
 }
 
+const PHOTO_PAGE_SIZE = 60
+
 export default function GeneralPhotoGalleryScreen() {
   const { theme } = useTheme()
   const navigation = useNavigation()
   const [photos, setPhotos] = useState<PhotoWithEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  /** Next `range()` start for Supabase (raw rows), not filtered list length */
+  const nextDbOffsetRef = useRef(0)
 
   const screenWidth = Dimensions.get('window').width
   const imageSize = (screenWidth - 48) / 3 // 3 columns with proper gaps (16px padding + 8px gaps)
 
   useEffect(() => {
-    fetchPhotos()
+    fetchPhotos(true)
   }, [])
-
-  useEffect(() => {
-    console.log('GeneralPhotoGallery - photos state changed:', photos.length, 'photos')
-    if (photos.length > 0) {
-      console.log('GeneralPhotoGallery - rendering photos grid with:', photos.length, 'photos')
-    }
-  }, [photos])
 
   const fetchHostProfiles = async (photosData: any[]) => {
     try {
       // Get unique host IDs
-      const hostIds = [...new Set(photosData.map(photo => photo.events.host_id))]
+      const hostIds = [
+        ...new Set(
+          photosData.map((photo) => (photo.event ?? photo.events)?.host_id).filter(Boolean),
+        ),
+      ]
       
       if (hostIds.length === 0) return photosData
 
@@ -84,22 +87,38 @@ export default function GeneralPhotoGalleryScreen() {
       }, {}) || {}
 
       // Map profiles to photos
-      return photosData.map(photo => ({
-        ...photo,
-        host_profile: profilesMap[photo.events.host_id] || null
-      }))
+      return photosData.map((photo) => {
+        const ev = photo.event ?? photo.events
+        return {
+          ...photo,
+          event: ev,
+          host_profile: profilesMap[ev.host_id] || null,
+        }
+      })
     } catch (error) {
       console.error('Error in fetchHostProfiles:', error)
       return photosData
     }
   }
 
-  const fetchPhotos = async () => {
+  const fetchPhotos = async (reset = false) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
-      // Fetch photos that the user has access to
+      if (!reset && (loadingMore || !hasMore)) return
+
+      if (reset) {
+        setLoading(true)
+        setHasMore(true)
+        nextDbOffsetRef.current = 0
+      } else {
+        setLoadingMore(true)
+      }
+
+      const start = nextDbOffsetRef.current
+      const end = start + PHOTO_PAGE_SIZE - 1
+
       const { data: photosData, error } = await supabase
         .from('event_photos')
         .select(`
@@ -120,80 +139,122 @@ export default function GeneralPhotoGalleryScreen() {
           )
         `)
         .order('created_at', { ascending: false })
+        .range(start, end)
 
       if (error) {
         console.error('Error fetching photos:', error)
         return
       }
 
-      // Fetch host profiles separately
-      const photosWithHostProfiles = await fetchHostProfiles(photosData || [])
-      
-      // Filter photos based on user's access permissions
+      const normalized = (photosData || []).map((p: any) => ({
+        ...p,
+        event: p.events,
+      }))
+
+      const photosWithHostProfiles = await fetchHostProfiles(normalized)
       const accessiblePhotos = await filterAccessiblePhotos(photosWithHostProfiles, user.id)
-      console.log('GeneralPhotoGallery - fetched photos:', accessiblePhotos)
-      setPhotos(accessiblePhotos)
+
+      if (reset) {
+        setPhotos(accessiblePhotos)
+      } else {
+        setPhotos((prev) => {
+          const seen = new Set(prev.map((x) => x.id))
+          const merged = [...prev]
+          for (const p of accessiblePhotos) {
+            if (!seen.has(p.id)) {
+              seen.add(p.id)
+              merged.push(p)
+            }
+          }
+          return merged
+        })
+      }
+
+      const batchLen = (photosData || []).length
+      nextDbOffsetRef.current = start + batchLen
+      if (batchLen < PHOTO_PAGE_SIZE) {
+        setHasMore(false)
+      }
     } catch (error) {
       console.error('Error fetching photos:', error)
     } finally {
       setLoading(false)
       setRefreshing(false)
+      setLoadingMore(false)
     }
   }
 
   const filterAccessiblePhotos = async (photosData: any[], userId: string) => {
-    const accessiblePhotos: PhotoWithEvent[] = []
+    const attendeeOnlyEventIds = [
+      ...new Set(
+        photosData
+          .filter((photo) => {
+            const ev = photo.event ?? photo.events
+            return photo.privacy_level === 'attendees_only' && ev?.id
+          })
+          .map((photo) => (photo.event ?? photo.events).id),
+      ),
+    ]
+    const friendOnlyUploaderIds = [
+      ...new Set(
+        photosData
+          .filter((photo) => photo.privacy_level === 'friends_only' && photo?.uploaded_by)
+          .map((photo) => photo.uploaded_by)
+      ),
+    ]
 
-    for (const photo of photosData) {
-      let hasAccess = false
+    const [attendanceResult, outgoingFriendsResult, incomingFriendsResult] = await Promise.all([
+      attendeeOnlyEventIds.length > 0
+        ? supabase
+            .from('event_attendees')
+            .select('event_id')
+            .eq('user_id', userId)
+            .eq('status', 'going')
+            .in('event_id', attendeeOnlyEventIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      friendOnlyUploaderIds.length > 0
+        ? supabase
+            .from('friendships')
+            .select('friend_id')
+            .eq('status', 'accepted')
+            .eq('user_id', userId)
+            .in('friend_id', friendOnlyUploaderIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      friendOnlyUploaderIds.length > 0
+        ? supabase
+            .from('friendships')
+            .select('user_id')
+            .eq('status', 'accepted')
+            .eq('friend_id', userId)
+            .in('user_id', friendOnlyUploaderIds)
+        : Promise.resolve({ data: [], error: null } as any),
+    ])
 
-      // Check if user uploaded the photo
-      if (photo.uploaded_by === userId) {
-        hasAccess = true
-      }
-      // Check if photo is public
-      else if (photo.privacy_level === 'public') {
-        hasAccess = true
-      }
-      // Check if user attended the event (for attendees_only photos)
-      else if (photo.privacy_level === 'attendees_only') {
-        const { data: attendance } = await supabase
-          .from('event_attendees')
-          .select('status')
-          .eq('event_id', photo.event.id)
-          .eq('user_id', userId)
-          .eq('status', 'going')
-          .single()
-        
-        if (attendance) {
-          hasAccess = true
-        }
-      }
-      // Check if user is friends with uploader (for friends_only photos)
-      else if (photo.privacy_level === 'friends_only') {
-        const { data: friendship } = await supabase
-          .from('friendships')
-          .select('status')
-          .or(safeFriendshipOrQuery(userId, photo.uploaded_by))
-          .eq('status', 'accepted')
-          .single()
-        
-        if (friendship) {
-          hasAccess = true
-        }
-      }
+    const attendedEventIds = new Set((attendanceResult.data || []).map((row: any) => row.event_id))
+    const acceptedFriendIds = new Set<string>([
+      ...(outgoingFriendsResult.data || []).map((row: any) => row.friend_id),
+      ...(incomingFriendsResult.data || []).map((row: any) => row.user_id),
+    ])
 
-      if (hasAccess) {
-        accessiblePhotos.push(photo)
-      }
-    }
-
-    return accessiblePhotos
+    return photosData.filter((photo) => {
+      if (photo.uploaded_by === userId) return true
+      if (photo.privacy_level === 'public') return true
+      if (photo.privacy_level === 'attendees_only')
+        return attendedEventIds.has(photo.events?.id ?? photo.event?.id)
+      if (photo.privacy_level === 'friends_only') return acceptedFriendIds.has(photo.uploaded_by)
+      return false
+    })
   }
 
   const onRefresh = async () => {
     setRefreshing(true)
-    fetchPhotos()
+    await fetchPhotos(true)
+  }
+
+  const onEndReached = () => {
+    if (!loading && !loadingMore && hasMore) {
+      fetchPhotos(false)
+    }
   }
 
   const renderEmptyState = () => (
@@ -228,6 +289,8 @@ export default function GeneralPhotoGalleryScreen() {
           key="grid"
           contentContainerStyle={styles.imageGrid}
           columnWrapperStyle={{ flexDirection: 'row', marginBottom: 8 }}
+          onEndReached={onEndReached}
+          onEndReachedThreshold={0.35}
           renderItem={({ item: photo, index }) => (
             <View
               style={[

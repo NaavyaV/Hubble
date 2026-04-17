@@ -3,6 +3,7 @@ import * as Device from 'expo-device'
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { supabase } from './supabase'
+import { getCachedUser, getCachedSession } from './sessionService'
 import {
   buildEventReminderNotification,
   buildEventEditDeleteNotification,
@@ -20,7 +21,7 @@ export async function triggerProcessNotifications(): Promise<void> {
       return
     }
 
-    const { data: { session } } = await supabase.auth.getSession()
+    const session = await getCachedSession()
     
     const edgeFunctionUrl = `${supabaseUrl}/functions/v1/process-notifications`
     
@@ -137,7 +138,7 @@ async function processQueuedNotifications() {
   try {
     const { data: notifications, error } = await supabase
       .from('notification_queue')
-      .select('*')
+      .select('id, title, body, type, event_id, user_id, data')
       .eq('processed', false)
       .lte('scheduled_for', new Date().toISOString())
       .limit(10)
@@ -370,7 +371,7 @@ class NotificationService {
         return
       }
 
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) {
         if (__DEV__) {
           console.log('No user found, cannot save notification token')
@@ -752,7 +753,7 @@ class NotificationService {
   // Remove token from database (for logout)
   async removeToken(): Promise<void> {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       await supabase

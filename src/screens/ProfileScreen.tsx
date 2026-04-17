@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { ImageWithFallback } from '../components'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
@@ -34,17 +35,14 @@ export default function ProfileScreen() {
 
   const fetchUserData = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (user) {
         setUser(user)
         
         // Fetch profile data with college information
         const { data: profileData, error } = await supabase
           .from('profiles')
-          .select(`
-            *,
-            college:colleges(*)
-          `)
+          .select('id, full_name, username, avatar_url, major, graduating_year, bio, college_id, org_ownership_id, phone_number, college:colleges(id, name)')
           .eq('id', user.id)
           .single()
         

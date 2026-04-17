@@ -1,7 +1,19 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import { decode as decodeBase64 } from 'base64-arraybuffer'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { MAX_IMAGE_SIZE, ALLOWED_IMAGE_TYPES, ALLOWED_IMAGE_EXTENSIONS } from '../constants/validation'
+import { resizeForUpload, type ImagePurpose } from './imageResize'
+
+/** Compressed uploads are always JPEG from expo-image-manipulator; normalize path for RLS/extension checks. */
+function asJpegStoragePath(filePath: string): string {
+  const i = filePath.lastIndexOf('/')
+  const dir = i >= 0 ? filePath.slice(0, i + 1) : ''
+  const file = i >= 0 ? filePath.slice(i + 1) : filePath
+  const dot = file.lastIndexOf('.')
+  const stem = dot > 0 ? file.slice(0, dot) : file
+  return `${dir}${stem}.jpg`
+}
 
 export async function readFileAsBytes(uri: string): Promise<Uint8Array> {
   const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' as any })
@@ -34,10 +46,18 @@ export async function uploadBytesToBucket(params: {
   filePath: string
   uri: string
   contentType?: string
+  /**
+   * Resize/compress purpose. Defaults to gallery (1600px max edge) when omitted.
+   * Use avatar (400) or cover (1200) where appropriate to save bandwidth.
+   */
+  purpose?: ImagePurpose
 }): Promise<string> {
-  const { bucket, filePath, uri, contentType } = params
-  
+  const { bucket, filePath: rawPath, uri: rawUri, purpose = 'gallery' } = params
+  const filePath = asJpegStoragePath(rawPath)
+
   try {
+    const uri = await resizeForUpload(rawUri, purpose)
+
     if (__DEV__) {
     console.log(`[upload] Starting upload to ${bucket}/${filePath}`)
     }
@@ -59,7 +79,7 @@ export async function uploadBytesToBucket(params: {
     console.log(`[upload] File read successfully, size: ${bytes.length} bytes`)
     }
     
-    const type = contentType || guessContentTypeFromUri(uri)
+    const type = 'image/jpeg'
     
     // Security: Validate MIME type
     if (!ALLOWED_IMAGE_TYPES.includes(type as any)) {
@@ -76,8 +96,7 @@ export async function uploadBytesToBucket(params: {
     console.log(`[upload] Content type: ${type}`)
     }
 
-    // Check if user is authenticated
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getCachedUser()
     if (!user) {
       throw new Error('User must be authenticated to upload files')
     }
@@ -90,6 +109,8 @@ export async function uploadBytesToBucket(params: {
       .from(bucket)
       .upload(filePath, bytes, {
         contentType: type,
+        // Keep immutable image assets cached at the edge for repeat views.
+        cacheControl: '31536000',
         upsert: false,
       })
 

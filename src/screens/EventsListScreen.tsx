@@ -19,7 +19,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../services/supabase'
+import { getCachedUser } from '../services/sessionService'
 import { safeBlockOrQuery } from '../utils/queryHelpers'
+import { readFeedCache, writeFeedCache } from '../utils/feedCache'
 import { EventWithAttendees } from '../types'
 import { useTheme } from '../context/ThemeContext'
 import { getEventEndDate, isEventEnded, isEventInFuture, parseLocalDate } from '../utils/eventTimeUtils'
@@ -33,8 +35,6 @@ import { prefetchImageUris } from '../utils/imagePrefetch'
 import CreateEventScreen from './CreateEventScreen'
 import { withNetworkErrorHandling, isNetworkError } from '../utils/networkUtils'
 
-type EventListItem = EventWithAttendees & { goingCount: number; tags?: string[] }
-
 type FilterType = 'all'
 type SortType = 'date_asc' | 'date_desc' | 'people_going' | 'recently_created' | 'alphabetical'
 
@@ -46,6 +46,62 @@ interface AdvancedFilters {
 }
 
 const { height: screenHeight } = Dimensions.get('window')
+
+const EVENT_COLUMNS = `
+  id, title, event_date, start_time, end_time, location,
+  image_url, host_id, privacy, max_attendees, created_at,
+  tags, invite_theme_color
+`
+
+const ORG_EVENT_COLUMNS = `
+  id, title, event_date, start_time, end_time, location,
+  image_url, org_id, privacy, max_attendees, created_at, tags
+`
+
+type EventListItem = EventWithAttendees & {
+  goingCount: number
+  tags?: string[]
+  viewerRsvpStatus?: string | null
+}
+
+/** Aggregated counts + viewer RSVP — avoids embedding every attendee row on the home feed. */
+async function loadFeedAttendanceMaps(
+  userId: string,
+  filteredEvents: any[],
+): Promise<{ going: Map<string, number>; myStatus: Map<string, string> }> {
+  const personalIds = filteredEvents.filter((e) => !e.isOrgEvent).map((e) => e.id)
+  const orgIds = filteredEvents.filter((e) => e.isOrgEvent).map((e) => e.id)
+  const going = new Map<string, number>()
+  const myStatus = new Map<string, string>()
+  const empty = Promise.resolve({ data: [] as any[], error: null as any })
+  try {
+    const [pg, og, ps, os] = await Promise.all([
+      personalIds.length
+        ? supabase.rpc('event_going_counts_by_ids', { p_event_ids: personalIds })
+        : empty,
+      orgIds.length ? supabase.rpc('org_event_going_counts_by_ids', { p_event_ids: orgIds }) : empty,
+      personalIds.length
+        ? supabase.rpc('my_event_attendee_status_for_ids', {
+            p_event_ids: personalIds,
+            p_user_id: userId,
+          })
+        : empty,
+      orgIds.length
+        ? supabase.rpc('my_org_event_attendee_status_for_ids', {
+            p_event_ids: orgIds,
+            p_user_id: userId,
+          })
+        : empty,
+    ])
+    if (!pg.error) (pg.data || []).forEach((r: any) => going.set(r.event_id, Number(r.going_count)))
+    if (!og.error) (og.data || []).forEach((r: any) => going.set(r.event_id, Number(r.going_count)))
+    if (!ps.error) (ps.data || []).forEach((r: any) => myStatus.set(r.event_id, r.status))
+    if (!os.error) (os.data || []).forEach((r: any) => myStatus.set(r.event_id, r.status))
+  } catch {
+    /* ignore */
+  }
+  return { going, myStatus }
+}
 
 export default function EventsListScreen() {
   const navigation = useNavigation()
@@ -59,7 +115,6 @@ export default function EventsListScreen() {
   const [hostProfiles, setHostProfiles] = useState<Record<string, any>>({})
   const [hostOrganizations, setHostOrganizations] = useState<Record<string, any>>({})
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
-  const [userAttendances, setUserAttendances] = useState<Record<string, string>>({})
   const [userInvitations, setUserInvitations] = useState<Set<string>>(new Set())
   const [friends, setFriends] = useState<Set<string>>(new Set())
   const [showFilterModal, setShowFilterModal] = useState(false)
@@ -88,7 +143,7 @@ export default function EventsListScreen() {
 
   useEffect(() => {
     filterEvents(events, 'all')
-  }, [events, userAttendances, advancedFilters, sortBy])
+  }, [events, advancedFilters, sortBy])
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -117,20 +172,32 @@ export default function EventsListScreen() {
     return `${displayHour}:${minutes} ${ampm}`
   }
 
-  const fetchEvents = async (): Promise<void | null> => {
+  const fetchEvents = async (skipCache = false): Promise<void | null> => {
     return await withNetworkErrorHandling(async () => {
       try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await getCachedUser()
       if (!user) return
 
       setCurrentUserId(user.id)
 
+      if (!skipCache && loading) {
+        const cached = await readFeedCache()
+        if (cached) {
+          setEvents(cached.events)
+          setHostProfiles(cached.hostProfiles)
+          setHostOrganizations(cached.hostOrganizations)
+          setLoading(false)
+        }
+      }
+
+      const dateWindow = new Date()
+      dateWindow.setDate(dateWindow.getDate() - 1)
+      const dateFloor = dateWindow.toISOString().slice(0, 10)
+
       // OPTIMIZED: Run ALL queries in parallel for maximum performance
       const [
-        friendsResult,
+        _friendsStarted,
         invitedEventIds,
-        userAttendancesResult,
-        orgUserAttendancesResult,
         followedOrgsResult,
         blockedOrgsResult,
         blockedUsersResult,
@@ -140,16 +207,6 @@ export default function EventsListScreen() {
       ] = await Promise.all([
         fetchFriends(user.id),
         getInvitedEventIds(user.id),
-        supabase
-          .from('event_attendees')
-          .select('event_id')
-          .eq('user_id', user.id)
-          .eq('status', 'going'),
-        supabase
-          .from('org_event_attendees')
-          .select('event_id')
-          .eq('user_id', user.id)
-          .eq('status', 'going'),
         supabase
           .from('org_followers')
           .select('org_id')
@@ -167,16 +224,10 @@ export default function EventsListScreen() {
           .select('org_ownership_id')
           .eq('id', user.id)
           .maybeSingle(),
-        // Fetch public events (host profiles will be fetched separately if join fails)
         supabase
           .from('events')
           .select(`
-            *,
-            attendees:event_attendees(
-              id,
-              user_id,
-              status
-            ),
+            ${EVENT_COLUMNS},
             host:profiles(
               id,
               full_name,
@@ -185,17 +236,13 @@ export default function EventsListScreen() {
             )
           `)
           .eq('privacy', 'public')
-          .order('event_date', { ascending: true }),
-        // Fetch org events (organization data will be fetched separately if join fails)
+          .gte('event_date', dateFloor)
+          .order('event_date', { ascending: true })
+          .limit(100),
         supabase
           .from('org_events')
           .select(`
-            *,
-            attendees:org_event_attendees(
-              id,
-              user_id,
-              status
-            ),
+            ${ORG_EVENT_COLUMNS},
             org:organizations(
               id,
               name,
@@ -203,19 +250,14 @@ export default function EventsListScreen() {
               type
             )
           `)
+          .gte('event_date', dateFloor)
           .order('event_date', { ascending: true })
           .order('start_time', { ascending: true })
+          .limit(100)
       ])
 
       // Extract data from results
-      const combinedAttendances: Record<string, string> = {}
-      ;(userAttendancesResult.data || []).forEach(a => {
-        combinedAttendances[a.event_id] = 'going'
-      })
-      ;(orgUserAttendancesResult.data || []).forEach(a => {
-        combinedAttendances[a.event_id] = 'going'
-      })
-      setUserAttendances(combinedAttendances)
+      setUserInvitations(new Set(Array.isArray(invitedEventIds) ? invitedEventIds : []))
       const followedOrgIds = new Set((followedOrgsResult.data || []).map(f => f.org_id))
       const blockedOrgIds = new Set((blockedOrgsResult.data || []).map(b => b.org_id))
       // Separate blocked users (users I blocked) from blockers (users who blocked me)
@@ -242,18 +284,13 @@ export default function EventsListScreen() {
       let orgEvents = []
       
       if (publicEventsResult.error) {
-        // Join failed, fetch events without host profiles
         const { data: eventsData, error: eventsError } = await supabase
           .from('events')
           .select(`
-            *,
-            attendees:event_attendees(
-              id,
-              user_id,
-              status
-            )
+            ${EVENT_COLUMNS}
           `)
           .eq('privacy', 'public')
+          .gte('event_date', dateFloor)
           .order('event_date', { ascending: true })
         
         if (eventsError) throw eventsError
@@ -270,17 +307,12 @@ export default function EventsListScreen() {
       }
       
       if (orgEventsResult.error) {
-        // Join failed, fetch org events without org data
         const { data: orgEventsData, error: orgEventsError } = await supabase
           .from('org_events')
           .select(`
-            *,
-            attendees:org_event_attendees(
-              id,
-              user_id,
-              status
-            )
+            ${ORG_EVENT_COLUMNS}
           `)
+          .gte('event_date', dateFloor)
           .order('event_date', { ascending: true })
           .order('start_time', { ascending: true })
         
@@ -333,12 +365,7 @@ export default function EventsListScreen() {
 
       const fetchInviteOnlyPrivate = async (predicate: { invitedIds?: string[]; hostId?: string }) => {
         const selectWithHost = `
-              *,
-              attendees:event_attendees(
-                id,
-                user_id,
-                status
-              ),
+              ${EVENT_COLUMNS},
               host:profiles(
                 id,
                 full_name,
@@ -347,18 +374,14 @@ export default function EventsListScreen() {
               )
             `
         const selectNoHost = `
-              *,
-              attendees:event_attendees(
-                id,
-                user_id,
-                status
-              )
+              ${EVENT_COLUMNS}
             `
         let q = supabase
           .from('events')
           .select(hostJoinOk ? selectWithHost : selectNoHost)
           .eq('privacy', 'invite_only')
           .order('event_date', { ascending: true })
+          .limit(100)
         if (predicate.invitedIds && predicate.invitedIds.length > 0) {
           q = q.in('id', predicate.invitedIds)
         }
@@ -427,13 +450,17 @@ export default function EventsListScreen() {
         return true
       })
 
+      const feedAgg = await loadFeedAttendanceMaps(user.id, filteredEvents)
+
       // Calculate attendee counts and filter by capacity
       // Don't filter by timeFilter here - let filterEvents handle that
       // This ensures all events are available for filtering
       const eventsWithCounts = filteredEvents
         .map(event => ({
         ...event,
-        goingCount: event.attendees?.filter((a: any) => a.status === 'going').length || 0,
+        attendees: [] as any[],
+        viewerRsvpStatus: feedAgg.myStatus.get(event.id) ?? null,
+        goingCount: feedAgg.going.get(event.id) ?? 0,
       }))
         .filter(event => {
           // Only show events that haven't reached max capacity (if defined)
@@ -448,12 +475,12 @@ export default function EventsListScreen() {
           return true
         })
 
-      // Set events immediately for faster UI response (host profiles already included)
       setEvents(eventsWithCounts)
       setLoading(false)
 
       prefetchImageUris(
-        eventsWithCounts.map(e => (e as any).image_url).filter(Boolean) as string[]
+        eventsWithCounts.map(e => (e as any).image_url).filter(Boolean) as string[],
+        24,
       )
 
       // Build host profiles map from already-fetched data and fetch any missing ones
@@ -486,7 +513,8 @@ export default function EventsListScreen() {
       }
 
       prefetchImageUris(
-        Object.values(hostProfilesMap).map((p: any) => p?.avatar_url).filter(Boolean) as string[]
+        Object.values(hostProfilesMap).map((p: any) => p?.avatar_url).filter(Boolean) as string[],
+        24,
       )
       
       // Update state by merging existing profiles with new ones (preserves existing during refresh)
@@ -508,14 +536,13 @@ export default function EventsListScreen() {
       })
       setHostOrganizations(hostOrgsMap)
 
+      writeFeedCache(eventsWithCounts, hostProfilesMap, hostOrgsMap).catch(() => {})
+
       // Fetch remaining data in parallel without blocking UI (attendee profiles, photos, etc.)
       // Note: Host profiles are already loaded above, so we skip fetchHostProfiles
       Promise.all([
         fetchHostOrganizations(eventsWithCounts),
-        fetchAttendeeProfiles(eventsWithCounts),
         fetchEventPhotos(eventsWithCounts),
-        fetchUserAttendances(eventsWithCounts),
-        fetchUserInvitations(eventsWithCounts)
       ]).catch(error => {
         if (!isNetworkError(error)) {
           console.error('Error fetching additional data:', error)
@@ -565,6 +592,7 @@ export default function EventsListScreen() {
         .from('event_invitations')
         .select('event_id')
         .eq('user_id', userId)
+        .limit(500)
 
       return invitations?.map(inv => inv.event_id) || []
     } catch (error: any) {
@@ -646,28 +674,52 @@ export default function EventsListScreen() {
       
       if (eventIds.length === 0) return
 
-      // Fetch photos for all events
-      const { data: photos, error } = await supabase
-        .from('event_photos')
-        .select('id, event_id, image_url, created_at')
-        .in('event_id', eventIds)
-        .order('created_at', { ascending: false })
+      const perEvent = 12
+      let photosByEvent: Record<string, string[]> = {}
 
-      if (error) {
-        if (!isNetworkError(error)) {
-          console.error('Error fetching event photos:', error)
+      const { data: rpcRows, error: rpcError } = await supabase.rpc('event_photo_previews', {
+        p_event_ids: eventIds,
+        p_per_event: perEvent,
+      })
+
+      if (!rpcError && rpcRows && Array.isArray(rpcRows)) {
+        photosByEvent = (rpcRows as { event_id: string; image_url: string }[]).reduce(
+          (acc: Record<string, string[]>, row) => {
+            if (!acc[row.event_id]) acc[row.event_id] = []
+            if (acc[row.event_id].length < perEvent) {
+              acc[row.event_id].push(row.image_url)
+            }
+            return acc
+          },
+          {},
+        )
+      } else {
+        if (rpcError && !isNetworkError(rpcError) && __DEV__) {
+          console.warn('event_photo_previews RPC unavailable, falling back:', rpcError.message)
         }
-        return
+        const maxRows = Math.min(400, eventIds.length * perEvent)
+        const { data: photos, error } = await supabase
+          .from('event_photos')
+          .select('event_id, image_url, created_at')
+          .in('event_id', eventIds)
+          .order('created_at', { ascending: false })
+          .limit(maxRows)
+
+        if (error) {
+          if (!isNetworkError(error)) {
+            console.error('Error fetching event photos:', error)
+          }
+          return
+        }
+
+        for (const photo of photos || []) {
+          const list = photosByEvent[photo.event_id] || []
+          if (list.length < perEvent) {
+            list.push(photo.image_url)
+            photosByEvent[photo.event_id] = list
+          }
+        }
       }
-
-      // Group photos by event ID
-      const photosByEvent = photos?.reduce((acc: any, photo: any) => {
-        if (!acc[photo.event_id]) {
-          acc[photo.event_id] = []
-        }
-        acc[photo.event_id].push(photo.image_url)
-        return acc
-      }, {}) || {}
 
       // Update past event states with fetched photos
       setPastEventStates(prev => {
@@ -683,106 +735,6 @@ export default function EventsListScreen() {
     } catch (error: any) {
       if (!isNetworkError(error)) {
         console.error('Error in fetchEventPhotos:', error)
-      }
-    }
-  }
-
-  const fetchAttendeeProfiles = async (eventsList: EventWithAttendees[]) => {
-    try {
-      // Get all unique user IDs from attendees
-      const attendeeUserIds = new Set<string>()
-      eventsList.forEach(event => {
-        if (event.attendees) {
-          event.attendees.forEach((attendee: any) => {
-            attendeeUserIds.add(attendee.user_id)
-          })
-        }
-      })
-
-      if (attendeeUserIds.size === 0) return
-
-      // Fetch profiles for all attendee user IDs
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, full_name, username, avatar_url')
-        .in('id', Array.from(attendeeUserIds))
-        .eq('otp_verified', true) // Only show OTP verified users
-
-      if (profiles) {
-        prefetchImageUris(profiles.map(p => p.avatar_url))
-
-        const profilesMap = profiles.reduce((acc, profile) => {
-          acc[profile.id] = profile
-          return acc
-        }, {} as Record<string, any>)
-
-        // Update events with attendee profile information
-        setEvents(prevEvents => 
-          prevEvents.map(event => ({
-            ...event,
-            attendees: event.attendees?.map((attendee: any) => ({
-              ...attendee,
-              user: profilesMap[attendee.user_id] || null
-            })) || []
-          }))
-        )
-      }
-    } catch (error: any) {
-      if (!isNetworkError(error)) {
-        console.error('Error fetching attendee profiles:', error)
-      }
-    }
-  }
-
-  const fetchUserAttendances = async (eventsList: EventWithAttendees[]) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const eventIds = eventsList.map(event => event.id)
-      if (eventIds.length === 0) return
-
-      const { data: attendances } = await supabase
-        .from('event_attendees')
-        .select('event_id, status')
-        .eq('user_id', user.id)
-        .in('event_id', eventIds)
-
-      if (attendances) {
-        const attendanceMap = attendances.reduce((acc, attendance) => {
-          acc[attendance.event_id] = attendance.status
-          return acc
-        }, {} as Record<string, string>)
-        setUserAttendances(attendanceMap)
-      }
-    } catch (error: any) {
-      if (!isNetworkError(error)) {
-        console.error('Error fetching user attendances:', error)
-      }
-    }
-  }
-
-  const fetchUserInvitations = async (eventsList: EventWithAttendees[]) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const eventIds = eventsList.map(event => event.id)
-      if (eventIds.length === 0) return
-
-      const { data: invitations } = await supabase
-        .from('event_invitations')
-        .select('event_id')
-        .eq('user_id', user.id)
-        .in('event_id', eventIds)
-
-      if (invitations) {
-        const invitationSet = new Set(invitations.map(inv => inv.event_id))
-        setUserInvitations(invitationSet)
-      }
-    } catch (error: any) {
-      if (!isNetworkError(error)) {
-        console.error('Error fetching user invitations:', error)
       }
     }
   }
@@ -962,7 +914,8 @@ export default function EventsListScreen() {
     const immediateAttendance = currentUserId
       ? item.attendees?.find((attendee: any) => attendee.user_id === currentUserId)?.status
       : null
-    const userAttendance = userAttendances[item.id] || immediateAttendance || null
+    const userAttendance =
+      item.viewerRsvpStatus ?? immediateAttendance ?? null
     const isHost = item.host_id === currentUserId
     return (
       <EventCard
