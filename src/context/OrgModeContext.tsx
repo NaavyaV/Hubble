@@ -7,6 +7,8 @@ export interface Organization {
   id: string
   name: string
   icon: string | null
+  icon_path?: string | null
+  icon_version?: number | null
   type: 'Greek Life' | 'Student Organization'
   description: string | null
   owner_id: string | null
@@ -99,7 +101,7 @@ export const OrgModeProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       const { data: freshOrg } = await supabase
         .from('organizations')
-        .select('id, name, icon, type, description, owner_id, college_id, created_at, updated_at')
+        .select('id, name, icon, icon_path, icon_version, type, description, owner_id, college_id, created_at, updated_at')
         .eq('id', orgId)
         .single()
 

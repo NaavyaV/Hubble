@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -121,6 +121,7 @@ export default function EventDetailScreen() {
   const [eventPhotos, setEventPhotos] = useState<any[]>([])
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null)
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null)
+  const attendeesRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (event && event.id) {
@@ -160,17 +161,27 @@ export default function EventDetailScreen() {
             table: attendeesTable,
             filter: `event_id=eq.${event.id}`
           },
-          (payload) => {
-            // Refresh attendees when changes occur
-            fetchAttendeesWithProfiles(true).catch(error => {
-              console.error('Error refreshing attendees from realtime:', error)
-            })
+          () => {
+            // Coalesce rapid realtime updates into one fetch to reduce query spikes.
+            if (attendeesRefreshDebounceRef.current) {
+              clearTimeout(attendeesRefreshDebounceRef.current)
+            }
+            attendeesRefreshDebounceRef.current = setTimeout(() => {
+              attendeesRefreshDebounceRef.current = null
+              fetchAttendeesWithProfiles(true).catch(error => {
+                console.error('Error refreshing attendees from realtime:', error)
+              })
+            }, 300)
           }
         )
         .subscribe()
 
       // Cleanup subscription on unmount or event change
       return () => {
+        if (attendeesRefreshDebounceRef.current) {
+          clearTimeout(attendeesRefreshDebounceRef.current)
+          attendeesRefreshDebounceRef.current = null
+        }
         supabase.removeChannel(channel)
       }
     }

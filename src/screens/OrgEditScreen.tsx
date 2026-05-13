@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
-import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { buildPublicAssetUrl, uploadVersionedAsset } from '../utils/imageAsset'
 import { useTheme } from '../context/ThemeContext'
 import { useOrgMode } from '../context/OrgModeContext'
 import { ImageWithFallback } from '../components'
@@ -31,6 +31,8 @@ export default function OrgEditScreen({ navigation }: any) {
   const [description, setDescription] = useState('')
   const [type, setType] = useState<'Greek Life' | 'Student Organization'>('Student Organization')
   const [icon, setIcon] = useState<string | null>(null)
+  const [iconPath, setIconPath] = useState<string | null>(null)
+  const [iconVersion, setIconVersion] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -39,7 +41,9 @@ export default function OrgEditScreen({ navigation }: any) {
       setName(currentOrg.name)
       setDescription(currentOrg.description || '')
       setType(currentOrg.type)
-      setIcon(currentOrg.icon)
+      setIcon(currentOrg.icon_path ? buildPublicAssetUrl('photos', currentOrg.icon_path) : currentOrg.icon)
+      setIconPath(currentOrg.icon_path || null)
+      setIconVersion(currentOrg.icon_version || null)
     }
   }, [currentOrg])
 
@@ -63,20 +67,18 @@ export default function OrgEditScreen({ navigation }: any) {
         setLoading(true)
         
         try {
-          const fileExt = uri.split('.').pop()?.toLowerCase() || 'jpg'
-          const fileName = `org-icon-${Date.now()}.${fileExt}`
-          const filePath = `org-icons/${fileName}`
-          const contentType = guessContentTypeFromUri(uri)
-
-          const uploadedUrl = await uploadBytesToBucket({
-            bucket: 'photos',
-            filePath,
+          const uploaded = await uploadVersionedAsset({
             uri,
-            contentType,
+            bucket: 'photos',
+            entityType: 'org-icons',
+            entityId: currentOrg?.id || '',
+            currentVersion: iconVersion,
             purpose: 'avatar',
           })
 
-          setIcon(uploadedUrl)
+          setIcon(uploaded.publicUrl)
+          setIconPath(uploaded.path)
+          setIconVersion(uploaded.version)
         } catch (error) {
           console.error('Error uploading icon:', error)
           Alert.alert('Error', 'Failed to upload icon')
@@ -123,6 +125,8 @@ export default function OrgEditScreen({ navigation }: any) {
           description: description.trim() || null,
           type,
           icon,
+          icon_path: iconPath,
+          icon_version: iconVersion ?? undefined,
           updated_at: new Date().toISOString()
         })
         .eq('id', currentOrg.id)

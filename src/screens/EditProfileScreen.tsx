@@ -16,7 +16,7 @@ import { Picker } from '@react-native-picker/picker'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { getCachedUser } from '../services/sessionService'
-import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { buildPublicAssetUrl, uploadVersionedAsset } from '../utils/imageAsset'
 import { useTheme } from '../context/ThemeContext'
 import { ImageWithFallback } from '../components'
 import { validateContentWithAlert } from '../utils/contentFilter'
@@ -79,7 +79,7 @@ export default function EditProfileScreen({ navigation }: any) {
         // Fetch profile data from profiles table
         const { data: profileData, error } = await supabase
           .from('profiles')
-          .select('id, full_name, major, college_id, graduating_year, bio, avatar_url')
+          .select('id, full_name, major, college_id, graduating_year, bio, avatar_url, avatar_path, avatar_version')
           .eq('id', user.id)
           .single()
         
@@ -91,7 +91,11 @@ export default function EditProfileScreen({ navigation }: any) {
           setCollegeId(profileData.college_id || '')
           setGraduatingYear(profileData.graduating_year || '')
           setBio(profileData.bio || '')
-          setProfileImageUri(profileData.avatar_url || null)
+          const resolvedAvatar =
+            profileData.avatar_path
+              ? buildPublicAssetUrl('profile-images', profileData.avatar_path)
+              : profileData.avatar_url || null
+          setProfileImageUri(resolvedAvatar)
         }
       }
     } catch (error) {
@@ -124,20 +128,22 @@ export default function EditProfileScreen({ navigation }: any) {
 
   const uploadProfileImage = async (uri: string) => {
     try {
-      const fileExt = uri.split('.').pop()?.toLowerCase() || 'jpg'
-      const fileName = `profile-${Date.now()}.${fileExt}`
-      const filePath = `profile-images/${fileName}`
-      const contentType = guessContentTypeFromUri(uri)
-
-      const publicUrl = await uploadBytesToBucket({
-        bucket: 'profile-images',
-        filePath,
+      const user = await getCachedUser()
+      if (!user) throw new Error('Not authenticated')
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('avatar_version')
+        .eq('id', user.id)
+        .maybeSingle()
+      const uploaded = await uploadVersionedAsset({
         uri,
-        contentType,
+        bucket: 'profile-images',
+        entityType: 'avatars',
+        entityId: user.id,
+        currentVersion: profile?.avatar_version || 0,
         purpose: 'avatar',
       })
-
-      return publicUrl
+      return uploaded
     } catch (error) {
       console.error('Error uploading profile image:', error)
       throw error
@@ -179,9 +185,14 @@ export default function EditProfileScreen({ navigation }: any) {
     try {
       const user = await getCachedUser()
       let avatarUrl = null
+      let avatarPath: string | null = null
+      let avatarVersion: number | null = null
       if (profileImageUri && !profileImageUri.startsWith('http')) {
         // Only upload if it's a new local image
-        avatarUrl = await uploadProfileImage(profileImageUri)
+        const uploaded = await uploadProfileImage(profileImageUri)
+        avatarUrl = uploaded.publicUrl
+        avatarPath = uploaded.path
+        avatarVersion = uploaded.version
       } else if (profileImageUri) {
         // Keep existing URL if it's already uploaded
         avatarUrl = profileImageUri
@@ -198,6 +209,8 @@ export default function EditProfileScreen({ navigation }: any) {
             graduating_year: graduatingYear || null,
             bio: bio || null,
             avatar_url: avatarUrl || null,
+            avatar_path: avatarPath,
+            avatar_version: avatarVersion ?? undefined,
             updated_at: new Date().toISOString(),
           })
         if (profileError) throw profileError

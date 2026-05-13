@@ -25,7 +25,7 @@ import { supabase } from '../services/supabase'
 import { getCachedUser } from '../services/sessionService'
 import { useTheme } from '../context/ThemeContext'
 import { ImageWithFallback } from '../components'
-import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { uploadVersionedAsset } from '../utils/imageAsset'
 import { validateEventTimes, isMidnightSpanningEvent, formatEventTimeDisplay, getEventStartDate, parseLocalDate } from '../utils/eventTimeUtils'
 import NotificationService from '../services/notifications'
 import { buildEventInvitationNotification, buildBatchNotifications, buildOrgEventCreatedNotification, buildEventEditDeleteNotification } from '../utils/notificationTemplates'
@@ -439,20 +439,23 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       }
 
       let imageUrl = existingEvent.image_url || null
+      let coverPath = existingEvent.cover_path || null
+      let coverVersion = existingEvent.cover_version || null
       
       // Upload new image if changed
       if (imageUri && imageUri !== existingEvent.image_url && !imageUri.startsWith('http')) {
         try {
-          const contentType = guessContentTypeFromUri(imageUri)
-          const filePath = `events/${Date.now()}-${Math.random().toString(36).substring(7)}.${contentType.split('/')[1]}`
-          
-          imageUrl = await uploadBytesToBucket({
-            bucket: 'event-images',
-            filePath,
+          const uploaded = await uploadVersionedAsset({
             uri: imageUri,
-            contentType,
+            bucket: 'event-images',
+            entityType: 'event-covers',
+            entityId: eventId,
+            currentVersion: existingEvent.cover_version || 0,
             purpose: 'cover',
           })
+          imageUrl = uploaded.publicUrl
+          coverPath = uploaded.path
+          coverVersion = uploaded.version
         } catch (error) {
           console.warn('Image upload failed:', error)
           // Continue with existing image if upload fails
@@ -480,6 +483,8 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             location: location.trim(),
             max_attendees: maxGuestCount > 0 ? maxGuestCount : null,
             image_url: imageUrl,
+            cover_path: coverPath,
+            cover_version: coverVersion ?? undefined,
             invite_theme_color: inviteThemeKey === 'default' ? null : inviteThemeKey,
             tags: null,
             updated_at: new Date().toISOString()
@@ -500,6 +505,8 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
             location: location.trim(),
             max_attendees: maxGuestCount > 0 ? maxGuestCount : null,
             image_url: imageUrl,
+            cover_path: coverPath,
+            cover_version: coverVersion ?? undefined,
             invite_theme_color: inviteThemeKey === 'default' ? null : inviteThemeKey,
             tags: null,
             updated_at: new Date().toISOString()
@@ -664,23 +671,6 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
       }
 
       let imageUrl = null
-      if (imageUri) {
-        try {
-          const contentType = guessContentTypeFromUri(imageUri)
-          const filePath = `events/${Date.now()}-${Math.random().toString(36).substring(7)}.${contentType.split('/')[1]}`
-          
-          imageUrl = await uploadBytesToBucket({
-            bucket: 'event-images',
-            filePath,
-            uri: imageUri,
-            contentType,
-            purpose: 'cover',
-          })
-        } catch (error) {
-          console.warn('Image upload failed:', error)
-          // Continue without image if upload fails
-        }
-      }
 
       // Get user's college_id from profile
       const { data: profileData } = await supabase
@@ -767,6 +757,38 @@ export default function CreateEventScreen({ onBack, onEventCreated, isOrgEvent =
 
         if (eventError) throw eventError
         event = personalEvent
+      }
+
+      // Upload event cover after insert to preserve deterministic eventId-based pathing.
+      if (imageUri && event?.id) {
+        try {
+          const uploaded = await uploadVersionedAsset({
+            uri: imageUri,
+            bucket: 'event-images',
+            entityType: 'event-covers',
+            entityId: event.id,
+            currentVersion: 0,
+            purpose: 'cover',
+          })
+          imageUrl = uploaded.publicUrl
+          await supabase
+            .from(isOrgEvent ? 'org_events' : 'events')
+            .update({
+              image_url: uploaded.publicUrl,
+              cover_path: uploaded.path,
+              cover_version: uploaded.version,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', event.id)
+          event = {
+            ...event,
+            image_url: uploaded.publicUrl,
+            cover_path: uploaded.path,
+            cover_version: uploaded.version,
+          }
+        } catch (error) {
+          console.warn('Image upload failed:', error)
+        }
       }
 
       // Get host's profile for custom notification text (only for personal events)

@@ -52,6 +52,7 @@ function OrganizationCard({
               {organization.icon ? (
                 <ImageWithFallback
                   source={{ uri: organization.icon }}
+                  cacheKey={`org:${organization.id}:icon`}
                   style={styles.onboardingIcon}
                   fallbackIcon="business"
                   fallbackText={organization.name.charAt(0).toUpperCase()}
@@ -160,6 +161,7 @@ function OrganizationCard({
             {organization.icon ? (
               <ImageWithFallback
                 source={{ uri: organization.icon }}
+                cacheKey={`org:${organization.id}:icon`}
                 style={styles.icon}
                 fallbackIcon="business"
                 fallbackText={organization.name.charAt(0).toUpperCase()}

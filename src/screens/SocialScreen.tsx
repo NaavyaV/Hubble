@@ -99,6 +99,8 @@ export default function SocialScreen() {
   const friendshipRealtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const directorySearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevDirectoryQueryRef = useRef('')
+  const blockersCacheRef = useRef<{ userId: string; at: number; value: Set<string> } | null>(null)
+  const blockersInFlightRef = useRef<Promise<Set<string>> | null>(null)
 
   useEffect(() => {
     // Don't set a timeout that forces loading to false
@@ -292,34 +294,54 @@ export default function SocialScreen() {
       if (!userId) {
         return new Set()
       }
+      const now = Date.now()
+      if (
+        blockersCacheRef.current &&
+        blockersCacheRef.current.userId === userId &&
+        now - blockersCacheRef.current.at < 15000
+      ) {
+        return new Set(blockersCacheRef.current.value)
+      }
+      if (blockersInFlightRef.current) {
+        return blockersInFlightRef.current
+      }
       
       // Get users who have blocked this user (user is the blocked_id)
       // This is CRITICAL: If Person A blocked Person B, Person B should not see Person A
       // Query: Find rows where blocked_id = userId, return blocker_id (the person who blocked this user)
-      const { data, error } = await supabase
-        .from('user_blocks')
-        .select('blocker_id')
-        .eq('blocked_id', userId)
+      blockersInFlightRef.current = (async () => {
+        const { data, error } = await supabase
+          .from('user_blocks')
+          .select('blocker_id')
+          .eq('blocked_id', userId)
 
-      if (error) {
-        console.error('Error fetching blockers:', error)
-        return new Set()
+        if (error) {
+          console.error('Error fetching blockers:', error)
+          return new Set<string>()
+        }
+        
+        const blockersSet = new Set<string>()
+        if (data && Array.isArray(data)) {
+          data.forEach((b: any) => {
+            if (b && b.blocker_id) {
+              blockersSet.add(b.blocker_id)
+            }
+          })
+        }
+        
+        blockersCacheRef.current = { userId, at: Date.now(), value: new Set(blockersSet) }
+        if (__DEV__ && blockersSet.size > 0) {
+          console.log(`[BLOCKERS] Found ${blockersSet.size} blocker(s) for user ${userId}`)
+        }
+        
+        return blockersSet
+      })()
+
+      try {
+        return await blockersInFlightRef.current
+      } finally {
+        blockersInFlightRef.current = null
       }
-      
-      const blockersSet = new Set<string>()
-      if (data && Array.isArray(data)) {
-        data.forEach((b: any) => {
-          if (b && b.blocker_id) {
-            blockersSet.add(b.blocker_id)
-          }
-        })
-      }
-      
-      if (__DEV__ && blockersSet.size > 0) {
-        console.log(`[BLOCKERS] Found ${blockersSet.size} blocker(s) for user ${userId}`)
-      }
-      
-      return blockersSet
     } catch (error) {
       console.error('Exception fetching blockers:', error)
       return new Set()

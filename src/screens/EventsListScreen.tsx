@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -127,6 +127,7 @@ export default function EventsListScreen() {
     selectedTags: [],
   })
   const [sortBy, setSortBy] = useState<SortType>('date_asc')
+  const fetchInFlightRef = useRef<Promise<void | null> | null>(null)
 
   const handleCreateEvent = () => {
     setShowCreateModal(true)
@@ -173,7 +174,10 @@ export default function EventsListScreen() {
   }
 
   const fetchEvents = async (skipCache = false): Promise<void | null> => {
-    return await withNetworkErrorHandling(async () => {
+    if (fetchInFlightRef.current) {
+      return fetchInFlightRef.current
+    }
+    const runPromise = withNetworkErrorHandling(async () => {
       try {
       const user = await getCachedUser()
       if (!user) return
@@ -565,6 +569,13 @@ export default function EventsListScreen() {
       return undefined
     }
     }, () => fetchEvents(), true) // Pass retry callback and suppress errors
+
+    fetchInFlightRef.current = runPromise
+    try {
+      return await runPromise
+    } finally {
+      fetchInFlightRef.current = null
+    }
   }
 
   const fetchFriends = async (userId: string) => {

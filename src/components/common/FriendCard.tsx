@@ -66,6 +66,7 @@ function FriendCard({
           {user.avatar_url ? (
             <ImageWithFallback
               source={{ uri: user.avatar_url }}
+              cacheKey={`profile:${user.id}:avatar`}
               style={styles.avatar}
               fallbackIcon="person"
               fallbackText={user.full_name?.charAt(0).toUpperCase() || 'U'}

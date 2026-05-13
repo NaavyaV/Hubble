@@ -195,7 +195,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         let session: Session | null = hint?.user ? hint : null
         if (!session?.user) {
-          session = await waitForPersistedSession(12_000)
+          // Keep signed-out startup snappy. A short grace window is enough to
+          // catch late hydration without forcing multi-second splash delays.
+          session = await waitForPersistedSession(1_800)
         }
         if (signal.cancelled) return
 
@@ -311,7 +313,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!bootstrapDoneRef.current && !signal.cancelled) {
         ensureBootstrap(null)
       }
-    }, 1500)
+    }, 300)
 
     return () => {
       signal.cancelled = true

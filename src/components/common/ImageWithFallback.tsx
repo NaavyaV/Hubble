@@ -4,6 +4,7 @@ import { Image } from 'expo-image'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../../context/ThemeContext'
 import { validateImageUrl, retryImageLoad } from '../../utils/imageUtils'
+import { resolveCachedImageUri, trackRenderedImageSourceMode } from '../../utils/imageCache'
 
 // Simple in-memory cache for loaded images
 const imageCache = new Set<string>()
@@ -13,6 +14,7 @@ const FAILED_IMAGE_COOLDOWN_MS = 5 * 60 * 1000
 
 interface ImageWithFallbackProps {
   source: { uri: string }
+  cacheKey?: string
   style?: ImageStyle
   containerStyle?: ViewStyle
   fallbackIcon?: keyof typeof Ionicons.glyphMap
@@ -27,6 +29,7 @@ interface ImageWithFallbackProps {
 
 export default function ImageWithFallback({
   source,
+  cacheKey,
   style,
   containerStyle,
   fallbackIcon = 'image-outline',
@@ -42,6 +45,7 @@ export default function ImageWithFallback({
   const [hasError, setHasError] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [imageSource, setImageSource] = useState(source)
+  const [resolvedUri, setResolvedUri] = useState(source.uri)
 
   // OPTIMIZED: Skip validation for better performance - let Image component handle errors
   useEffect(() => {
@@ -50,6 +54,7 @@ export default function ImageWithFallback({
       setIsLoading(false)
       return
     }
+    setResolvedUri(source.uri)
 
     const failedAt = failedImageCache.get(source.uri)
     if (failedAt && Date.now() - failedAt < FAILED_IMAGE_COOLDOWN_MS) {
@@ -85,6 +90,25 @@ export default function ImageWithFallback({
     setIsLoading(false)
   }, [source.uri, skipValidation, priority])
 
+  useEffect(() => {
+    let cancelled = false
+    if (!source.uri) return
+    resolveCachedImageUri(source.uri, cacheKey)
+      .then((uri) => {
+        if (!cancelled && uri) {
+          setResolvedUri(uri)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvedUri(source.uri)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [source.uri, cacheKey])
+
   const handleError = async (error: any) => {
     if (__DEV__) {
       console.warn('ImageWithFallback - Image load error:', error)
@@ -106,12 +130,22 @@ export default function ImageWithFallback({
     onError?.(error)
   }
 
-  const handleLoad = () => {
+  const handleLoad = (event: any) => {
     setIsLoading(false)
     setHasError(false)
     // Cache the successfully loaded image
     imageCache.add(source.uri)
     failedImageCache.delete(source.uri)
+    const cacheType = event?.cacheType as string | undefined
+    if (cacheType === 'disk') {
+      trackRenderedImageSourceMode('expo-disk-cache')
+    } else if (cacheType === 'memory') {
+      trackRenderedImageSourceMode('memory-cache')
+    } else if ((resolvedUri || imageSource.uri || '').startsWith('file://')) {
+      trackRenderedImageSourceMode('local-file')
+    } else {
+      trackRenderedImageSourceMode('network')
+    }
     onLoad?.()
   }
 
@@ -130,7 +164,7 @@ export default function ImageWithFallback({
     )
   }
 
-  const uri = imageSource.uri
+  const uri = resolvedUri || imageSource.uri
   const contentFit = resizeMode === 'contain' ? 'contain' : resizeMode === 'stretch' ? 'fill' : resizeMode === 'center' ? 'none' : 'cover'
 
   return (

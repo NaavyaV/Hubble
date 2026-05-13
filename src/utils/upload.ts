@@ -110,7 +110,7 @@ export async function uploadBytesToBucket(params: {
       .upload(filePath, bytes, {
         contentType: type,
         // Keep immutable image assets cached at the edge for repeat views.
-        cacheControl: '31536000',
+        cacheControl: '31536000, immutable',
         upsert: false,
       })
 

@@ -7,12 +7,12 @@ import {
   useWindowDimensions,
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
-import { Image } from 'expo-image'
 import { Ionicons } from '@expo/vector-icons'
 import { useTheme } from '../../context/ThemeContext'
 import { EventWithAttendees } from '../../types'
 import { formatInformalEventTime } from '../../utils/informalEventTime'
 import { getInviteThemeGradient, normalizeInviteThemeKey } from '../../utils/inviteEventTheme'
+import ImageWithFallback from './ImageWithFallback'
 
 export interface EventCardProps {
   item: EventWithAttendees & {
@@ -122,13 +122,13 @@ function EventCard({
       >
         {hasImage ? (
           <View style={[styles.heroRoot, cardHeight != null && { minHeight: cardHeight, height: '100%' }]}>
-            <Image
+            <ImageWithFallback
               source={{ uri: item.image_url }}
               style={StyleSheet.absoluteFill}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-              recyclingKey={item.image_url}
-              transition={0}
+              cacheKey={`event:${item.id}:cover`}
+              resizeMode="cover"
+              skipValidation
+              priority="high"
             />
             <View style={[StyleSheet.absoluteFill, styles.imageDarken]} />
             <LinearGradient

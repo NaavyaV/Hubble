@@ -5,6 +5,7 @@ import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 import { OrgModeProvider } from './src/context/OrgModeContext'
 import { AuthProvider, useAuth } from './src/context/AuthContext'
 import RootNavigator from './src/navigation/RootNavigator'
+import { runImageCacheMaintenance } from './src/utils/imageCache'
 
 let Updates: typeof import('expo-updates') | null = null
 try {
@@ -80,6 +81,19 @@ export default function App() {
       } catch {}
     }, 10_000)
     return () => clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    const start = setTimeout(() => {
+      runImageCacheMaintenance().catch(() => {})
+    }, 3000)
+    const interval = setInterval(() => {
+      runImageCacheMaintenance().catch(() => {})
+    }, 6 * 60 * 60 * 1000)
+    return () => {
+      clearTimeout(start)
+      clearInterval(interval)
+    }
   }, [])
 
   return (

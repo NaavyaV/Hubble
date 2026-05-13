@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../services/supabase'
 import { getCachedUser, getCachedSession } from '../services/sessionService'
-import { uploadBytesToBucket, guessContentTypeFromUri } from '../utils/upload'
+import { uploadVersionedAsset } from '../utils/imageAsset'
 import { useTheme } from '../context/ThemeContext'
 import { ImageWithFallback } from '../components'
 import * as Notifications from 'expo-notifications'
@@ -360,6 +360,8 @@ export default function OnboardingScreen({ navigation }: any) {
 
         // Step 3: NOW that user is authenticated, upload profile image if provided
         let avatarUrl = null
+        let avatarPath: string | null = null
+        let avatarVersion: number | null = null
         if (data.profileImageUri) {
           if (data.profileImageUri.startsWith('http')) {
             // If it's already a URL, use it directly
@@ -410,22 +412,17 @@ export default function OnboardingScreen({ navigation }: any) {
                 avatarUrl = null
               } else {
                 console.log('Session confirmed - proceeding with upload')
-                const fileExt = data.profileImageUri.split('.').pop()?.toLowerCase() || 'jpg'
-                const fileName = `profile-${authData.user.id}-${Date.now()}.${fileExt}`
-                const filePath = `profile-images/${fileName}`
-                const contentType = guessContentTypeFromUri(data.profileImageUri)
-
-                console.log('Upload parameters:', { bucket: 'profile-images', filePath, contentType })
-                
-                // User is authenticated - proceed with upload
-                avatarUrl = await uploadBytesToBucket({
-                  bucket: 'profile-images',
-                  filePath,
+                const uploaded = await uploadVersionedAsset({
                   uri: data.profileImageUri,
-                  contentType,
+                  bucket: 'profile-images',
+                  entityType: 'avatars',
+                  entityId: authData.user.id,
+                  currentVersion: 0,
                   purpose: 'avatar',
                 })
-                
+                avatarUrl = uploaded.publicUrl
+                avatarPath = uploaded.path
+                avatarVersion = uploaded.version
                 console.log('Profile image uploaded successfully:', avatarUrl)
                 
                 if (!avatarUrl) {
@@ -504,6 +501,8 @@ export default function OnboardingScreen({ navigation }: any) {
           graduating_year: (data.graduatingYear?.trim() ?? '') || null,
           bio: (data.bio?.trim() ?? '') || null,
           avatar_url: avatarUrl ?? null,
+          avatar_path: avatarPath,
+          avatar_version: avatarVersion ?? undefined,
           phone_number: (data.phoneNumber?.trim() ?? '') || null,
           phone_visibility: data.phoneVisibility ?? 'private',
           phone_visible_when_hosting: Boolean(data.phoneVisibleWhenHosting),
